@@ -1,6 +1,6 @@
-from pathlib import Path
 import warnings
 import webbrowser
+from pathlib import Path
 
 import napari
 from qtpy import QtCore, QtWidgets
