@@ -9,8 +9,15 @@ def update():
     @thread_worker
     def _update():
         try:
+            # TODO: make sure correct package is installed!
             subprocess.run(
-                ["conda", "update", "plant-seg", "-c", "conda-forge"],
+                ["conda", "install", "panseg", "-c", "conda-forge"],
+                input="y\n",
+                text=True,
+                check=True,
+            )
+            subprocess.run(
+                ["conda", "remove", "plant-seg"],
                 input="y\n",
                 text=True,
                 check=True,

@@ -1,7 +1,10 @@
+from pathlib import Path
 import warnings
+import webbrowser
 
 import napari
 from qtpy import QtCore, QtWidgets
+from qtpy.QtGui import QPicture, QPixmap
 
 from plantseg import logger
 from plantseg.__version__ import __version__
@@ -152,7 +155,7 @@ class Plantseg_viewer:
                     )
                 else:
                     child.setText("")
-                child.setAlignment(QtCore.Qt.AlignLeft)
+                child.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
 
     def finalize_viewer(self):
         # Show data tab by default
@@ -187,4 +190,66 @@ class Plantseg_viewer:
         self.setup_welcome_page()
         self.finalize_viewer()
 
+        self.wd = WelcomeDialog(self.viewer.window._qt_viewer)
+        self.wd.show()
+
         napari.run()
+
+
+class WelcomeDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        super(WelcomeDialog, self).__init__(parent)
+        self.setWindowTitle("PanSeg 2.0 released")
+        # layout = QtWidgets.QVBoxLayout()
+        layout = QtWidgets.QGridLayout()
+        self.setLayout(layout)
+
+        p = str((Path(__file__) / "../../resources/logo_change.png").resolve())
+        image = QPixmap(p).scaledToWidth(500)
+        im1 = QtWidgets.QLabel()
+        im1.setPixmap(image)
+
+        self.text = QtWidgets.QLabel(
+            "<h1>PlantSeg is now PanSeg!</h1>"
+            "<p>With the 2.0 release we rename PlantSeg to PanSeg to highlight "
+            "its capabilities beyond plant tissue segmentation.</p>"
+            "<p><b>To get the new version, follow the download link below!</b><br>"
+            # TODO: Test updater
+            "(The build-in updater does not work, as the package name changed!)</p>"
+            "<p>This new release is acompanied by a new publication you can also find below.</p>",
+            parent,
+        )
+        self.text.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+
+        self.download_button = QtWidgets.QPushButton("Download PanSeg 2.0")
+        self.publication_button = QtWidgets.QPushButton("Open Publication")
+        self.download_button.setStyleSheet("background-color: green")
+        self.download_button.clicked.connect(self.open_download)
+        self.publication_button.clicked.connect(self.open_publication)
+
+        layout.addWidget(im1, 0, 0, 1, 2, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.text, 1, 0, 1, 2)
+        layout.addWidget(
+            self.download_button,
+            3,
+            0,
+            alignment=QtCore.Qt.AlignmentFlag.AlignCenter,
+        )
+        layout.addWidget(
+            self.publication_button,
+            3,
+            1,
+            alignment=QtCore.Qt.AlignmentFlag.AlignCenter,
+        )
+
+    def open_download(self):
+        # TODO: Change URL
+        webbrowser.open(
+            "https://kreshuklab.github.io/plant-seg/", new=0, autoraise=True
+        )
+
+    def open_publication(self):
+        # TODO: Change URL
+        webbrowser.open(
+            "https://kreshuklab.github.io/plant-seg/", new=0, autoraise=True
+        )
