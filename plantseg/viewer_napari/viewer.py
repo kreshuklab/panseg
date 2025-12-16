@@ -213,22 +213,25 @@ class WelcomeDialog(QtWidgets.QDialog):
             "<h1>PlantSeg is now PanSeg!</h1>"
             "<p>With the 2.0 release we rename PlantSeg to PanSeg to highlight "
             "its capabilities beyond plant tissue segmentation.</p>"
-            "<p><b>To get the new version, follow the download link below!</b><br>"
-            # TODO: Test updater
-            "(The build-in updater does not work, as the package name changed!)</p>"
+            "<p><b>To get the new version run the update, or if not possible, follow the download link below!</b><br>"
+            "(Update only possible for versions installed using the executable.)</p>"
             "<p>This new release is acompanied by a new publication you can also find below.</p>",
             parent,
         )
         self.text.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
 
-        self.download_button = QtWidgets.QPushButton("Download PanSeg 2.0")
         self.publication_button = QtWidgets.QPushButton("Open Publication")
-        self.download_button.setStyleSheet("background-color: green")
-        self.download_button.clicked.connect(self.open_download)
         self.publication_button.clicked.connect(self.open_publication)
+        self.publication_button.setStyleSheet("background-color: green")
+        self.download_button = QtWidgets.QPushButton("Download PanSeg 2.0")
+        self.download_button.clicked.connect(self.open_download)
+        self.download_button.setStyleSheet("background-color: green")
+        self.update_button = QtWidgets.QPushButton("Run update")
+        self.update_button.setStyleSheet("background-color: green")
+        self.update_button.clicked.connect(update)
 
-        layout.addWidget(im1, 0, 0, 1, 2, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.text, 1, 0, 1, 2)
+        layout.addWidget(im1, 0, 0, 1, 3, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.text, 1, 0, 1, 3)
         layout.addWidget(
             self.download_button,
             3,
@@ -236,9 +239,15 @@ class WelcomeDialog(QtWidgets.QDialog):
             alignment=QtCore.Qt.AlignmentFlag.AlignCenter,
         )
         layout.addWidget(
-            self.publication_button,
+            self.update_button,
             3,
             1,
+            alignment=QtCore.Qt.AlignmentFlag.AlignCenter,
+        )
+        layout.addWidget(
+            self.publication_button,
+            3,
+            2,
             alignment=QtCore.Qt.AlignmentFlag.AlignCenter,
         )
 

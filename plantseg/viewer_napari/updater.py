@@ -2,6 +2,7 @@ import subprocess
 
 from napari.qt.threading import thread_worker
 
+from plantseg import PATH_PLANTSEG_MODELS
 from plantseg.viewer_napari import log
 
 
@@ -22,6 +23,8 @@ def update():
                 text=True,
                 check=True,
             )
+            if PATH_PLANTSEG_MODELS.exists():
+                PATH_PLANTSEG_MODELS.rename(".panseg_models")
         except subprocess.CalledProcessError:
             log(
                 "Unable to update! If you have installed via git, please update your local repo!",
