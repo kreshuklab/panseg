@@ -44,7 +44,7 @@ requirements:
     - h5py==3.15.1
     - zarr==3.1.5
     - vigra==1.12.2
-    - python-elf==0.7.3
+    - python-elf==0.7.4
     - python-graphviz==0.21
     - scikit-image==0.25.2
     - bioimageio.core==0.9.5
