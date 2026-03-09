@@ -408,7 +408,7 @@ class Task_node:
                 ComboBox(  # pyright: ignore
                     label="Export Mesh as",
                     value=self.parameters["export_mesh"],
-                    choices=["No", "glb", "obj", "ply"],
+                    choices=[None, "glb", "obj", "ply"],
                 )
             )
             export_cont.append(

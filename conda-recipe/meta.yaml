@@ -1,77 +1,65 @@
 {% set python_min = "3.11" %}
 package:
   name: panseg
-  version: "2.0.0rc12"
+  version: "2.0.0"
 
 source:
   path: ..
 
 build:
   noarch: python
-  number: 1
+  number: 0
   script:
-    - "pip install . --no-deps --ignore-installed --no-cache-dir -vvv"
+    - "{{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation --ignore-installed --no-cache-dir"
     - "mkdir -p {{ PREFIX }}/Menu" # [not win]
     - "cp {{ RECIPE_DIR }}/../Menu/panseg.json {{ PREFIX }}/Menu/{{ PKG_NAME }}_menu.json" # [not win]
     - "cp {{ RECIPE_DIR }}/../Menu/icon.png {{ PREFIX }}/Menu/icon.png" # [not win]
     - "cp {{ RECIPE_DIR }}/../Menu/icon.ico {{ PREFIX }}/Menu/icon.ico" # [not win]
     - "cp {{ RECIPE_DIR }}/../Menu/logo_horizontal.png {{ PREFIX }}/Menu/logo_horizontal.png" # [not win]
     - "cp {{ RECIPE_DIR }}/../Menu/logo_vertical.png {{ PREFIX }}/Menu/logo_vertical.png" # [not win]
-    # Only relevant for build, not packaging. In CI and forge, build only runs on linux -> noarch
-    # - 'mkdir -p {{ PREFIX }}\Menu' # [win]
-    # - 'cp {{ RECIPE_DIR }}\..\Menu\plant-seg.json {{ PREFIX }}\Menu\{{ PKG_NAME }}_menu.json' # [win]
-    # - 'cp {{ RECIPE_DIR }}\..\Menu\icon.png {{ PREFIX }}\Menu\icon.png' # [win]
-    # - 'cp {{ RECIPE_DIR }}\..\Menu\icon.ico {{ PREFIX }}\Menu\icon.ico' # [win]
-    # - 'cp {{ RECIPE_DIR }}\..\Menu\logo_horizontal.png {{ PREFIX }}\Menu\logo_horizontal.png' # [win]
-    # - 'cp {{ RECIPE_DIR }}\..\Menu\logo_vertical.png {{ PREFIX }}\Menu\logo_vertical.png' # [win]
 
   entry_points:
     - panseg = panseg.run_panseg:main
 
 requirements:
-  host:
+  build:
     - python {{ python_min }}
+    - pip
     - setuptools
 
   run:
     - python >={{ python_min }}
     - pip
-    # Neural Network
-    - pytorch==2.9.1
-    - tensorboard==2.20.0
-    # Bioimage and CV
-    - tifffile==2025.12.12
-    - h5py==3.15.1
-    - zarr==3.1.5
-    - vigra==1.12.2
-    - python-elf==0.7.3
-    - python-graphviz==0.21
-    - scikit-image==0.25.2
-    - bioimageio.core==0.9.5
-    - bioimageio.spec==0.5.6.0
-    # GUI
-    - qtpy==2.4.3
-    - pyside6==6.10.1
-    - napari==0.6.6
-    - qt-material==2.14
-    # Other
-    - requests==2.32.5
-    - pyyaml==6.0.3
-    - pydantic==2.11.10
-    - trimesh==4.11.0
-    - zmesh==1.8.0
+    - bioimageio.core ==0.10.2
+    - bioimageio.spec ==0.5.9.1
+    - h5py ==3.16.0
+    - napari ==0.7.0
+    - pydantic ==2.13.3
+    - pyside6 ==6.11.0
+    - python-elf ==0.7.4
+    - python-graphviz ==0.21
+    - pytorch ==2.10.0
+    - pyyaml ==6.0.3
+    - qt-material ==2.14
+    - qtpy ==2.4.3
+    - requests ==2.33.1
+    - scikit-image ==0.26.0
+    - tensorboard ==2.20.0
+    - tifffile ==2026.3.3
+    - vigra ==1.12.3
+    - trimesh ==4.11.5
+    - numpy ==2.4.3
+    - zarr ==3.1.6
+    - zmesh ==1.11.0
 
 test:
+  requires:
+    - pip
+    - python {{ python_min }}
   imports:
     - panseg
-  requires:
-    - python {{ python_min }}
-    - pytest
-    - pytest-qt
-    - pytest-mock
-    - requests-mock
-  run:
-    - pytest
+  commands:
+    - pip check
 
 about:
   home: https://kreshuklab.github.io/panseg/

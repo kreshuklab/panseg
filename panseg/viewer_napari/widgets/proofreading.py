@@ -582,9 +582,9 @@ class ProofreadingHandler:
         Args:
             seg_slice (np.ndarray): The segmentation slice to update.
             region_slice (tuple[slice, ...]): The region slice to update in the viewer.
-            bbox (np.ndarray): The bounding box to update.
+            bbox (dict): The bounding box to update.
         """
-        self._state.bboxes = bbox
+        self.bboxes.update(bbox)
         update_region(
             data=seg_slice,
             layer_name=self.seg_layer_name,
