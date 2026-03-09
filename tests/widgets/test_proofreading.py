@@ -376,13 +376,17 @@ class TestProofreadingHandler:
             _state=mocker.DEFAULT,
             seg_layer_name=mocker.DEFAULT,
             scale=mocker.DEFAULT,
+            bboxes=mocker.DEFAULT,
         )
-        mocker.patch(
+        mock_update = mocker.patch(
             "panseg.viewer_napari.widgets.proofreading.update_region",
         )
+
         proof.update_after_proofreading(
             mocker.sentinel, mocker.sentinel, mocker.sentinel
         )
+        mocks["bboxes"].update.assert_called_once()
+        mock_update.assert_called_once()
 
 
 def test_widget_clean_scribble(mocker, make_napari_viewer_proxy, napari_raw):
@@ -603,33 +607,17 @@ def test_widget_split_and_merge_from_scribbles(mocker, napari_raw, run_id, qtbot
     mock_split_merge.assert_not_called()
 
     mock_save = mocker.patch.object(handler, "save_to_history")
-    mocker.patch(
-        "panseg.viewer_napari.widgets.proofreading.ProofreadingHandler.segmentation",
-        new_callable=mocker.PropertyMock,
-    )
-    mocker.patch(
-        "panseg.viewer_napari.widgets.proofreading.ProofreadingHandler.seg_layer_name",
-        new_callable=mocker.PropertyMock,
-    )
-    mocker.patch(
-        "panseg.viewer_napari.widgets.proofreading.ProofreadingHandler.scale",
-        new_callable=mocker.PropertyMock,
+    mocker.patch.multiple(
+        "panseg.viewer_napari.widgets.proofreading.ProofreadingHandler",
+        segmentation=mocker.DEFAULT,
+        seg_layer_name=mocker.DEFAULT,
+        scale=mocker.DEFAULT,
+        bboxes=mocker.DEFAULT,
+        max_label=mocker.DEFAULT,
+        corrected_cells=mocker.DEFAULT,
     )
     mocker.patch(
         "panseg.viewer_napari.widgets.proofreading.update_region",
-    )
-
-    mocker.patch(
-        "panseg.viewer_napari.widgets.proofreading.ProofreadingHandler.bboxes",
-        new_callable=mocker.PropertyMock,
-    )
-    mocker.patch(
-        "panseg.viewer_napari.widgets.proofreading.ProofreadingHandler.max_label",
-        new_callable=mocker.PropertyMock,
-    )
-    mocker.patch(
-        "panseg.viewer_napari.widgets.proofreading.ProofreadingHandler.corrected_cells",
-        new_callable=mocker.PropertyMock,
     )
     scribble.sum.return_value = 5
     mock_split_merge.return_value = [mocker.sentinel] * 3

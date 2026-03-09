@@ -9,7 +9,7 @@ from panseg.io.voxelsize import VoxelSize
 
 # allowed h5 keys
 H5_EXTENSIONS = [".hdf", ".h5", ".hd5", "hdf5"]
-H5_KEYS = ["raw", "prediction", "segmentation"]
+H5_KEYS = ["raw", "prediction", "segmentation", "labels"]
 
 
 def _validate_h5_file(path: Path) -> None:
@@ -21,7 +21,8 @@ def _validate_h5_file(path: Path) -> None:
 
 def _find_input_key(h5_file) -> str:
     """
-    returns the first matching key in H5_KEYS or only one dataset is found the key to that dataset
+    returns the first matching key in H5_KEYS or if only one dataset is found
+    the key to that dataset
     """
     found_datasets = []
 

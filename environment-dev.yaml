@@ -2,48 +2,42 @@ name: panseg-dev
 channels:
   - conda-forge
 dependencies:
-  - python>=3.11
+  - python[version='>=3.11']
   - pip
-  # Neural Network and GPU
-  - pytorch
-  - tensorboard
-  # Bioimage and CV
-  - tifffile
-  - h5py
-  - zarr
-  - vigra
-  - python-elf
-  - python-graphviz
-  - scikit-image
-  - bioimageio.core>=0.9.5
-  - bioimageio.spec>=0.5.6
-  # GUI
-  - pyside6
-  - qtpy
-  # Other
-  - qt-material
-  - requests
-  - pyyaml
-  - pydantic>2
-  - trimesh
-  - zmesh
-  # Test
+  - bioimageio.core ==0.9.6
+  - bioimageio.spec ==0.5.7.4
+  - bump-my-version
+  - h5py ==3.15.1
+  - mike
+  - mkdocs-autorefs
+  - mkdocs-git-committers-plugin-2
+  - mkdocs-git-revision-date-localized-plugin
+  - mkdocs-material
+  - mkdocstrings-python
+  - napari ==0.6.6
+  - pre-commit
+  - pydantic ==2.12.5
+  - pyside6 ==6.10.2
   - pytest
   - pytest-cov
-  - pytest-qt
   - pytest-mock
+  - pytest-qt
+  - python-elf ==0.7.4
+  - python-graphviz ==0.21
+  - pytorch ==2.10.0
+  - pyyaml ==6.0.3
+  - qt-material ==2.14
+  - qtpy ==2.4.3
+  - requests ==2.32.5
   - requests-mock
-  # CI/CD
-  - pre-commit
-  - bump-my-version
-  # Docs
-  - mkdocs-material
-  - mkdocs-autorefs
-  - mkdocs-git-revision-date-localized-plugin
-  - mkdocs-git-committers-plugin-2
-  - mkdocstrings-python
-  - mike
+  - scikit-image ==0.26.0
+  - tensorboard ==2.20.0
+  - tifffile ==2026.3.3
+  - vigra ==1.12.2
+  - trimesh ==4.11.4
+  - numpy ==2.4.3
+  - zarr ==3.1.5
   - pip:
       - markdown-exec
-      - napari==0.7.0a3
+      - zmesh ==1.11.0
       - -e .

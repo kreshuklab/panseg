@@ -8,7 +8,7 @@ jobs:
   lint_pr_title:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
 
       # Install commitlint and the conventional config
       # Ref: https://github.com/conventional-changelog/commitlint/blob/27dad55a69e7c531e2c57a3b1db7ead40fa3a304/%40commitlint/config-conventional/README.md?plain=1#L11-L12

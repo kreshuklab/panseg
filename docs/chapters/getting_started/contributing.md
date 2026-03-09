@@ -78,14 +78,20 @@ For efficiency, pytest is not included in the pre-commit hooks. Please run the t
 
 ## Release
 
-The versions of dependencies in the conda package are pinned to a max version.
-Before releasing, you might want to update those pins.
+The versions of most dependencies in the conda package are pinned.
+Before releasing, you might want to update those pins:
 
-Keep the pins in sync between:
+```bash
+bash update_deps.sh
+```
 
-* `panseg-feedstock/recipe/meta.yaml`
+This updates the environment `panseg-dev` and its `yaml` file.  
+It also updates the `environment.yaml` by matching its content against the now
+updated packages in `environment-dev.yaml`.
+
+Using this updated `environment.yaml` file, **manually** update the following files:
+
 * `conda-recipe/meta.yaml`
-* `environment.yaml`
 
 To release, run the github workflow `release`, then manually publish to `conda-forge`.
 
@@ -107,6 +113,7 @@ The workflow will:
 **Run after gh release workflow**
 
 * git clone personal panseg-feedstock fork
+* update `recipe/meta.yaml` version pins!
 * Update hash and version in `recipe/meta.yaml`
   * `curl -sL https://github.com/kreshuklab/panseg/archive/refs/tags/VERSION.tar.gz | openssl sha256`
 * Create PR
