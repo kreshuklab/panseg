@@ -2,8 +2,19 @@ import numpy as np
 
 from panseg.functionals.dataprocessing.advanced_dataprocessing import (
     fix_over_under_segmentation_from_nuclei,
+    get_bbox,
     remove_false_positives_by_foreground_probability,
 )
+from panseg.functionals.proofreading.utils import get_bboxes as get_bboxes_proof
+
+
+def test_get_bbox_mask_slices():
+    mask = np.zeros((5, 5, 5), dtype=bool)
+    mask[0:2, 1:2, 2:3] = True
+    slices = get_bbox(mask, pixel_tolerance=0)
+    assert slices[0] == slice(0, 2, None)
+    assert slices[1] == slice(1, 2, None)
+    assert slices[2] == slice(2, 3, None)
 
 
 def test_remove_false_positives_by_foreground_probability():

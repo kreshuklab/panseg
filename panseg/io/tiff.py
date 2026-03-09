@@ -123,6 +123,17 @@ def read_tiff_voxel_size(file_path: Path) -> VoxelSize:
 
 
 def read_tiff_shape(path: Path) -> Optional[tuple[int, ...]]:
+    """Read the shape of a tiff file.
+
+    Dimensions of lenght one will be ignored, as they will be
+    squeezed during import.
+
+    Args:
+        path: The path to the tifffile
+
+    Returns:
+        tuple: the shape of the tifffile
+    """
     shape = None
     with tifffile.TiffFile(path) as tiff:
         meta = tiff.shaped_metadata
@@ -130,7 +141,7 @@ def read_tiff_shape(path: Path) -> Optional[tuple[int, ...]]:
             shape = meta[0].get("shape")
         if shape is None:
             shape = tiff.asarray().shape
-    return shape
+    return tuple([i for i in shape if i != 1])
 
 
 def load_tiff(path: Path) -> np.ndarray:
@@ -142,11 +153,15 @@ def load_tiff(path: Path) -> np.ndarray:
     Returns:
         np.ndarray: loaded data as numpy array
     """
-    return tifffile.imread(path)
+    return tifffile.imread(path).squeeze()
 
 
 def create_tiff(
-    path: Path, stack: np.ndarray, voxel_size: VoxelSize, layout: str = "ZYX"
+    path: Path,
+    stack: np.ndarray,
+    voxel_size: VoxelSize,
+    layout: str = "ZYX",
+    force_bigtiff=False,
 ) -> None:
     """
     Create a tiff file from a numpy array
@@ -156,6 +171,7 @@ def create_tiff(
         stack (np.ndarray): numpy array to save as tiff
         voxel_size (list or tuple): tuple of the voxel size
         voxel_size_unit (str): units of the voxel size
+        force_bigtiff (bool): forces the use of bigtiff. Used for testing.
 
     """
     # taken from: https://pypi.org/project/tifffile docs
@@ -198,12 +214,24 @@ def create_tiff(
 
     resolution = (1.0 / x, 1.0 / y)
     # Save output results as tiff
-    tifffile.imwrite(
-        path,
-        data=stack,
-        dtype=stack.dtype,
-        imagej=True,
-        resolution=resolution,
-        metadata={"axes": "TZCYXS", "spacing": spacing, "unit": voxel_size.unit},
-        compression="zlib",
-    )
+
+    if stack.nbytes > 4294967295 or force_bigtiff:
+        tifffile.imwrite(
+            path,
+            data=stack,
+            dtype=stack.dtype,
+            imagej=False,
+            bigtiff=True,
+            resolution=resolution,
+            metadata={"axes": "TZCYXS", "spacing": spacing, "unit": voxel_size.unit},
+        )
+    else:
+        tifffile.imwrite(
+            path,
+            data=stack,
+            dtype=stack.dtype,
+            imagej=True,
+            resolution=resolution,
+            metadata={"axes": "TZCYXS", "spacing": spacing, "unit": voxel_size.unit},
+            compression="zlib",
+        )

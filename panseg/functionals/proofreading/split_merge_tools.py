@@ -8,7 +8,13 @@ from panseg.functionals.proofreading.utils import get_bboxes, get_idx_slice
 logger = logging.getLogger(__name__)
 
 
-def _merge_from_seeds(segmentation, region_slice, region_bbox, bboxes, all_idx):
+def _merge_from_seeds(
+    segmentation: np.ndarray,
+    region_slice: tuple[slice],
+    region_bbox: np.ndarray,
+    bboxes: dict[int, np.ndarray],
+    all_idx: np.ndarray,
+) -> tuple[np.ndarray, tuple[slice], dict[int, np.ndarray]]:
     region_segmentation = segmentation[region_slice]
 
     mask = [region_segmentation == idx for idx in all_idx]
@@ -18,20 +24,23 @@ def _merge_from_seeds(segmentation, region_slice, region_bbox, bboxes, all_idx):
     mask = np.logical_or.reduce(mask)
     region_segmentation[mask] = new_label
     bboxes[new_label] = region_bbox
+    for idx in all_idx:
+        if idx != new_label:
+            bboxes.pop(idx)
     logger.info("Merge complete")
     return region_segmentation, region_slice, bboxes
 
 
 def _split_from_seed(
-    segmentation,
-    seeds_list,
-    region_slice,
-    all_idx,
-    offsets,
-    bboxes,
-    image,
-    seeds_values,
-    max_label,
+    segmentation: np.ndarray,
+    seeds_list: tuple[np.ndarray],
+    region_slice: tuple[slice],
+    all_idx: np.ndarray,
+    offsets: np.ndarray,
+    bboxes: dict[int, np.ndarray],
+    image: np.ndarray,
+    seeds_values: np.ndarray,
+    max_label: int,
 ):
     local_seeds_list = [ls - of for ls, of in zip(seeds_list, offsets)]
 
@@ -60,7 +69,12 @@ def _split_from_seed(
 
 
 def split_merge_from_seeds(
-    seeds, segmentation, image, bboxes, max_label, correct_labels
+    seeds: np.ndarray,
+    segmentation: np.ndarray,
+    image: np.ndarray,
+    bboxes: dict[int, np.ndarray],
+    max_label: int,
+    correct_labels: set,
 ):
     # find seeds location ad label value
     seeds_list = np.nonzero(seeds)
