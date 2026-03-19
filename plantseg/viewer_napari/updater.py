@@ -17,17 +17,24 @@ def update():
                 text=True,
                 check=True,
             )
+            log("Panseg installed, removing plantseg", thread="updater", level="INFO")
             subprocess.run(
-                ["conda", "remove", "plant-seg"],
+                ["conda", "remove", "plant-seg", "plantseg"],
                 input="y\n",
                 text=True,
                 check=True,
             )
+            log("Old Plantseg uninstalled", thread="updater", level="INFO")
             if PATH_PLANTSEG_MODELS.exists():
-                PATH_PLANTSEG_MODELS.rename(".panseg_models")
-        except subprocess.CalledProcessError:
+                new_modelpath = PATH_PLANTSEG_MODELS.rename(".panseg_models")
+                log(
+                    f"Moved Plantseg models to {new_modelpath}",
+                    thread="updater",
+                    level="INFO",
+                )
+        except subprocess.CalledProcessError as e:
             log(
-                "Unable to update! If you have installed via git, please update your local repo!",
+                f"Unable to update! If you have installed via git, please update your local repo!\n{e}",
                 thread="updater",
                 level="WARNING",
             )

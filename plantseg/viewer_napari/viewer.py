@@ -215,7 +215,7 @@ class WelcomeDialog(QtWidgets.QDialog):
             "its capabilities beyond plant tissue segmentation.</p>"
             "<p><b>To get the new version run the update, or if not possible, follow the download link below!</b><br>"
             "(Update only possible for versions installed using the executable.)</p>"
-            "<p>This new release is acompanied by a new publication you can also find below.</p>",
+            "<p>If you want to cite Panseg, please refer to the PlantSeg publication until the new publication is released</p>",
             parent,
         )
         self.text.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -252,13 +252,7 @@ class WelcomeDialog(QtWidgets.QDialog):
         )
 
     def open_download(self):
-        # TODO: Change URL
-        webbrowser.open(
-            "https://kreshuklab.github.io/plant-seg/", new=0, autoraise=True
-        )
+        webbrowser.open("https://kreshuklab.github.io/panseg/", new=0, autoraise=True)
 
     def open_publication(self):
-        # TODO: Change URL
-        webbrowser.open(
-            "https://kreshuklab.github.io/plant-seg/", new=0, autoraise=True
-        )
+        webbrowser.open("https://doi.org/10.7554/eLife.57613", new=0, autoraise=True)
