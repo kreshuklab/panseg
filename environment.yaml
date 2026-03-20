@@ -2,31 +2,28 @@ name: panseg
 channels:
   - conda-forge
 dependencies:
-  - python<=3.11
+  - python[version='>=3.11']
   - pip
-  # Neural Network
-  - pytorch<=2.9
-  - tensorboard<=2.20
-  # Bioimage and CV
-  - tifffile<=2025.12
-  - h5py<=3.15
-  - zarr<=3.1
-  - vigra<=1.12
-  - python-elf<=0.7
-  - python-graphviz<=0.21
-  - scikit-image<=0.25
-  - bioimageio.core<=0.9.5
-  - bioimageio.spec<=0.5.6
-  # GUI
-  - qtpy<=2.4
-  - pyside6<=6.10
-  - napari<=0.6
-  - qt-material<=2.14
-  # Other
-  - requests<=2.32
-  - pyyaml<=6.0
-  - pydantic<=2.11
-  - trimesh<=4.11.0
-  - zmesh<=1.8.0
+  - bioimageio.core==0.9.6
+  - bioimageio.spec==0.5.7.4
+  - h5py==3.15.1
+  - napari==0.6.6
+  - pydantic==2.12.5
+  - pyside6==6.10.2
+  - python-elf==0.7.4
+  - python-graphviz==0.21
+  - pytorch==2.10.0
+  - pyyaml==6.0.3
+  - qt-material==2.14
+  - qtpy==2.4.3
+  - requests==2.32.5
+  - scikit-image==0.26.0
+  - tensorboard==2.20.0
+  - tifffile==2026.3.3
+  - vigra==1.12.2
+  - trimesh==4.11.4
+  - numpy==2.4.3
+  - zarr==3.1.5
+  - zmesh==1.8.0
   - pip:
       - -e .
