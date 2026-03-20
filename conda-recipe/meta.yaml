@@ -53,10 +53,10 @@ requirements:
     - tensorboard==2.20.0
     - tifffile==2026.3.3
     - vigra==1.12.2
+    - trimesh==4.11.4
+    - numpy==2.4.3
     - zarr==3.1.5
-    - trimesh==4.11.3
     - zmesh==1.8.0
-    - numpy==2.4.2
 
 test:
   imports:

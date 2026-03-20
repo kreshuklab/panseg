@@ -85,10 +85,12 @@ Before releasing, you might want to update those pins:
 bash update_deps.sh
 ```
 
-This updates the environment `panseg-dev` and its `yaml` file.
-Using this updated `environment-dev.yaml` file, update the following files:
+This updates the environment `panseg-dev` and its `yaml` file.  
+It also updates the `environment.yaml` by matching its content against the now
+updated packages in `environment-dev.yaml`.
 
-* `environment.yaml`
+Using this updated `environment.yaml` file, **manually** update the following files:
+
 * `conda-recipe/meta.yaml`
 
 To release, run the github workflow `release`, then manually publish to `conda-forge`.
