@@ -5,16 +5,17 @@ from panseg.io.tiff import create_tiff, load_tiff, read_tiff_shape
 from panseg.io.voxelsize import VoxelSize
 
 
-def test_big_image_small(tmp_path):
+@pytest.mark.parametrize("dtype", ["float32", "uint16", "uint8"])
+def test_tiff_roundtrip_small(tmp_path, dtype):
     out = tmp_path / "out.tiff"
-    data = np.array(np.random.random((100, 100, 10)), dtype="float32")
+    data = np.array(np.random.random((100, 100, 10)), dtype=dtype)
     create_tiff(out, data, VoxelSize())
     assert out.exists()
     loaded = load_tiff(out)
     assert np.array_equal(loaded, data)
 
 
-def test_big_image_bigtiff(tmp_path):
+def test_tiff_roundtrip_bigtiff(tmp_path):
     data = np.array(np.random.random((875, 100, 100)), dtype="float32")
     out = tmp_path / "out.tiff"
     create_tiff(out, data, VoxelSize(), force_bigtiff=True)

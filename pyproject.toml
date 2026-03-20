@@ -121,3 +121,8 @@ filename = "constructor/construct.yaml"
 
 [[tool.bumpversion.files]]
 filename = "conda-recipe/meta.yaml"
+
+[tool.pytest.ini_options]
+markers = ["slow: marks tests as slow to run"]
+addopts = "-m 'not slow'"
+testpaths = ["tests"]
