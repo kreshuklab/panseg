@@ -1,5 +1,12 @@
 # PlantSeg  <!-- omit in toc -->
 
+[!Caution]
+PlantSeg was renamed to PanSeg to highlight our segmentation capabilities
+beyond plants!  
+[Please head over to the new repository](https://github.com/kreshuklab/panseg)
+The old version will still work, but not receive updates or fixes any more.
+
+
 ![alt text](docs/logos/logo.png)
 
 [![Conda Build and Test](https://github.com/kreshuklab/plant-seg/actions/workflows/build-and-test-package.yml/badge.svg)](https://github.com/kreshuklab/plant-seg/actions/workflows/build-and-test-package.yml)
