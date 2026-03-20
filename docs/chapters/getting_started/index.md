@@ -16,7 +16,7 @@ PanSeg in each of these modes.
 
 After [installing PanSeg](installation.md) using the installer, there should
 be a start menu entry to launch PanSeg.
-Alternatively, launch `panseg --napari` in the terminal.
+Alternatively, activate the conda environment and launch `panseg --napari` in the terminal.
 
 Using the GUI, you can
 

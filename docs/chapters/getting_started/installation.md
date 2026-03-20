@@ -29,14 +29,17 @@ The installer comes complete with its own python installation. During the instal
 
     To start PanSeg in the terminal, navigate to your installation directory
     (default `~/panseg/`) and run `bin/panseg --napari`.
+    The updater does not work when starting from the terminal without
+    activating conda!
 
     You might want to add a link to this file to some directory on your $PATH.
 
     Alternatively, you can activate the panseg conda environment:  
-    (Replace [INSTALLATION DIR] with the absolute(!) path to your installation)
+    (Replace [INSTALLATION DIR] with the absolute(!) path to your installation,
+    and [bash] with your shell, e.g. bash, zsh, fish,..)
 
     ```bash
-    eval "$("[INSTALLATION DIR]/bin/conda" shell.bash activate "[INSTALLATION DIR]")
+    eval "$("[INSTALLATION DIR]/bin/conda" shell.[bash] activate "[INSTALLATION DIR]")
     panseg --help
     ```
 
@@ -64,7 +67,10 @@ The installer comes complete with its own python installation. During the instal
 
 === "latest git version"
 
-    To get the latest pre-release features, install PanSeg from git. You need to have conda and git installed. (We recommend Microforge to get conda, see [installing mamba](contributing.md#install-mamba))
+    To get the latest pre-release features, install PanSeg from git.
+    You need to have conda and git installed.
+    (We recommend Microforge to get conda, see
+    [installing mamba](contributing.md#install-mamba))
 
     ```bash
     git clone https://github.com/kreshuklab/panseg.git
@@ -80,8 +86,8 @@ The installer comes complete with its own python installation. During the instal
 ## Updating
 
 !!! info
-    Due to an external change, this only works from version 2.0.0rc5 onward.  
-    If you are running an older version, please uninstall and reinstall PanSeg.
+    The updater does not work when panseg is started from the terminal without
+    activating conda first!
 
 If you have installed PanSeg *via* the installer or from Conda-forge, you can update to a new version right in the GUI!
 Go to the `Plugins` menu on top, then click `Update Panseg`!

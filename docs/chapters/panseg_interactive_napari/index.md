@@ -9,7 +9,11 @@ From the terminal, you can start PanSeg in the GUI mode with:
 
 ```bash
 panseg --napari
+```
+
 or
+
+```bash
 panseg -n
 ```
 
