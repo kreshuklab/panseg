@@ -17,9 +17,9 @@ def update():
                 text=True,
                 check=True,
             )
-            log("Panseg installed, removing plantseg", thread="updater", level="INFO")
+            log("Panseg installed, removing plantseg..", thread="updater", level="INFO")
             subprocess.run(
-                ["conda", "remove", "plant-seg", "plantseg"],
+                ["conda", "remove", "plant-seg"],
                 input="y\n",
                 text=True,
                 check=True,
