@@ -11,12 +11,12 @@ build:
   number: 1
   script:
     - "pip install . --no-deps --ignore-installed --no-cache-dir -vvv"
-    - "mkdir -p {{ PREFIX }}/Menu"
-    - "cp {{ RECIPE_DIR }}/../Menu/panseg.json {{ PREFIX }}/Menu/{{ PKG_NAME }}_menu.json"
-    - "cp {{ RECIPE_DIR }}/../Menu/icon.png {{ PREFIX }}/Menu/icon.png"
-    - "cp {{ RECIPE_DIR }}/../Menu/icon.ico {{ PREFIX }}/Menu/icon.ico"
-    - "cp {{ RECIPE_DIR }}/../Menu/logo_horizontal.png {{ PREFIX }}/Menu/logo_horizontal.png"
-    - "cp {{ RECIPE_DIR }}/../Menu/logo_vertical.png {{ PREFIX }}/Menu/logo_vertical.png"
+    - "mkdir -p {{ PREFIX }}/Menu" # [not win]
+    - "cp {{ RECIPE_DIR }}/../Menu/panseg.json {{ PREFIX }}/Menu/{{ PKG_NAME }}_menu.json" # [not win]
+    - "cp {{ RECIPE_DIR }}/../Menu/icon.png {{ PREFIX }}/Menu/icon.png" # [not win]
+    - "cp {{ RECIPE_DIR }}/../Menu/icon.ico {{ PREFIX }}/Menu/icon.ico" # [not win]
+    - "cp {{ RECIPE_DIR }}/../Menu/logo_horizontal.png {{ PREFIX }}/Menu/logo_horizontal.png" # [not win]
+    - "cp {{ RECIPE_DIR }}/../Menu/logo_vertical.png {{ PREFIX }}/Menu/logo_vertical.png" # [not win]
 
   entry_points:
     - panseg = panseg.run_panseg:main
@@ -51,7 +51,6 @@ requirements:
     - trimesh ==4.11.4
     - numpy ==2.4.3
     - zarr ==3.1.5
-    - zmesh ==1.8.0
 
 test:
   imports:

@@ -6,11 +6,6 @@ import trimesh
 from panseg import logger
 from panseg.io.voxelsize import VoxelSize
 
-try:
-    from zmesh import Mesher
-except ImportError:
-    logger.error("ERROR: zmesh not installed, please run `pip install zmesh`")
-
 
 def create_mesh(
     path: Path,
@@ -19,10 +14,15 @@ def create_mesh(
     reduction_factor=2.0,
     close_mesh=False,
 ):
+    try:
+        from zmesh import Mesher
+
+    except ImportError:
+        logger.error("ERROR: zmesh not installed, please run `pip install zmesh`")
+        raise ImportError("ERROR: zmesh not installed, please run `pip install zmesh`")
     assert len(stack.shape) == 3, (
         f"Unsupported data shape of {stack.shape} for meshing."
     )
-
     mesher = Mesher(voxel_size.voxels_size)
     mesher.mesh(stack, close=close_mesh)
 
