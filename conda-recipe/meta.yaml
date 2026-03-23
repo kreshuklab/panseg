@@ -1,4 +1,4 @@
-{% set python_min = "3.11" %}
+{% set python_min = "3.12" %}
 package:
   name: panseg
   version: "2.0.0rc16"
