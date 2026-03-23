@@ -133,7 +133,7 @@ jobs:
       - name: Checkout new release
         run: |
           git fetch
-          git checkout master
+          git checkout main
           git pull
           cat panseg/__version__.py
 
