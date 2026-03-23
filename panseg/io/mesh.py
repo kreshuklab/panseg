@@ -2,9 +2,14 @@ from pathlib import Path
 
 import numpy as np
 import trimesh
-from zmesh import Mesher
 
+from panseg import logger
 from panseg.io.voxelsize import VoxelSize
+
+try:
+    from zmesh import Mesher
+except ImportError:
+    logger.error("ERROR: zmesh not installed, please run `pip install zmesh`")
 
 
 def create_mesh(
