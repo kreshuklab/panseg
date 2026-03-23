@@ -11,19 +11,12 @@ build:
   number: 1
   script:
     - "pip install . --no-deps --ignore-installed --no-cache-dir -vvv"
-    - "mkdir -p {{ PREFIX }}/Menu" # [not win]
-    - "cp {{ RECIPE_DIR }}/../Menu/panseg.json {{ PREFIX }}/Menu/{{ PKG_NAME }}_menu.json" # [not win]
-    - "cp {{ RECIPE_DIR }}/../Menu/icon.png {{ PREFIX }}/Menu/icon.png" # [not win]
-    - "cp {{ RECIPE_DIR }}/../Menu/icon.ico {{ PREFIX }}/Menu/icon.ico" # [not win]
-    - "cp {{ RECIPE_DIR }}/../Menu/logo_horizontal.png {{ PREFIX }}/Menu/logo_horizontal.png" # [not win]
-    - "cp {{ RECIPE_DIR }}/../Menu/logo_vertical.png {{ PREFIX }}/Menu/logo_vertical.png" # [not win]
-    # Only relevant for build, not packaging. In CI and forge, build only runs on linux -> noarch
-    # - 'mkdir -p {{ PREFIX }}\Menu' # [win]
-    # - 'cp {{ RECIPE_DIR }}\..\Menu\plant-seg.json {{ PREFIX }}\Menu\{{ PKG_NAME }}_menu.json' # [win]
-    # - 'cp {{ RECIPE_DIR }}\..\Menu\icon.png {{ PREFIX }}\Menu\icon.png' # [win]
-    # - 'cp {{ RECIPE_DIR }}\..\Menu\icon.ico {{ PREFIX }}\Menu\icon.ico' # [win]
-    # - 'cp {{ RECIPE_DIR }}\..\Menu\logo_horizontal.png {{ PREFIX }}\Menu\logo_horizontal.png' # [win]
-    # - 'cp {{ RECIPE_DIR }}\..\Menu\logo_vertical.png {{ PREFIX }}\Menu\logo_vertical.png' # [win]
+    - "mkdir -p {{ PREFIX }}/Menu"
+    - "cp {{ RECIPE_DIR }}/../Menu/panseg.json {{ PREFIX }}/Menu/{{ PKG_NAME }}_menu.json"
+    - "cp {{ RECIPE_DIR }}/../Menu/icon.png {{ PREFIX }}/Menu/icon.png"
+    - "cp {{ RECIPE_DIR }}/../Menu/icon.ico {{ PREFIX }}/Menu/icon.ico"
+    - "cp {{ RECIPE_DIR }}/../Menu/logo_horizontal.png {{ PREFIX }}/Menu/logo_horizontal.png"
+    - "cp {{ RECIPE_DIR }}/../Menu/logo_vertical.png {{ PREFIX }}/Menu/logo_vertical.png"
 
   entry_points:
     - panseg = panseg.run_panseg:main
@@ -32,31 +25,33 @@ requirements:
   host:
     - python {{ python_min }}
     - setuptools
+    - pip
 
   run:
-    - python >={{ python_min }}
+    # - python >={{ python_min }}
+    - python ==3.12
     - pip
-    - bioimageio.core==0.9.6
-    - bioimageio.spec==0.5.7.4
-    - h5py==3.15.1
-    - napari==0.6.6
-    - pydantic==2.12.5
-    - pyside6==6.10.2
-    - python-elf==0.7.4
-    - python-graphviz==0.21
-    - pytorch==2.10.0
-    - pyyaml==6.0.3
-    - qt-material==2.14
-    - qtpy==2.4.3
-    - requests==2.32.5
-    - scikit-image==0.26.0
-    - tensorboard==2.20.0
-    - tifffile==2026.3.3
-    - vigra==1.12.2
-    - trimesh==4.11.4
-    - numpy==2.4.3
-    - zarr==3.1.5
-    - zmesh==1.8.0
+    - bioimageio.core ==0.9.6
+    - bioimageio.spec ==0.5.7.4
+    - h5py ==3.15.1
+    - napari ==0.6.6
+    - pydantic ==2.12.5
+    - pyside6 ==6.10.2
+    - python-elf ==0.7.4
+    - python-graphviz ==0.21
+    - pytorch ==2.10.0
+    - pyyaml ==6.0.3
+    - qt-material ==2.14
+    - qtpy ==2.4.3
+    - requests ==2.32.5
+    - scikit-image ==0.26.0
+    - tensorboard ==2.20.0
+    - tifffile ==2026.3.3
+    - vigra ==1.12.2
+    - trimesh ==4.11.4
+    - numpy ==2.4.3
+    - zarr ==3.1.5
+    - zmesh ==1.8.0
 
 test:
   imports:
