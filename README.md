@@ -7,9 +7,9 @@
 
 [![Anaconda-Server Badge](https://anaconda.org/conda-forge/panseg/badges/version.svg)](https://anaconda.org/conda-forge/panseg)
 [![Anaconda-Server Badge](https://anaconda.org/conda-forge/panseg/badges/latest_release_date.svg)](https://anaconda.org/conda-forge/panseg)
-[![Anaconda-Server Badge](https://anaconda.org/conda-forge/plant-seg/badges/downloads.svg)](https://anaconda.org/conda-forge/plant-seg) <!--- TODO: remove -->
 [![Anaconda-Server Badge](https://anaconda.org/conda-forge/panseg/badges/downloads.svg)](https://anaconda.org/conda-forge/panseg)
-[![Anaconda-Server Badge](https://anaconda.org/conda-forge/plant-seg/badges/license.svg)](https://anaconda.org/conda-forge/plant-seg)
+[![Anaconda-Server Badge](https://anaconda.org/conda-forge/panseg/badges/downloads.svg)](https://anaconda.org/conda-forge/panseg)
+[![Anaconda-Server Badge](https://anaconda.org/conda-forge/panseg/badges/license.svg)](https://anaconda.org/conda-forge/panseg)
 
 ![Illustration of Pipeline](../assets/images/main_figure_nologo.png)
 
@@ -70,7 +70,8 @@ we changed the name to `PanSeg`, referring to plant and animal cells.
 
 ### PanSeg 2.0
 
-#### TODO
+A new publication highlighting all the new features is currently on its way.  
+Until then, if you find our work useful, please cite the PlantSeg 1.0 paper below.
 
 ### Plantseg 1.0
 
