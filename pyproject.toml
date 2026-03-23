@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "panseg"
-version = "2.0.0rc17"
+version = "2.0.0rc18"
 authors = [
   { name = "Qin Yu", email = "qin.yu@embl.de" },
   { name = "Lorenzo Cerrone", email = "lorenzo.cerrone@uzh.ch" },
@@ -81,7 +81,7 @@ source = ["panseg/"]
 omit = ["/tmp/*"]
 
 [tool.bumpversion]
-current_version = "2.0.0rc17"
+current_version = "2.0.0rc18"
 parse = """(?x)
     (?P<major>[0-9]+)               # Major version
     \\.(?P<minor>[0-9]+)            # Minor version
