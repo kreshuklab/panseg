@@ -1,7 +1,10 @@
 import warnings
+import webbrowser
+from pathlib import Path
 
 import napari
 from qtpy import QtCore, QtWidgets
+from qtpy.QtGui import QPicture, QPixmap
 
 from plantseg import logger
 from plantseg.__version__ import __version__
@@ -152,7 +155,7 @@ class Plantseg_viewer:
                     )
                 else:
                     child.setText("")
-                child.setAlignment(QtCore.Qt.AlignLeft)
+                child.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
 
     def finalize_viewer(self):
         # Show data tab by default
@@ -187,4 +190,69 @@ class Plantseg_viewer:
         self.setup_welcome_page()
         self.finalize_viewer()
 
+        self.wd = WelcomeDialog(self.viewer.window._qt_viewer)
+        self.wd.show()
+
         napari.run()
+
+
+class WelcomeDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        super(WelcomeDialog, self).__init__(parent)
+        self.setWindowTitle("PanSeg 2.0 released")
+        # layout = QtWidgets.QVBoxLayout()
+        layout = QtWidgets.QGridLayout()
+        self.setLayout(layout)
+
+        p = str((Path(__file__) / "../../resources/logo_change.png").resolve())
+        image = QPixmap(p).scaledToWidth(500)
+        im1 = QtWidgets.QLabel()
+        im1.setPixmap(image)
+
+        self.text = QtWidgets.QLabel(
+            "<h1>PlantSeg is now PanSeg!</h1>"
+            "<p>With the 2.0 release we rename PlantSeg to PanSeg to highlight "
+            "its capabilities beyond plant tissue segmentation.</p>"
+            "<p><b>To get the new version run the update, or if not possible, follow the download link below!</b><br>"
+            "(Update only possible for versions installed using the executable.)</p>"
+            "<p>If you want to cite Panseg, please refer to the PlantSeg publication until the new publication is released</p>",
+            parent,
+        )
+        self.text.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+
+        self.publication_button = QtWidgets.QPushButton("Open Publication")
+        self.publication_button.clicked.connect(self.open_publication)
+        self.publication_button.setStyleSheet("background-color: green")
+        self.download_button = QtWidgets.QPushButton("Download PanSeg 2.0")
+        self.download_button.clicked.connect(self.open_download)
+        self.download_button.setStyleSheet("background-color: green")
+        self.update_button = QtWidgets.QPushButton("Run update")
+        self.update_button.setStyleSheet("background-color: green")
+        self.update_button.clicked.connect(update)
+
+        layout.addWidget(im1, 0, 0, 1, 3, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.text, 1, 0, 1, 3)
+        layout.addWidget(
+            self.download_button,
+            3,
+            0,
+            alignment=QtCore.Qt.AlignmentFlag.AlignCenter,
+        )
+        layout.addWidget(
+            self.update_button,
+            3,
+            1,
+            alignment=QtCore.Qt.AlignmentFlag.AlignCenter,
+        )
+        layout.addWidget(
+            self.publication_button,
+            3,
+            2,
+            alignment=QtCore.Qt.AlignmentFlag.AlignCenter,
+        )
+
+    def open_download(self):
+        webbrowser.open("https://kreshuklab.github.io/panseg/", new=0, autoraise=True)
+
+    def open_publication(self):
+        webbrowser.open("https://doi.org/10.7554/eLife.57613", new=0, autoraise=True)
