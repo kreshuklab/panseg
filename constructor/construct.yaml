@@ -3,7 +3,7 @@ version: "2.0.0rc15"
 channels:
   - conda-forge
 specs:
-  - python=3.13
+  - python=3.12
   - conda
   - menuinst
 exclude:
