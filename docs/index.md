@@ -1,9 +1,14 @@
 # PanSeg introduction
 
-!!! tip "PanSeg v2 is out!"
-    We switched to Napari as our front-end!
-    You now can interactively work on your images in PanSeg.
-    The project was renamed to **PanSeg** instead of **PlantSeg**!
+!!! tip "PlantSeg is now PanSeg!"
+    The project was renamed to **PanSeg** instead of **PlantSeg** to highlight
+    its capabilities beyond plant cell segmentation!  
+
+!!! warning "Technical Issues"
+    The renaming process is ongoing, and you might encounter technical issues
+    with the new version until this process is finished.
+    We are aware of issues with the windows installer and the in-app updater.
+    If you encounter issues, please use PlantSeg <= 2.0.0rc14 for now, thank you!
 
 PanSeg is a tool for 3D and 2D segmentation.
 The methods used are very generic and can be used for any instance segmentation workflow,

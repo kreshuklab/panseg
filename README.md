@@ -1,5 +1,14 @@
 # PanSeg  <!-- omit in toc -->
 
+[!WARNING]
+PanSeg was recently renamed from PlantSeg to highlight its capabilities beyond
+plant segmentation.
+Currently there are some technical issues regarding the installer on windows
+and the update procedure.
+If you encounter issues, please continue using version 2.0.0rc14 until the
+issues are resolved.
+
+
 ![alt text](panseg/resources/header_h.png)
 
 [![Conda Build and Test](https://github.com/kreshuklab/panseg/actions/workflows/build-and-test-package.yml/badge.svg)](https://github.com/kreshuklab/panseg/actions/workflows/build-and-test-package.yml)

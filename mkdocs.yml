@@ -107,7 +107,7 @@ nav:
       - Know Issues: chapters/getting_started/known_issues.md
 
   - Napari GUI:
-      - chapters/plantseg_interactive_napari/index.md
+      - chapters/panseg_interactive_napari/index.md
       - Import: chapters/panseg_interactive_napari/import.md
       - Preprocessing: chapters/panseg_interactive_napari/preprocessing.md
       - Segmentation: chapters/panseg_interactive_napari/segmentation.md

@@ -1,5 +1,11 @@
 # PanSeg Interactive - Napari
 
+!!! warning "Technical Issues"
+    The renaming process is ongoing, and you might encounter technical issues
+    with the new version until this process is finished.
+    We are aware of issues with the windows installer and the in-app updater.
+    If you encounter issues, please use PlantSeg <= 2.0.0rc14 for now, thank you!
+
 Interactively apply operations to your images and run the segmentation
 pipeline using the GUI of PanSeg.
 PanSeg uses napari as its front-end.
