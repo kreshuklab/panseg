@@ -1,0 +1,125 @@
+name: Release new version
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # Conda requires a login shell in order to work properly
+        shell: bash -l {0}
+    env:
+      DISPLAY: ":99.0"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Install Qt
+        uses: tlambert03/setup-qt-libs@v1
+
+      # Start X virtual framebuffer for GUI testing
+      - name: Start Xvfb
+        run: |
+          /sbin/start-stop-daemon --start --quiet --pidfile /tmp/custom_xvfb_99.pid \
+          --make-pidfile --background --exec /usr/bin/Xvfb -- :99 -screen 0 1920x1200x24 -ac +extension GLX
+
+      - name: Set Up Miniforge
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: 3.11
+          miniforge-version: latest
+          mamba-version: "*"
+          channels: conda-forge
+          environment-file: "environment-dev.yaml"
+          activate-environment: "panseg-dev"
+          conda-remove-defaults: true
+
+      - name: List Conda Environments
+        run: conda info --envs
+
+      - name: conda build
+        run: |
+          conda create -n builder conda-build
+          conda activate builder
+          conda build conda-recipe/ --output-folder conda_bld
+          conda deactivate
+
+      - name: tar build
+        run: |
+          tar czf ./constructor/build.gz conda_bld/*
+          ls
+          echo "### ls constructor: ###"
+          ls ./constructor
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: panseg-conda-build
+          path: constructor/build.gz
+          overwrite: true
+          if-no-files-found: error
+
+  build_installer:
+    needs: test-and-build
+    strategy:
+      matrix:
+        # os: ["ubuntu", "windows"]
+        os: ["ubuntu-latest", "windows-latest", "macos-latest"]
+    # runs-on: [self-hosted, "${{ matrix.os }}"]
+    runs-on: ["${{ matrix.os }}"]
+
+    defaults:
+      run:
+        # Conda requires a login shell in order to work properly
+        shell: ${{ matrix.os == 'windows' && 'powershell' || 'bash -el {0}' }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Checkout new release
+        run: |
+          git fetch
+          git checkout main
+          git pull
+          cat panseg/__version__.py
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: panseg-conda-build
+          path: ./constructor
+
+      - name: Display downloaded files
+        run: ls ./constructor
+
+      - name: Set Up Miniforge
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: 3.12
+          miniforge-version: latest
+          mamba-version: "*"
+          channels: conda-forge
+          conda-remove-defaults: true
+          activate-environment: "dummyenv"
+
+      - name: List Conda Environments
+        run: |
+          conda info --envs
+
+      - name: create package
+        run: |
+          conda create -n constructor constructor menuinst requests
+          conda activate constructor
+          constructor --output-dir installer constructor/
+          conda deactivate
+
+      - name: Upload Installer Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: "panseg-installer-${{ matrix.os }}"
+          path: installer/PanSeg*
+          overwrite: true
+          if-no-files-found: error
