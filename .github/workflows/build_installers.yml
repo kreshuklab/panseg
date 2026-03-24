@@ -1,4 +1,4 @@
-name: Release new version
+name: Build installers
 
 on:
   workflow_dispatch:
