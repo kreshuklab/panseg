@@ -1,4 +1,4 @@
-{% set python_min = "3.12" %}
+{% set python_min = "3.11" %}
 package:
   name: panseg
   version: "2.0.0rc18"
@@ -28,8 +28,7 @@ requirements:
     - pip
 
   run:
-    # - python >={{ python_min }}
-    - python ==3.12
+    - python >={{ python_min }}
     - pip
     - bioimageio.core ==0.9.6
     - bioimageio.spec ==0.5.7.4
