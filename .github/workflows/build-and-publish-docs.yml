@@ -22,10 +22,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - run: git checkout HEAD^
+        uses: actions/checkout@v6
 
       - name: Install Qt
         uses: tlambert03/setup-qt-libs@v1

@@ -94,7 +94,7 @@ plugins:
       enable_creation_date: true
   - git-committers:
       repository: kreshuklab/panseg
-      branch: master
+      branch: main
 
 nav:
   - Overview:
