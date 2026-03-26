@@ -2,8 +2,8 @@
 
 !!! warning "Technical Issues"
     The renaming process is ongoing, and you might encounter technical issues
-    with the new version until this process is finished.
-    We are aware of issues with the windows installer and the in-app updater.
+    The new conda-forge package is not yet released, until then the in-app update does not work.
+    Issues with the windows installer have been resolved.  
     If you encounter issues, please use PlantSeg <= 2.0.0rc14 for now, thank you!
 
 This is the installation guide for the latest PanSeg.
