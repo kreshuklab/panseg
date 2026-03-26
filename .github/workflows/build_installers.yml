@@ -1,19 +1,7 @@
-name: Release new version
+name: Build installers
 
 on:
   workflow_dispatch:
-    inputs:
-      bump-type:
-        description: "Bump type"
-        required: true
-        default: "patch"
-        type: choice
-        options:
-          - major
-          - minor
-          - patch
-          - pre_label
-          - pre_n
 
 jobs:
   test-and-build:
@@ -52,39 +40,6 @@ jobs:
       - name: List Conda Environments
         run: conda info --envs
 
-      - name: Run Tests with Pytest
-        run: |
-          conda activate panseg-dev
-          pytest -s --cov --cov-report=xml
-          conda deactivate
-
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v4.2.0
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-      - name: Bump version
-        id: bump
-        uses: callowayproject/bump-my-version@master
-        with:
-          args: "--verbose ${{ inputs.bump-type }}"
-          github-token: ${{ secrets.RELEASE_BUMP_MY_VERSION_PAT }}
-
-      - name: Check version
-        if: steps.bump.outputs.bumped == 'true'
-        run: |
-          echo "Version was bumped from ${{ steps.bump.outputs.previous-version }} to ${{ steps.bump.outputs.current-version }}!"
-
-      - name: Release
-        uses: softprops/action-gh-release@v2.2.1
-        with:
-          generate_release_notes: true
-          tag_name: ${{ steps.bump.outputs.current-version }}
-          name: ${{ steps.bump.outputs.current-version }}
-          token: ${{ secrets.GITHUB_TOKEN }}
-          make_latest: true
-          prerelease: ${{ startsWith( inputs.bump-type , 'pre' ) }}
-
       - name: conda build
         run: |
           conda create -n builder conda-build
@@ -107,11 +62,6 @@ jobs:
           overwrite: true
           if-no-files-found: error
 
-      - name: Trigger building docs
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh workflow run build-and-publish-docs.yml -f version=${{ steps.bump.outputs.current-version }}
-
   build_installer:
     needs: test-and-build
     strategy:
@@ -128,7 +78,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Checkout new release
         run: |
@@ -164,14 +114,6 @@ jobs:
           conda create -n constructor constructor menuinst requests
           conda activate constructor
           constructor --output-dir installer constructor/
-          conda deactivate
-
-      - name: publish to heibox and release using python uploader
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          conda activate constructor
-          python -u constructor/uploader.py ${{ secrets.SEAFILE_API_TOKEN }}
           conda deactivate
 
       - name: Upload Installer Artifact
