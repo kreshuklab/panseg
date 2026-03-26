@@ -14,7 +14,7 @@ dependencies:
   - mkdocs-git-revision-date-localized-plugin
   - mkdocs-material
   - mkdocstrings-python
-  - napari ==0.6.6
+  - napari ==0.7.0
   - pre-commit
   - pydantic ==2.12.5
   - pyside6 ==6.10.2
@@ -39,6 +39,5 @@ dependencies:
   - zarr ==3.1.5
   - pip:
       - markdown-exec
-      - napari==0.7.0a3
       - zmesh ==1.11.0
       - -e .
