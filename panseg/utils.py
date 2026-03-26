@@ -138,6 +138,7 @@ def check_version(
         new_features = []
         for match in re.findall(r"feat.*?: (.*?)\n", latest_body):
             new_features.append(match.split(" by @")[0])
+        logger.debug(f"fetched new_features {new_features}")
 
         new_release_features = []
         for match in re.findall(r"feat.*?: (.*?)\n", latest_release_body):

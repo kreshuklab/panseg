@@ -1,6 +1,7 @@
 import warnings
 
 import napari
+from napari.components._viewer_constants import CanvasPosition
 from qtpy import QtCore, QtWidgets
 
 from panseg import logger
@@ -34,7 +35,7 @@ def scroll_wrap(w):
 class Panseg_viewer:
     def __init__(self, viewer=None):
         if viewer is None:
-            viewer = napari.Viewer(title="PanSeg v2", show_welcome_screen=True)
+            viewer = napari.Viewer(title="PanSeg v2", show_welcome_screen=False)
         self.viewer = viewer
 
         self._container_list = []
@@ -138,21 +139,21 @@ class Panseg_viewer:
         )
 
     def setup_welcome_page(self):
-        welcome_widget = self.viewer.window._qt_viewer._welcome_widget
         v_short, v_features = check_version(current_version=__version__, silent=True)
+        text = (
+            "\n \n \n"
+            + "Welcome to PanSeg!\n \n \n"
+            + "To load an image use the menu on the right\n\n"
+            + v_short
+            + "\n\n"
+            + v_features
+        )
+        self.viewer.text_overlay.text = text
+        self.viewer.text_overlay.visible = True
+        # self.viewer.text_overlay.order = 1000000
+        self.viewer.welcome_screen.visible = False
 
-        for i, child in enumerate(welcome_widget.findChildren(QtWidgets.QWidget)):
-            if isinstance(child, QtWidgets.QLabel):
-                if i == 3:
-                    child.setText(
-                        "Welcome to PanSeg!\n\nTo load an image use the menu on the right\n\n"
-                        + v_short
-                        + "\n\n"
-                        + v_features
-                    )
-                else:
-                    child.setText("")
-                child.setAlignment(QtCore.Qt.AlignLeft)
+        self.viewer.text_overlay.position = CanvasPosition.TOP_CENTER
 
     def finalize_viewer(self):
         # Show data tab by default
@@ -184,7 +185,7 @@ class Panseg_viewer:
         self.init_tabs()
         self.add_containers_to_dock()
         self.setup_layer_updates()
-        # self.setup_welcome_page()
+        self.setup_welcome_page()
         self.finalize_viewer()
 
         napari.run()
