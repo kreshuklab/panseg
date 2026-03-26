@@ -4,8 +4,7 @@
 >[!WARNING]
 >PanSeg was recently renamed from PlantSeg to highlight its capabilities beyond
 >plant segmentation.
->Currently there are some technical issues regarding the installer on windows
->and the update procedure.
+>The new conda-forge package is waiting to be published, until the the in-app update does not work.
 >If you encounter issues, please continue using version 2.0.0rc14 until the
 >issues are resolved.
 
