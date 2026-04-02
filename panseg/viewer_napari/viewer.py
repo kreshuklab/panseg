@@ -1,5 +1,5 @@
-from pathlib import Path
 import warnings
+from pathlib import Path
 
 import napari
 from napari._qt.qt_event_loop import _svg_path_to_icon
