@@ -11,7 +11,7 @@ jobs:
     steps:
       # Checkout the repository
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # Set up Qt libraries (required for PyQt applications)
       - name: Set Up Qt Libraries

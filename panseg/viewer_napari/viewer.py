@@ -1,6 +1,9 @@
 import warnings
+from pathlib import Path
 
 import napari
+from napari._qt.qt_event_loop import _svg_path_to_icon
+from napari.components._viewer_constants import CanvasPosition
 from qtpy import QtCore, QtWidgets
 
 from panseg import logger
@@ -34,7 +37,7 @@ def scroll_wrap(w):
 class Panseg_viewer:
     def __init__(self, viewer=None):
         if viewer is None:
-            viewer = napari.Viewer(title="PanSeg v2")
+            viewer = napari.Viewer(title="PanSeg v2", show_welcome_screen=False)
         self.viewer = viewer
 
         self._container_list = []
@@ -137,36 +140,44 @@ class Panseg_viewer:
             self.output_tab.update_layer_selection
         )
 
-    def setup_welcome_page(self):
-        welcome_widget = self.viewer.window._qt_viewer._welcome_widget
-        v_short, v_features = check_version(current_version=__version__, silent=True)
+        # welcome overlay
+        self.viewer.layers.events.removed.connect(self._on_layerlist_change)
+        self.viewer.layers.events.inserted.connect(self._on_layerlist_change)
 
-        for i, child in enumerate(welcome_widget.findChildren(QtWidgets.QWidget)):
-            if isinstance(child, QtWidgets.QLabel):
-                if i == 3:
-                    child.setText(
-                        "Welcome to PanSeg!\n\nTo load an image use the menu on the right\n\n"
-                        + v_short
-                        + "\n\n"
-                        + v_features
-                    )
-                else:
-                    child.setText("")
-                child.setAlignment(QtCore.Qt.AlignLeft)
+    def setup_welcome_page(self):
+        v_short, v_features = check_version(current_version=__version__, silent=True)
+        text = (
+            "\n \n \n"
+            + "Welcome to PanSeg!\n \n \n"
+            + "To load an image use the menu on the right\n\n"
+            + v_short
+            + "\n\n"
+            + v_features
+        )
+        self.viewer.text_overlay.text = text
+        self.viewer.text_overlay.visible = True
+        # self.viewer.text_overlay.order = 1000000
+        self.viewer.welcome_screen.visible = False
+
+        self.viewer.text_overlay.position = CanvasPosition.TOP_CENTER
+
+    def _on_layerlist_change(self):
+        """Hide the welcome screen when layers get created."""
+        if len(self.viewer.layers) > 0:
+            self.viewer.text_overlay.visible = False
+        else:
+            self.viewer.text_overlay.visible = True
+
+    def setup_logo(self):
+        """Set the icon of the window title bar."""
+        logo_path = Path(__file__).parent.parent / "resources" / "logo.svg"
+        self.viewer.window._qt_window._window_icon = logo_path
+        self.viewer.window._update_logo()
 
     def finalize_viewer(self):
-        # Show data tab by default
-        if logger.level > 10:  # 10 = DEBUG level
-            # Suppress FutureWarning about `dock_widgets`` being private
-            # We need to use `_dock_widgets` (not `dock_widgets`) because we need access
-            # to the `QtViewerDockWidget` objects which have `.show()` and `.raise_()` methods
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=FutureWarning)
-                self.viewer.window._dock_widgets["Input"].show()
-                self.viewer.window._dock_widgets["Input"].raise_()
-        else:
-            self.viewer.window._dock_widgets["Input"].show()
-            self.viewer.window._dock_widgets["Input"].raise_()
+        # Show input tab by default
+        self.viewer.window.dock_widgets["Input"].parent().show()
+        self.viewer.window.dock_widgets["Input"].parent().raise_()
 
         self.viewer.window.file_menu.menuAction().setVisible(False)
         self.viewer.window.layers_menu.menuAction().setVisible(False)
@@ -185,6 +196,7 @@ class Panseg_viewer:
         self.add_containers_to_dock()
         self.setup_layer_updates()
         self.setup_welcome_page()
+        self.setup_logo()
         self.finalize_viewer()
 
         napari.run()
