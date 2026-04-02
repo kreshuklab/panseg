@@ -1,6 +1,8 @@
+from pathlib import Path
 import warnings
 
 import napari
+from napari._qt.qt_event_loop import _svg_path_to_icon
 from napari.components._viewer_constants import CanvasPosition
 from qtpy import QtCore, QtWidgets
 
@@ -138,6 +140,10 @@ class Panseg_viewer:
             self.output_tab.update_layer_selection
         )
 
+        # welcome overlay
+        self.viewer.layers.events.removed.connect(self._on_layerlist_change)
+        self.viewer.layers.events.inserted.connect(self._on_layerlist_change)
+
     def setup_welcome_page(self):
         v_short, v_features = check_version(current_version=__version__, silent=True)
         text = (
@@ -155,19 +161,23 @@ class Panseg_viewer:
 
         self.viewer.text_overlay.position = CanvasPosition.TOP_CENTER
 
-    def finalize_viewer(self):
-        # Show data tab by default
-        if logger.level > 10:  # 10 = DEBUG level
-            # Suppress FutureWarning about `dock_widgets`` being private
-            # We need to use `_dock_widgets` (not `dock_widgets`) because we need access
-            # to the `QtViewerDockWidget` objects which have `.show()` and `.raise_()` methods
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore", category=FutureWarning)
-                self.viewer.window._dock_widgets["Input"].show()
-                self.viewer.window._dock_widgets["Input"].raise_()
+    def _on_layerlist_change(self):
+        """Hide the welcome screen when layers get created."""
+        if len(self.viewer.layers) > 0:
+            self.viewer.text_overlay.visible = False
         else:
-            self.viewer.window._dock_widgets["Input"].show()
-            self.viewer.window._dock_widgets["Input"].raise_()
+            self.viewer.text_overlay.visible = True
+
+    def setup_logo(self):
+        """Set the icon of the window title bar."""
+        logo_path = Path(__file__).parent.parent / "resources" / "logo.svg"
+        self.viewer.window._qt_window._window_icon = logo_path
+        self.viewer.window._update_logo()
+
+    def finalize_viewer(self):
+        # Show input tab by default
+        self.viewer.window.dock_widgets["Input"].parent().show()
+        self.viewer.window.dock_widgets["Input"].parent().raise_()
 
         self.viewer.window.file_menu.menuAction().setVisible(False)
         self.viewer.window.layers_menu.menuAction().setVisible(False)
@@ -186,6 +196,7 @@ class Panseg_viewer:
         self.add_containers_to_dock()
         self.setup_layer_updates()
         self.setup_welcome_page()
+        self.setup_logo()
         self.finalize_viewer()
 
         napari.run()
