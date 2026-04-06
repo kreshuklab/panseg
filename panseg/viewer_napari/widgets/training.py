@@ -60,8 +60,8 @@ class Training_Tab:
         self.widget_unet_training.device.reset_choices()
         self.widget_unet_training.device.value = self.ALL_DEVICES[0]
 
-        self.widget_unet_training.pretrained._default_choices = (
-            lambda _: model_zoo.list_models()
+        self.widget_unet_training.pretrained._default_choices = lambda _: (
+            model_zoo.list_models()
         )
         self.widget_unet_training.pretrained.changed.connect(
             self._on_pretrained_changed
