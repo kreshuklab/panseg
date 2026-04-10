@@ -3,11 +3,13 @@
 !!! warning "Technical Issues"
     The renaming process is ongoing, and you might encounter technical issues
     The new conda-forge package is not yet released, until then the in-app update does not work.
-    Issues with the windows installer have been resolved.  
+    Issues with the windows installer have been resolved.
     If you encounter issues, please use PlantSeg <= 2.0.0rc14 for now, thank you!
 
+!!! note "PlantSeg v1 Documentation"
+    The installation guide for PlantSeg v1 is no longer available in this documentation.
+
 This is the installation guide for the latest PanSeg.
-Please check the installation guide for PanSeg v1 at [PanSeg Legacy Installation](../panseg_legacy/installation.md).
 
 ## Download
 
@@ -38,7 +40,7 @@ The installer comes complete with its own python installation. During the instal
 
     You might want to add a link to this file to some directory on your $PATH.
 
-    Alternatively, you can activate the panseg conda environment:  
+    Alternatively, you can activate the panseg conda environment:
     (Replace [INSTALLATION DIR] with the absolute(!) path to your installation)
 
     ```bash
@@ -48,12 +50,12 @@ The installer comes complete with its own python installation. During the instal
 
 ===  "Windows"
 
-    Download the installer and execute it. As the installer is not signed you 
+    Download the installer and execute it. As the installer is not signed you
     might need to confirm the download and that you want to run the installer.
- 
+
     Choose a installation path without spaces in it, as those can cause issues
     with conda packages.
- 
+
     Start PlanSeg through the Windows start menu.
 
 === "conda-forge"
@@ -80,13 +82,13 @@ The installer comes complete with its own python installation. During the instal
     panseg --napari
     ```
 
-    For development, we recommend using the `environment-dev.yaml` instead! 
+    For development, we recommend using the `environment-dev.yaml` instead!
     Also check [the contributing section](./contributing.md)
 
 ## Updating
 
 !!! info
-    Due to an external change, this only works from version 2.0.0rc5 onward.  
+    Due to an external change, this only works from version 2.0.0rc5 onward.
     If you are running an older version, please uninstall and reinstall PanSeg.
 
 If you have installed PanSeg *via* the installer or from Conda-forge, you can update to a new version right in the GUI!
@@ -115,7 +117,3 @@ If you plan to use SimpleITK-based watershed segmentation, you will need to inst
 conda activate panseg
 pip install SimpleITK
 ```
-
-## Installing PanSeg v1
-
-Please check the installation guide for PanSeg v1 at [PanSeg Legacy Installation](../panseg_legacy/installation.md).
