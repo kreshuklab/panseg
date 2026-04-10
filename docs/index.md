@@ -2,12 +2,12 @@
 
 !!! tip "PlantSeg is now PanSeg!"
     The project was renamed to **PanSeg** instead of **PlantSeg** to highlight
-    its capabilities beyond plant cell segmentation!  
+    its capabilities beyond plant cell segmentation!
 
 !!! warning "Technical Issues"
     The renaming process is ongoing, and you might encounter technical issues
     The new conda-forge package is not yet released, until then the in-app update does not work.
-    Issues with the windows installer have been resolved.  
+    Issues with the windows installer have been resolved.
     If you encounter issues, please use PlantSeg <= 2.0.0rc14 for now, thank you!
 
 PanSeg is a tool for 3D and 2D segmentation.
@@ -24,7 +24,7 @@ but they are tuned towards cell segmentation in plant tissue. The tool is fundam
 * ***Cell Segmentation as graph partitioning***: The boundary prediction from the first step serve as the basis for automated segmentation. PanSeg implements four distinct algorithms for this task, each with unique features tailored to different segmentation needs. This graph partitioning approach is particularly effective for segmenting densely packed cells.
 
 <figure markdown="span">
-  ![Main Figure](./logos/panseg2gui.png)
+  ![Main Figure](./logos/plantseg2gui.png)
   <figcaption>Figure: PanSeg v2 Interface</figcaption>
 </figure>
 

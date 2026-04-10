@@ -19,7 +19,7 @@ or
 panseg -n
 ```
 
-![PanSeg 2.0 interface](../../logos/panseg2gui.png)
+![PanSeg 2.0 interface](../../logos/plantseg2gui.png)
 
 ## Parts of the GUI
 
