@@ -1644,20 +1644,20 @@
 If this error occurs, check the GPU memory in the task manager, it is probably full.</p>
 <p>GPUs can use the system memory after running out of memory
 on the GPU itself. This prevents crashes and errors, but makes all operations
-very slow.<br />
+very slow.
 In PlanSeg, this "feature" prevents us from finding optimal patch and batch
-sizes for your GPU.<br />
+sizes for your GPU.
 Here is how you can fix the issue:</p>
-<h4 id="a-quick-and-dirty-fix-set-patch-and-batch-size-manually">A) Quick and dirty fix: Set patch and batch size manually<a class="headerlink" href="#a-quick-and-dirty-fix-set-patch-and-batch-size-manually" title="Permanent link">&para;</a></h4>
+<h3 id="a-quick-and-dirty-fix-set-patch-and-batch-size-manually">A) Quick and dirty fix: Set patch and batch size manually<a class="headerlink" href="#a-quick-and-dirty-fix-set-patch-and-batch-size-manually" title="Permanent link">&para;</a></h3>
 <p>In <code>Segmentation</code>, <code>Boundary Prediction</code>, click on <code>Show advanced parameters</code>.
 Then check the box <code>Manual Patch Size</code> and enter your patch size (min 64x64 in x,y dimension).
 Set <code>Batch size</code> to <code>One (low VRAM usage)</code>.</p>
-<h4 id="b-proper-fix-disable-memory-off-loading">B) Proper fix: Disable memory off-loading<a class="headerlink" href="#b-proper-fix-disable-memory-off-loading" title="Permanent link">&para;</a></h4>
+<h3 id="b-proper-fix-disable-memory-off-loading">B) Proper fix: Disable memory off-loading<a class="headerlink" href="#b-proper-fix-disable-memory-off-loading" title="Permanent link">&para;</a></h3>
 <p>Open your nvidia control panel. Navigate to <code>3D-Settings</code>(1), <code>Program specific</code> (not global)(2).
 Click on <code>add</code> and choose Python, afterwards it should display the path to the python
 executable <strong>in you PanSeg installation</strong>(3).</p>
 <p>Scroll to <code>CUDA - Sysmem Fallback Policy</code> and change that to <code>Prefer No Sysmem Fallback</code>(4).</p>
-<p><img alt="NVIDIA control panel" src="../../../logos/nvidia_control_annotated.png" /></p>
+<p><img alt="NVIDIA control panel" src="https://github.com/kreshuklab/panseg/raw/assets/images/nvidia_control_annotated.png" /></p>
 
 
 
@@ -1680,7 +1680,7 @@ executable <strong>in you PanSeg installation</strong>(3).</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date">December 15, 2025</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date">April 10, 2026</span>
   </span>
 
     
