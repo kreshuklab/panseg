@@ -3,7 +3,7 @@
 !!! warning "Technical Issues"
     The renaming process is ongoing, and you might encounter technical issues
     The new conda-forge package is not yet released, until then the in-app update does not work.
-    Issues with the windows installer have been resolved.  
+    Issues with the windows installer have been resolved.
     If you encounter issues, please use PlantSeg <= 2.0.0rc14 for now, thank you!
 
 Interactively apply operations to your images and run the segmentation
@@ -19,7 +19,7 @@ or
 panseg -n
 ```
 
-![PanSeg 2.0 interface](../../logos/plantseg2gui.png)
+![PanSeg 2.0 interface](https://github.com/kreshuklab/panseg/raw/assets/images/plantseg2gui.png)
 
 ## Parts of the GUI
 

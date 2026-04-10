@@ -24,7 +24,7 @@ but they are tuned towards cell segmentation in plant tissue. The tool is fundam
 * ***Cell Segmentation as graph partitioning***: The boundary prediction from the first step serve as the basis for automated segmentation. PanSeg implements four distinct algorithms for this task, each with unique features tailored to different segmentation needs. This graph partitioning approach is particularly effective for segmenting densely packed cells.
 
 <figure markdown="span">
-  ![Main Figure](./logos/plantseg2gui.png)
+  ![Main Figure](https://github.com/kreshuklab/panseg/raw/assets/images/plantseg2gui.png)
   <figcaption>Figure: PanSeg v2 Interface</figcaption>
 </figure>
 
