@@ -53,22 +53,25 @@ class Prediction_Widgets:
         self.model_filters = Container(
             widgets=[
                 ComboBox(
-                    choices=lambda _: [self.ALL_DIMENSIONS]
-                    + model_zoo.get_unique_dimensionalities(),
+                    choices=lambda _: (
+                        [self.ALL_DIMENSIONS] + model_zoo.get_unique_dimensionalities()
+                    ),
                     label="Dimensionality",
                     name="dimensionality",
                 ),
                 ComboBox(
                     name="modality",
                     label="Microscopy modality",
-                    choices=lambda _: [self.ALL_MODALITIES]
-                    + model_zoo.get_unique_modalities(),
+                    choices=lambda _: (
+                        [self.ALL_MODALITIES] + model_zoo.get_unique_modalities()
+                    ),
                 ),
                 ComboBox(
                     name="output_type",
                     label="Prediction type",
-                    choices=lambda _: [self.ALL_TYPES]
-                    + model_zoo.get_unique_output_types(),
+                    choices=lambda _: (
+                        [self.ALL_TYPES] + model_zoo.get_unique_output_types()
+                    ),
                 ),
             ],
             label="Model filters",
@@ -80,8 +83,8 @@ class Prediction_Widgets:
         # @@@@@ Unet Prediction @@@@@
         self.widget_unet_prediction = self.factory_unet_prediction()
         self.widget_unet_prediction.self.bind(self)
-        self.widget_unet_prediction.model_name._default_choices = (
-            lambda _: model_zoo.list_models() + [self.ADD_MODEL]
+        self.widget_unet_prediction.model_name._default_choices = lambda _: (
+            model_zoo.list_models() + [self.ADD_MODEL]
         )
         self.widget_unet_prediction.model_name.reset_choices()
         self.widget_unet_prediction.panseg_filter._default_choices = (
