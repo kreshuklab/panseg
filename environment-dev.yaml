@@ -2,8 +2,8 @@ name: panseg-dev
 channels:
   - conda-forge
 dependencies:
-  - bioimageio.core==0.10.0
-  - bioimageio.spec==0.5.9.0
+  - bioimageio.core==0.10.2
+  - bioimageio.spec==0.5.9.1
   - bump-my-version
   - h5py==3.16.0
   - mike
@@ -16,7 +16,7 @@ dependencies:
   - numpy==2.4.3
   - pip
   - pre-commit
-  - pydantic==2.12.5
+  - pydantic==2.13.3
   - pyside6==6.11.0
   - pytest
   - pytest-cov
@@ -33,10 +33,10 @@ dependencies:
   - requests==2.33.1
   - scikit-image==0.26.0
   - tensorboard==2.20.0
-  - tifffile==2026.3.3
+  - tifffile==2026.4.11
   - trimesh==4.11.5
-  - vigra==1.12.2
-  - zarr==3.1.5
+  - vigra==1.12.3
+  - zarr==3.1.6
   - zmesh==1.11.0
   - pip:
       - markdown-exec

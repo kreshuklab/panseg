@@ -30,11 +30,11 @@ requirements:
   run:
     - python >={{ PYTHON_MIN }}
     - pip
-    - bioimageio.core ==0.10.0
-    - bioimageio.spec ==0.5.9.0
+    - bioimageio.core ==0.10.2
+    - bioimageio.spec ==0.5.9.1
     - h5py ==3.16.0
     - napari ==0.7.0
-    - pydantic ==2.12.5
+    - pydantic ==2.13.3
     - pyside6 ==6.11.0
     - python-elf ==0.7.4
     - python-graphviz ==0.21
@@ -45,11 +45,11 @@ requirements:
     - requests ==2.33.1
     - scikit-image ==0.26.0
     - tensorboard ==2.20.0
-    - tifffile ==2026.3.3
-    - vigra ==1.12.2
+    - tifffile ==2026.4.11
+    - vigra ==1.12.3
     - trimesh ==4.11.5
     - numpy ==2.4.3
-    - zarr ==3.1.5
+    - zarr ==3.1.6
     - zmesh ==1.11.0
 
 test:
