@@ -182,6 +182,8 @@ class Panseg_viewer:
         self.viewer.window.file_menu.menuAction().setVisible(False)
         self.viewer.window.layers_menu.menuAction().setVisible(False)
 
+        self.viewer.scale_bar.gridded = True
+
         # By hiding the menu, also closing shortcuts are removed
         @self.viewer.bind_key("Ctrl+w")
         def _close_window(viewer):
