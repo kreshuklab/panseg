@@ -48,7 +48,7 @@ jobs:
       # Run tests using pytest
       - name: Run Tests with Pytest
         run: |
-          pip check
+          panseg --help
           # conda activate panseg-dev
           # pytest --cov --cov-report=xml --durations=10
           # conda deactivate
