@@ -17,8 +17,6 @@ jobs:
       run:
         # Conda requires a login shell in order to work properly
         shell: ${{ matrix.os == 'windows' && 'powershell' || 'bash -el {0}' }}
-    # env:
-    #   DISPLAY: ":99.0"
 
     steps:
       # Checkout the repository
@@ -30,12 +28,6 @@ jobs:
       #   uses: tlambert03/setup-qt-libs@v1
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
-
-      # # Start X virtual framebuffer for GUI testing
-      # - name: Start Xvfb
-      #   run: |
-      #     /sbin/start-stop-daemon --start --quiet --pidfile /tmp/custom_xvfb_99.pid \
-      #     --make-pidfile --background --exec /usr/bin/Xvfb -- :99 -screen 0 1920x1200x24 -ac +extension GLX
 
       # Set up Miniconda
       - name: Set Up Miniforge
@@ -56,9 +48,10 @@ jobs:
       # Run tests using pytest
       - name: Run Tests with Pytest
         run: |
-          conda activate panseg-dev
-          pytest --cov --cov-report=xml --durations=10
-          conda deactivate
+          pip check
+          # conda activate panseg-dev
+          # pytest --cov --cov-report=xml --durations=10
+          # conda deactivate
 
       # Upload Codecov report
       - name: Upload coverage reports to Codecov

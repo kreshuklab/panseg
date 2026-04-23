@@ -37,7 +37,7 @@ dependencies:
   - trimesh==4.11.5
   - vigra==1.12.3
   - zarr==3.1.6
-  # - zmesh==1.11.0
+  - zmesh==1.11.0
   - pip:
       - markdown-exec
       - -e .
