@@ -1,0 +1,64 @@
+name: Run tests on all platforms
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: ["ubuntu-latest", "windows-latest", "macos-latest"]
+    runs-on: ["${{ matrix.os }}"]
+
+    defaults:
+      run:
+        # Conda requires a login shell in order to work properly
+        shell: ${{ matrix.os == 'windows' && 'powershell' || 'bash -el {0}' }}
+    # env:
+    #   DISPLAY: ":99.0"
+
+    steps:
+      # Checkout the repository
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      # Set up Qt libraries (required for PyQt applications)
+      # - name: Set Up Qt Libraries
+      #   uses: tlambert03/setup-qt-libs@v1
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+
+      # # Start X virtual framebuffer for GUI testing
+      # - name: Start Xvfb
+      #   run: |
+      #     /sbin/start-stop-daemon --start --quiet --pidfile /tmp/custom_xvfb_99.pid \
+      #     --make-pidfile --background --exec /usr/bin/Xvfb -- :99 -screen 0 1920x1200x24 -ac +extension GLX
+
+      # Set up Miniconda
+      - name: Set Up Miniforge
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: 3.11
+          miniforge-version: latest
+          mamba-version: "*"
+          channels: local,conda-forge
+          environment-file: "environment-dev.yaml"
+          activate-environment: "panseg-dev"
+          conda-remove-defaults: true
+
+      # Display available Conda environments (for debugging purposes)
+      - name: List Conda Environments
+        run: conda info --envs
+
+      # Run tests using pytest
+      - name: Run Tests with Pytest
+        run: |
+          conda activate panseg-dev
+          pytest --cov --cov-report=xml --durations=10
+          conda deactivate
+
+      # Upload Codecov report
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v4.2.0
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
