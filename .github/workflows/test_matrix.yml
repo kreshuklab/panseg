@@ -10,7 +10,7 @@ jobs:
   test:
     strategy:
       matrix:
-        os: ["ubuntu-latest", "windows-latest"] #, "macos-latest"]
+        os: ["ubuntu-latest", "windows-latest", "macos-latest"]
     runs-on: ["${{ matrix.os }}"]
 
     defaults:
@@ -22,12 +22,6 @@ jobs:
       # Checkout the repository
       - name: Checkout Repository
         uses: actions/checkout@v6
-
-      # Set up Qt libraries (required for PyQt applications)
-      # - name: Set Up Qt Libraries
-      #   uses: tlambert03/setup-qt-libs@v1
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
 
       # Set up Miniconda
       - name: Set Up Miniforge
