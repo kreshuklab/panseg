@@ -19,7 +19,7 @@ dependencies:
   - requests==2.33.1
   - scikit-image==0.26.0
   - tensorboard==2.20.0
-  - tifffile==2026.4.11
+  - tifffile==2026.3.3
   - vigra==1.12.3
   - trimesh==4.11.5
   - numpy==2.4.3
