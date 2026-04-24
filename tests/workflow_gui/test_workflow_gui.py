@@ -1,6 +1,7 @@
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
+import sys
 
 import pytest
 import yaml
@@ -55,6 +56,9 @@ def test_loading_dialog(gui, workflow_yaml):
     ],
     indirect=["gui"],
 )
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Testfiles contain only posix paths"
+)
 def test_load_save_unchanged_complete(gui, workflow, tmp_path, request):
     workflow_yaml = request.getfixturevalue(workflow)
     out_file = tmp_path / "test_workflow_out.yaml"
@@ -76,11 +80,7 @@ def test_load_save_unchanged_complete(gui, workflow, tmp_path, request):
             for i, l in enumerate(v):
                 if isinstance(l, dict):
                     for kk, vv in l.items():
-                        reloaded = parsed_out.get(k)[i].get(kk)
-                        if isinstance(vv, str):
-                            vv = vv.replace("/", "").replace("\\", "")
-                            reloaded = reloaded.replace("/", "").replace("\\", "")
-                        assert vv == reloaded
+                        assert vv == parsed_out.get(k)[i].get(kk)
 
         else:
             assert v == parsed_out.get(k)
