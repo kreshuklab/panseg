@@ -1,4 +1,4 @@
-{% set PYTHON_MIN = "3.11" %}
+{% set python_min = "3.11" %}
 package:
   name: panseg
   version: "2.0.0"
@@ -8,7 +8,7 @@ source:
 
 build:
   noarch: python
-  number: 2
+  number: 0
   script:
     - "{{ PYTHON }} -m pip install . -vv --no-deps --no-build-isolation --ignore-installed --no-cache-dir"
     - "mkdir -p {{ PREFIX }}/Menu" # [not win]
@@ -23,12 +23,12 @@ build:
 
 requirements:
   build:
-    - python {{ PYTHON_MIN }}
+    - python {{ python_min }}
     - pip
     - setuptools
 
   run:
-    - python >={{ PYTHON_MIN }}
+    - python >={{ python_min }}
     - pip
     - bioimageio.core ==0.10.2
     - bioimageio.spec ==0.5.9.1
@@ -54,9 +54,12 @@ requirements:
 
 test:
   requires:
-    - python {{ PYTHON_MIN }}
+    - pip
+    - python {{ python_min }}
   imports:
     - panseg
+  commands:
+    - pip check
 
 about:
   home: https://kreshuklab.github.io/panseg/
