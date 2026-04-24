@@ -694,7 +694,9 @@ def test_locking_threaded_simple(i):
 
     worker = threaded(True)
     worker.start()
-    sleep(0.001)
+    while not worker.is_running:
+        sleep(0.0001)
+
     assert handler.is_locked()
     worker.await_workers()
 
