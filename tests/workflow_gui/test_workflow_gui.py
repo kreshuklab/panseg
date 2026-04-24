@@ -76,9 +76,10 @@ def test_load_save_unchanged_complete(gui, workflow, tmp_path, request):
             for i, l in enumerate(v):
                 if isinstance(l, dict):
                     for kk, vv in l.items():
-                        vv = vv.replace("/", "").replace("\\", "")
                         reloaded = parsed_out.get(k)[i].get(kk)
-                        reloaded = reloaded.replace("/", "").replace("\\", "")
+                        if isinstance(vv, str):
+                            vv = vv.replace("/", "").replace("\\", "")
+                            reloaded = reloaded.replace("/", "").replace("\\", "")
                         assert vv == reloaded
 
         else:
