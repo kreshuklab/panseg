@@ -15,29 +15,16 @@ jobs:
     steps:
       # Checkout the repository
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
 
-      # Set up Qt libraries (required for PyQt applications)
-      - name: Set Up Qt Libraries
-        uses: tlambert03/setup-qt-libs@v1
-
-      # Start X virtual framebuffer for GUI testing
-      - name: Start Xvfb
-        run: |
-          /sbin/start-stop-daemon --start --quiet --pidfile /tmp/custom_xvfb_99.pid \
-          --make-pidfile --background --exec /usr/bin/Xvfb -- :99 -screen 0 1920x1200x24 -ac +extension GLX
-
-      # Set the PanSeg version based on the current date and time
-      - name: Set PanSeg Version
-        run: echo "RELEASE_VERSION=$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV
-
-      # Print the PanSeg version name (for debugging purposes)
-      - name: Print PanSeg Version
-        run: echo $RELEASE_VERSION
+      - name: Setup Qt headless display
+        uses: pyvista/setup-headless-display-action@v3
+        with:
+          qt: true
 
       # Set up Miniconda
       - name: Set Up Miniforge
-        uses: conda-incubator/setup-miniconda@v4
+        uses: conda-incubator/setup-miniconda@v4.0.0
         with:
           python-version: 3.11
           miniforge-version: latest
