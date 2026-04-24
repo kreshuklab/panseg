@@ -15,15 +15,12 @@ jobs:
 
     defaults:
       run:
-        # Conda requires a login shell in order to work properly
         shell: ${{ matrix.os == 'windows' && 'powershell' || 'bash -el {0}' }}
 
     steps:
-      # Checkout the repository
       - name: Checkout Repository
         uses: actions/checkout@v6
 
-      # Set up Miniconda
       - name: Set Up Miniforge
         uses: conda-incubator/setup-miniconda@v3
         with:
@@ -31,24 +28,11 @@ jobs:
           miniforge-version: latest
           mamba-version: "*"
           channels: local,conda-forge
-          environment-file: "environment-dev.yaml"
-          activate-environment: "panseg-dev"
+          environment-file: "environment.yaml"
+          activate-environment: "panseg"
           conda-remove-defaults: true
 
-      # Display available Conda environments (for debugging purposes)
-      - name: List Conda Environments
-        run: conda info --envs
-
-      # Run tests using pytest
-      - name: Run Tests with Pytest
+      - name: Run checks
         run: |
           panseg --help
-          # conda activate panseg-dev
-          # pytest --cov --cov-report=xml --durations=10
-          # conda deactivate
-
-      # Upload Codecov report
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v4.2.0
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          pip check
