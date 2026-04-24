@@ -37,7 +37,7 @@ jobs:
 
       # Set up Miniconda
       - name: Set Up Miniforge
-        uses: conda-incubator/setup-miniconda@v3
+        uses: conda-incubator/setup-miniconda@v4
         with:
           python-version: 3.11
           miniforge-version: latest
@@ -62,6 +62,6 @@ jobs:
 
       # Upload Codecov report
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v4.2.0
+        uses: codecov/codecov-action@v6.0.0
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

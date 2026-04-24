@@ -18,21 +18,27 @@ jobs:
         shell: ${{ matrix.os == 'windows' && 'powershell' || 'bash -el {0}' }}
 
     steps:
+      - name: Setup Qt headless display
+        uses: pyvista/setup-headless-display-action@v3
+        with:
+          qt: true
+
       - name: Checkout Repository
         uses: actions/checkout@v6
 
       - name: Set Up Miniforge
-        uses: conda-incubator/setup-miniconda@v3
+        uses: conda-incubator/setup-miniconda@v4.0.0
         with:
           python-version: 3.11
           miniforge-version: latest
           mamba-version: "*"
           channels: local,conda-forge
-          environment-file: "environment.yaml"
-          activate-environment: "panseg"
+          environment-file: "environment-dev.yaml"
+          activate-environment: "panseg-dev"
           conda-remove-defaults: true
 
       - name: Run checks
         run: |
           panseg --help
-          pip check
+          pytest
+          # pip check

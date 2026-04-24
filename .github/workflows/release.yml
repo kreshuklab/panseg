@@ -16,11 +16,41 @@ on:
           - pre_n
 
 jobs:
+  test-environment-matrix:
+    strategy:
+      matrix:
+        os: ["ubuntu-latest", "windows-latest", "macos-latest"]
+    runs-on: ["${{ matrix.os }}"]
+
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'windows' && 'powershell' || 'bash -el {0}' }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Set Up Miniforge
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: 3.11
+          miniforge-version: latest
+          mamba-version: "*"
+          channels: local,conda-forge
+          environment-file: "environment.yaml"
+          activate-environment: "panseg"
+          conda-remove-defaults: true
+
+      - name: Run checks
+        run: |
+          panseg --help
+          pip check
+
   test-and-build:
+    needs: test-environment-matrix
     runs-on: ubuntu-latest
     defaults:
       run:
-        # Conda requires a login shell in order to work properly
         shell: bash -l {0}
     env:
       DISPLAY: ":99.0"
@@ -59,7 +89,7 @@ jobs:
           conda deactivate
 
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v4.2.0
+        uses: codecov/codecov-action@v6.0.0
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
