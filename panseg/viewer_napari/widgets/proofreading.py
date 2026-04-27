@@ -236,7 +236,7 @@ class ProofreadingHandler:
         """Blocking context manager for locking and unlocking proofreading handler."""
         success = self.mutex.tryLock(timeout)
         if not success:
-            raise TimeoutError
+            raise TimeoutError("Failed to acquire lock for ProofreadingHandler")
 
         try:
             yield
