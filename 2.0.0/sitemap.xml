@@ -2,118 +2,118 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/getting_started/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/getting_started/contributing/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/getting_started/installation/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/getting_started/known_issues/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/panseg_interactive_napari/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/panseg_interactive_napari/batch/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/panseg_interactive_napari/import/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/panseg_interactive_napari/output/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/panseg_interactive_napari/postprocessing/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/panseg_interactive_napari/preprocessing/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/panseg_interactive_napari/proofreading/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/panseg_interactive_napari/segmentation/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/panseg_interactive_napari/unet_training/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/panseg_models/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/panseg_models/custom_datasets/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/panseg_models/training/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/python_api/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/python_api/functionals/cnn_prediction/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/python_api/functionals/data_processing/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/python_api/functionals/io/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/python_api/functionals/segmentation/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/python_api/tasks/dataprocessing_tasks/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/python_api/tasks/io_tasks/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/python_api/tasks/prediction_tasks/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/python_api/tasks/segmentation_tasks/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/chapters/workflow_gui/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/snippets/widgets/preprocessing/rescale/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
     <url>
          <loc>https://kreshuklab.github.io/panseg/2.0.0/snippets/widgets/segmentation/prediction/</loc>
-         <lastmod>2026-04-23</lastmod>
+         <lastmod>2026-04-30</lastmod>
     </url>
 </urlset>
