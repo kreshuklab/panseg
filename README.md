@@ -1,22 +1,14 @@
 # PanSeg  <!-- omit in toc -->
 
 
->[!WARNING]
->PanSeg was recently renamed from PlantSeg to highlight its capabilities beyond
->plant segmentation.
->The new conda-forge package is waiting to be published, until the the in-app update does not work.
->If you encounter issues, please continue using version 2.0.0rc14 until the
->issues are resolved.
-
-
 ![alt text](panseg/resources/header_h.png)
 
-[![Conda Build and Test](https://github.com/kreshuklab/panseg/actions/workflows/build-and-test-package.yml/badge.svg)](https://github.com/kreshuklab/panseg/actions/workflows/build-and-test-package.yml)
+[![Release new version](https://github.com/kreshuklab/panseg/actions/workflows/release.yml/badge.svg)](https://github.com/kreshuklab/panseg/actions/workflows/release.yml)
+[![Run tests](https://github.com/kreshuklab/panseg/actions/workflows/test.yml/badge.svg)](https://github.com/kreshuklab/panseg/actions/workflows/test.yml)
 [![Docs Build and Publish](https://github.com/kreshuklab/panseg/actions/workflows/build-and-publish-docs.yml/badge.svg)](https://github.com/kreshuklab/panseg/actions/workflows/build-and-publish-docs.yml)
 
 [![Anaconda-Server Badge](https://anaconda.org/conda-forge/panseg/badges/version.svg)](https://anaconda.org/conda-forge/panseg)
 [![Anaconda-Server Badge](https://anaconda.org/conda-forge/panseg/badges/latest_release_date.svg)](https://anaconda.org/conda-forge/panseg)
-[![Anaconda-Server Badge](https://anaconda.org/conda-forge/panseg/badges/downloads.svg)](https://anaconda.org/conda-forge/panseg)
 [![Anaconda-Server Badge](https://anaconda.org/conda-forge/panseg/badges/downloads.svg)](https://anaconda.org/conda-forge/panseg)
 [![Anaconda-Server Badge](https://anaconda.org/conda-forge/panseg/badges/license.svg)](https://anaconda.org/conda-forge/panseg)
 
