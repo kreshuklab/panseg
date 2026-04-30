@@ -9,8 +9,10 @@
 ENV_FILE="environment.yaml"
 DEV_ENV_FILE="environment-dev.yaml"
 
-conda update -n panseg-dev --all
-conda export --from-history --no-builds -n panseg-dev -f $DEV_ENV_FILE
+echo "Updating panseg-dev"
+conda update -n panseg-dev --all || exit
+echo "Updated panseg-dev, exporting.."
+conda export --from-history --no-builds -n panseg-dev -f $DEV_ENV_FILE || exit
 # remove the prefix line
 head -n -1 $DEV_ENV_FILE >temp_env.yaml && mv temp_env.yaml $DEV_ENV_FILE
 
