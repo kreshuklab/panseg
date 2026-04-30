@@ -1,10 +1,7 @@
-name: Run tests on all platforms
+name: Manually run tests on all platforms
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches:
-      - "main"
 
 jobs:
   test:
