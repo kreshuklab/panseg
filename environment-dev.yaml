@@ -7,10 +7,11 @@ dependencies:
   - bump-my-version
   - h5py==3.16.0
   - mike
-  - mkdocs-autorefs
-  - mkdocs-git-committers-plugin-2
-  - mkdocs-git-revision-date-localized-plugin
-  - mkdocs-material
+  - mkdocs-autorefs==1.4.4
+  - mkdocs-git-committers-plugin-2==2.5.0
+  - mkdocs-git-revision-date-localized-plugin==1.2.9
+  - mkdocs-material==9.7.6
+  - mkdocs==1.6.1
   - mkdocstrings-python
   - napari==0.7.0
   - numpy==2.4.3
