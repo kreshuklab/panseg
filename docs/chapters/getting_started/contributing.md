@@ -99,7 +99,7 @@ To release, run the github workflow `release`, then manually publish to `conda-f
 
 The workflow will:
 
-* run tests
+* run tests on all platforms
 * bump version number
 * create a github release
 * build a conda package

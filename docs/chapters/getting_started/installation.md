@@ -1,15 +1,7 @@
 # Installation
 
-!!! warning "Technical Issues"
-    The renaming process is ongoing, and you might encounter technical issues
-    The new conda-forge package is not yet released, until then the in-app update does not work.
-    Issues with the windows installer have been resolved.
-    If you encounter issues, please use PlantSeg <= 2.0.0rc14 for now, thank you!
-
 !!! note "PlantSeg v1 Documentation"
-    The installation guide for PlantSeg v1 is no longer available in this documentation.
-
-This is the installation guide for the latest PanSeg.
+    To view the installation guide for PlantSeg v1, switch to an older version in the top bar.
 
 ## Download
 
@@ -87,11 +79,9 @@ The installer comes complete with its own python installation. During the instal
 
 ## Updating
 
-!!! info
-    Due to an external change, this only works from version 2.0.0rc5 onward.
-    If you are running an older version, please uninstall and reinstall PanSeg.
+If you have installed PanSeg *via* the installer or from Conda-forge, you can update to a new version right in the GUI!  
+Make sure to start PanSeg from the startmenu, or to activate the conda environment manually (see installation above).
 
-If you have installed PanSeg *via* the installer or from Conda-forge, you can update to a new version right in the GUI!
 Go to the `Plugins` menu on top, then click `Update Panseg`!
 
 If you have cloned the git repository, you need to update your local repo:
