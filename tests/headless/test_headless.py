@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+from numpy.testing import assert_allclose
 import yaml
 
 from panseg.core.image import PanSegImage
@@ -101,6 +102,8 @@ def test_create_workflow_channels(tmp_path):
         **{f"image_{i}": ps for i, ps in enumerate(ps_1s + [ps_2])}
     )
     assert isinstance(ps_3, PanSegImage)
+    np.testing.assert_allclose(ps_1s[0].get_data(), ps_3.get_data()[0])
+    np.testing.assert_allclose(ps_2.get_data(), ps_3.get_data()[4])
     export_image_task(
         image=ps_3,
         export_directory=path_tiff.parent,

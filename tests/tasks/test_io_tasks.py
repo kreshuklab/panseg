@@ -17,7 +17,72 @@ from panseg.tasks.workflow_handler import Task_message
 
 
 @pytest.mark.parametrize(
-    "shape, layout, export_format",
+    "shape,layout,export_format",
+    [
+        ((2, 64, 64), ImageLayout.CYX, "tiff"),
+        ((2, 64, 64), ImageLayout.CYX, "h5"),
+        # ((32, 64, 64), ImageLayout.ZYX, "zarr"),
+        # ((64, 64), ImageLayout.YX, "tiff"),
+        # ((64, 64), ImageLayout.YX, "h5"),
+        # ((64, 64), ImageLayout.YX, "zarr"),
+    ],
+)
+def test_image_io_round_trip_multichannel(tmp_path, shape, layout, export_format):
+    mock_data = np.random.rand(*shape).astype("float32")
+
+    property = ImageProperties(
+        name="test",
+        voxel_size=VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um"),
+        semantic_type=SemanticType.RAW,
+        image_layout=layout,
+        original_voxel_size=VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um"),
+        source_file_name="test",
+    )
+    image = PanSegImage(data=mock_data, properties=property)
+
+    export_image_task(
+        image=image,
+        export_directory=tmp_path,
+        name_pattern="test",
+        key="raw",
+        export_format=export_format,
+        data_type="float32",
+    )
+
+    if export_format == "tiff":
+        file_path = tmp_path / "test.tiff"
+        key = None
+    elif export_format == "h5":
+        file_path = tmp_path / "test.h5"
+        key = "raw"
+    else:
+        file_path = tmp_path / "test.zarr"
+        key = "raw"
+
+    imported_image = import_image_task(
+        input_path=file_path,
+        key=key,
+        image_name="tesi_import",
+        semantic_type="raw",
+        stack_layout=layout.name,
+        m_slicing=None,
+    )
+    assert isinstance(imported_image, list)
+
+    original_data = image.get_data()[0]
+    imported_data = imported_image[0].get_data()
+
+    assert np.allclose(original_data, imported_data)
+    assert original_data.max() <= 1.0  # check if the normalization is applied
+    assert imported_data.max() <= 1.0
+
+    assert image.voxel_size == imported_image.voxel_size
+    assert image.semantic_type == imported_image.semantic_type
+    assert image.image_layout == imported_image.image_layout
+
+
+@pytest.mark.parametrize(
+    "shape,layout,export_format",
     [
         ((32, 64, 64), ImageLayout.ZYX, "tiff"),
         ((32, 64, 64), ImageLayout.ZYX, "h5"),
@@ -69,7 +134,7 @@ def test_image_io_round_trip(tmp_path, shape, layout, export_format):
     )
     assert isinstance(imported_image, PanSegImage)
 
-    original_data = image.get_data()
+    original_data = image.get_data(normalize_01=True)
     imported_data = imported_image.get_data()
 
     assert np.allclose(original_data, imported_data)
@@ -140,7 +205,7 @@ def test_label_io_round_trip(tmp_path, shape, layout, export_format):
     )
     assert isinstance(imported_image, PanSegImage)
 
-    original_data = image.get_data()
+    original_data = image.get_data()[0]
     imported_data = imported_image.get_data()
 
     assert np.allclose(original_data, imported_data)

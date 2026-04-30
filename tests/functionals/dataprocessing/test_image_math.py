@@ -9,13 +9,7 @@ from panseg.functionals.dataprocessing import (
     process_images,
     subtract_images,
 )
-
-
-def normalize_01(image: np.ndarray) -> np.ndarray:
-    min_val, max_val = image.min(), image.max()
-    if max_val - min_val == 0:
-        return np.zeros_like(image)
-    return (image - min_val) / (max_val - min_val)
+from panseg.functionals.dataprocessing.dataprocessing import normalize_01
 
 
 @pytest.mark.parametrize(

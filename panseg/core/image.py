@@ -509,15 +509,8 @@ class PanSegImage:
             data = dp.normalize_01(data)
         return data
 
-    def _get_data(self, normalize_01: bool = True) -> np.ndarray:
-        """Get the data if the layout is not multichannel."""
-        data = self._data
-        if normalize_01:
-            data = dp.normalize_01(data)
-        return data
-
     def get_data(
-        self, channel: int | None = None, normalize_01: bool = True
+        self, channel: int | None = None, normalize_01: bool = False
     ) -> np.ndarray:
         """Returns the data of the image.
 
@@ -527,13 +520,15 @@ class PanSegImage:
             normalize_01 (bool): Normalize the data between 0 and 1, if the
                 image is a Label image, the data is not normalized.
         """
+        data = self._data
         if self.image_type == ImageType.LABEL:
-            return self._data
+            return data
 
         if self.channel_axis is not None:
-            return self._get_data_channel_layout(channel, normalize_01)
-
-        return self._get_data(normalize_01)
+            data = self._get_data_channel_layout(channel, normalize_01)
+        elif normalize_01:
+            data = dp.normalize_01(data)
+        return data
 
     @property
     def scale(self) -> tuple[float, ...]:

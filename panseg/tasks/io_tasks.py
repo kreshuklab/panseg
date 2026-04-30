@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Optional
+import numpy as np
 
 from panseg.core.image import PanSegImage, import_image, save_image
 from panseg.tasks import task_tracker
@@ -110,9 +111,10 @@ def export_image_task(
 def merge_channels_task(**kwargs) -> PanSegImage:
     """Merge an arbitrary number of PanSegImages
 
-    Pass each image as a named argument, the name doesn't matter.
+    Pass each image as a named argument.
+    The images get sorted according to the key
     """
-    images: list[PanSegImage] = list(kwargs.values())
+    images: list[PanSegImage] = [kwargs[k] for k in sorted(kwargs.keys())]
     image = images[0].derive_new(images[0].get_data(), images[0].name + "_merged")
     for im in images[1:]:
         image = image.merge_with(im)
