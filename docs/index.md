@@ -1,14 +1,8 @@
 # PanSeg introduction
 
-!!! tip "PlantSeg is now PanSeg!"
+!!! tip "PanSeg 2.0 stable release!"
     The project was renamed to **PanSeg** instead of **PlantSeg** to highlight
     its capabilities beyond plant cell segmentation!
-
-!!! warning "Technical Issues"
-    The renaming process is ongoing, and you might encounter technical issues
-    The new conda-forge package is not yet released, until then the in-app update does not work.
-    Issues with the windows installer have been resolved.
-    If you encounter issues, please use PlantSeg <= 2.0.0rc14 for now, thank you!
 
 PanSeg is a tool for 3D and 2D segmentation.
 The methods used are very generic and can be used for any instance segmentation workflow,
