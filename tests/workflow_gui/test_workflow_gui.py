@@ -1,3 +1,4 @@
+import sys
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
@@ -54,6 +55,9 @@ def test_loading_dialog(gui, workflow_yaml):
         ),
     ],
     indirect=["gui"],
+)
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Testfiles contain only posix paths"
 )
 def test_load_save_unchanged_complete(gui, workflow, tmp_path, request):
     workflow_yaml = request.getfixturevalue(workflow)
