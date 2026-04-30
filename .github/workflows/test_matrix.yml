@@ -1,4 +1,4 @@
-name: Run tests
+name: Run tests on all platforms
 
 on:
   workflow_dispatch:
@@ -7,22 +7,25 @@ on:
       - "main"
 
 jobs:
-  test-linux:
-    runs-on: ubuntu-22.04
-    env:
-      DISPLAY: ":99.0"
+  test:
+    strategy:
+      matrix:
+        os: ["ubuntu-latest", "windows-latest", "macos-latest"]
+    runs-on: ["${{ matrix.os }}"]
+
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'windows' && 'powershell' || 'bash -el {0}' }}
 
     steps:
-      # Checkout the repository
-      - name: Checkout Repository
-        uses: actions/checkout@v6.0.2
-
       - name: Setup Qt headless display
         uses: pyvista/setup-headless-display-action@v4.3
         with:
           qt: true
 
-      # Set up Miniconda
+      - name: Checkout Repository
+        uses: actions/checkout@v6.0.2
+
       - name: Set Up Miniforge
         uses: conda-incubator/setup-miniconda@v4.0.0
         with:
@@ -34,20 +37,11 @@ jobs:
           activate-environment: "panseg-dev"
           conda-remove-defaults: true
 
-      # Display available Conda environments (for debugging purposes)
-      - name: List Conda Environments
-        shell: bash -l {0}
-        run: conda info --envs
-
-      # Run tests using pytest
-      - name: Run Tests with Pytest
-        shell: bash -l {0}
+      - name: Run checks
         run: |
-          conda activate panseg-dev
+          panseg --help
           pytest --cov --cov-report=xml --durations=10
-          conda deactivate
 
-      # Upload Codecov report
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v6.0.0
         env:

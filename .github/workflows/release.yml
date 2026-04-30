@@ -16,56 +16,75 @@ on:
           - pre_n
 
 jobs:
-  test-and-build:
+  test-matrix:
+    strategy:
+      matrix:
+        os: ["ubuntu-latest", "windows-latest", "macos-latest"]
+    runs-on: ["${{ matrix.os }}"]
+
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'windows' && 'powershell' || 'bash -el {0}' }}
+
+    steps:
+      - name: Setup Qt headless display
+        uses: pyvista/setup-headless-display-action@v4.3
+        with:
+          qt: true
+
+      - name: Checkout Repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Set Up Miniforge
+        uses: conda-incubator/setup-miniconda@v4.0.0
+        with:
+          python-version: 3.11
+          miniforge-version: latest
+          mamba-version: "*"
+          channels: local,conda-forge
+          environment-file: "environment-dev.yaml"
+          activate-environment: "panseg-dev"
+          conda-remove-defaults: true
+
+      - name: Run checks
+        run: |
+          pytest --cov --cov-report=xml --durations=10
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v6.0.0
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  build_conda:
+    needs: test-matrix
     runs-on: ubuntu-latest
     defaults:
       run:
-        # Conda requires a login shell in order to work properly
         shell: bash -l {0}
     env:
       DISPLAY: ":99.0"
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
 
-      - name: Install Qt
-        uses: tlambert03/setup-qt-libs@v1
-
-      # Start X virtual framebuffer for GUI testing
-      - name: Start Xvfb
-        run: |
-          /sbin/start-stop-daemon --start --quiet --pidfile /tmp/custom_xvfb_99.pid \
-          --make-pidfile --background --exec /usr/bin/Xvfb -- :99 -screen 0 1920x1200x24 -ac +extension GLX
+      # - name: Setup Qt headless display
+      #   uses: pyvista/setup-headless-display-action@v4.3
+      #   with:
+      #     qt: true
 
       - name: Set Up Miniforge
-        uses: conda-incubator/setup-miniconda@v3
+        uses: conda-incubator/setup-miniconda@v4.0.0
         with:
           python-version: 3.11
           miniforge-version: latest
           mamba-version: "*"
           channels: conda-forge
-          environment-file: "environment-dev.yaml"
-          activate-environment: "panseg-dev"
           conda-remove-defaults: true
-
-      - name: List Conda Environments
-        run: conda info --envs
-
-      - name: Run Tests with Pytest
-        run: |
-          conda activate panseg-dev
-          pytest -s --cov --cov-report=xml
-          conda deactivate
-
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v4.2.0
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Bump version
         id: bump
-        uses: callowayproject/bump-my-version@master
+        uses: callowayproject/bump-my-version@v1.3
         with:
           args: "--verbose ${{ inputs.bump-type }}"
           github-token: ${{ secrets.RELEASE_BUMP_MY_VERSION_PAT }}
@@ -76,7 +95,7 @@ jobs:
           echo "Version was bumped from ${{ steps.bump.outputs.previous-version }} to ${{ steps.bump.outputs.current-version }}!"
 
       - name: Release
-        uses: softprops/action-gh-release@v2.2.1
+        uses: softprops/action-gh-release@v3.0.0
         with:
           generate_release_notes: true
           tag_name: ${{ steps.bump.outputs.current-version }}
@@ -100,7 +119,7 @@ jobs:
           ls ./constructor
 
       - name: Upload Build Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: panseg-conda-build
           path: constructor/build.gz
@@ -113,12 +132,10 @@ jobs:
         run: gh workflow run build-and-publish-docs.yml -f version=${{ steps.bump.outputs.current-version }}
 
   build_installer:
-    needs: test-and-build
+    needs: build_conda
     strategy:
       matrix:
-        # os: ["ubuntu", "windows"]
         os: ["ubuntu-latest", "windows-latest", "macos-latest"]
-    # runs-on: [self-hosted, "${{ matrix.os }}"]
     runs-on: ["${{ matrix.os }}"]
 
     defaults:
@@ -128,7 +145,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.2
 
       - name: Checkout new release
         run: |
@@ -137,7 +154,7 @@ jobs:
           git pull
           cat panseg/__version__.py
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: panseg-conda-build
           path: ./constructor
@@ -146,7 +163,7 @@ jobs:
         run: ls ./constructor
 
       - name: Set Up Miniforge
-        uses: conda-incubator/setup-miniconda@v3
+        uses: conda-incubator/setup-miniconda@v4.0.0
         with:
           python-version: 3.12
           miniforge-version: latest
@@ -175,7 +192,7 @@ jobs:
           conda deactivate
 
       - name: Upload Installer Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: "panseg-installer-${{ matrix.os }}"
           path: installer/PanSeg*
