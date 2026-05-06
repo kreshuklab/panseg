@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Optional
+
 import numpy as np
 
 from panseg.core.image import PanSegImage, import_image, save_image
