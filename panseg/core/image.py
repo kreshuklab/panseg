@@ -723,6 +723,8 @@ def import_image(
             original_voxel_size=voxel_size,
             source_file_name=path.stem,
         )
+        if image_properties.image_type == ImageType.IMAGE:
+            data = dp.normalize_01(data)
 
         return PanSegImage(data=data, properties=image_properties)
 

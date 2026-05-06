@@ -198,7 +198,8 @@ def create_tiff(
 
     elif layout == "CZYX":
         assert stack.ndim == 4, "Stack dimensions must be in CZYX order"
-        c, z, y, x = stack.shape
+        stack = np.transpose(stack, (1, 0, 2, 3))
+        z, c, y, x = stack.shape
         stack = stack.reshape(1, z, c, y, x, 1)
 
     else:
