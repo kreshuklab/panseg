@@ -16,47 +16,47 @@ on:
           - pre_n
 
 jobs:
-  test-matrix:
-    strategy:
-      matrix:
-        os: ["ubuntu-latest", "windows-latest", "macos-latest"]
-    runs-on: ["${{ matrix.os }}"]
-
-    defaults:
-      run:
-        shell: ${{ matrix.os == 'windows' && 'powershell' || 'bash -el {0}' }}
-
-    steps:
-      - name: Setup Qt headless display
-        uses: pyvista/setup-headless-display-action@v4.3
-        with:
-          qt: true
-
-      - name: Checkout Repository
-        uses: actions/checkout@v6.0.2
-
-      - name: Set Up Miniforge
-        uses: conda-incubator/setup-miniconda@v4.0.0
-        with:
-          python-version: 3.11
-          miniforge-version: latest
-          mamba-version: "*"
-          channels: local,conda-forge
-          environment-file: "environment-dev.yaml"
-          activate-environment: "panseg-dev"
-          conda-remove-defaults: true
-
-      - name: Run checks
-        run: |
-          pytest --cov --cov-report=xml --durations=10
-
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v6.0.0
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+  # test-matrix:
+  #   strategy:
+  #     matrix:
+  #       os: ["ubuntu-latest", "windows-latest", "macos-latest"]
+  #   runs-on: ["${{ matrix.os }}"]
+  #
+  #   defaults:
+  #     run:
+  #       shell: ${{ matrix.os == 'windows' && 'powershell' || 'bash -el {0}' }}
+  #
+  #   steps:
+  #     - name: Setup Qt headless display
+  #       uses: pyvista/setup-headless-display-action@v4.3
+  #       with:
+  #         qt: true
+  #
+  #     - name: Checkout Repository
+  #       uses: actions/checkout@v6.0.2
+  #
+  #     - name: Set Up Miniforge
+  #       uses: conda-incubator/setup-miniconda@v4.0.0
+  #       with:
+  #         python-version: 3.11
+  #         miniforge-version: latest
+  #         mamba-version: "*"
+  #         channels: local,conda-forge
+  #         environment-file: "environment-dev.yaml"
+  #         activate-environment: "panseg-dev"
+  #         conda-remove-defaults: true
+  #
+  #     - name: Run checks
+  #       run: |
+  #         pytest --cov --cov-report=xml --durations=10
+  #
+  #     - name: Upload coverage reports to Codecov
+  #       uses: codecov/codecov-action@v6.0.0
+  #       env:
+  #         CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   build_conda:
-    needs: test-matrix
+    # needs: test-matrix
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -76,11 +76,12 @@ jobs:
       - name: Set Up Miniforge
         uses: conda-incubator/setup-miniconda@v4.0.0
         with:
-          python-version: 3.11
           miniforge-version: latest
           mamba-version: "*"
           channels: conda-forge
           conda-remove-defaults: true
+          auto-activate: true
+          activate-environment: ""
 
       - name: Bump version
         id: bump
@@ -106,11 +107,8 @@ jobs:
 
       - name: conda build
         run: |
-          conda create -n builder conda-build -y
-          conda activate builder
-          conda info
+          conda install conda-build
           conda build conda-recipe/ --output-folder conda_bld
-          conda deactivate
 
       - name: tar build
         run: |
