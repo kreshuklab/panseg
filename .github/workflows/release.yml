@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        shell: bash -l {0}
+        shell: bash -el {0}
     env:
       DISPLAY: ":99.0"
 
@@ -106,8 +106,9 @@ jobs:
 
       - name: conda build
         run: |
-          conda create -n builder conda-build
+          conda create -n builder conda-build -y
           conda activate builder
+          conda info
           conda build conda-recipe/ --output-folder conda_bld
           conda deactivate
 
