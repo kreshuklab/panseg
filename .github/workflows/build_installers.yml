@@ -25,23 +25,20 @@ jobs:
       - name: Set Up Miniforge
         uses: conda-incubator/setup-miniconda@v4.0.0
         with:
-          python-version: 3.11
           miniforge-version: latest
           mamba-version: "*"
           channels: conda-forge
-          environment-file: "environment-dev.yaml"
-          activate-environment: "panseg-dev"
           conda-remove-defaults: true
+          auto-activate: true
+          activate-environment: ""
 
       - name: List Conda Environments
         run: conda info --envs
 
       - name: conda build
         run: |
-          conda create -n builder conda-build
-          conda activate builder
+          conda install conda-build
           conda build conda-recipe/ --output-folder conda_bld
-          conda deactivate
 
       - name: tar build
         run: |
