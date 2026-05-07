@@ -78,6 +78,8 @@ For efficiency, pytest is not included in the pre-commit hooks. Please run the t
 
 ## Release
 
+Panseg uses the [EffVer versioning scheme](https://jacobtomlinson.dev/effver/).
+
 The versions of most dependencies in the conda package are pinned.
 Before releasing, you might want to update those pins:
 
@@ -92,6 +94,7 @@ updated packages in `environment-dev.yaml`.
 Using this updated `environment.yaml` file, **manually** update the following files:
 
 * `conda-recipe/meta.yaml`
+* Feedstock: `recipe/meta.yaml`
 
 To release, run the github workflow `release`, then manually publish to `conda-forge`.
 

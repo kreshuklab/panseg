@@ -141,6 +141,7 @@ class Output_Tab:
         },
         n_channels={
             "label": "Number of channels",
+            "tooltip": "Add additional layers to the output image",
             "widget_type": "SpinBox",
             "value": 1,
             "min": 1,

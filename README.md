@@ -1,6 +1,5 @@
 # PanSeg  <!-- omit in toc -->
 
-
 ![alt text](panseg/resources/header_h.png)
 
 [![Release new version](https://github.com/kreshuklab/panseg/actions/workflows/release.yml/badge.svg)](https://github.com/kreshuklab/panseg/actions/workflows/release.yml)
@@ -60,6 +59,15 @@ The PanSeg repository is organised as follows:
 * **conda-reicpe**: Contains all necessary code and configuration to create the anaconda package.
 * **constructor**: Contains scripts for the installer creation.
 * **Menu**: Contains scripts for OS Menu entries
+
+## Versioning
+
+Panseg uses [Effort Versioning (`EffVer`)](https://jacobtomlinson.dev/effver/).
+
+Versions look like `2.3.1`.
+A change of the last number indicates a small change, that should not require any change of the users behaviour.
+It the middle number changes, a small effort maybe required to benefit from the update.
+Breaking changes that require attention and maybe remove or add important workflows change the first version number.
 
 ## PanSeg & PlantSeg
 

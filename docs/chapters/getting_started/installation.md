@@ -33,7 +33,7 @@ The installer comes complete with its own python installation. During the instal
     You might want to add a link to this file to some directory on your $PATH.
 
     Alternatively, you can activate the panseg conda environment:
-    (Replace [INSTALLATION DIR] with the absolute(!) path to your installation)
+    (Replace \[INSTALLATION DIR\] with the absolute(!) path to your installation)
 
     ```bash
     eval "$("[INSTALLATION DIR]/bin/conda" shell.bash activate "[INSTALLATION DIR]")
@@ -91,6 +91,15 @@ cd panseg
 git pull
 conda env update -f environment.yaml # environment-dev.yaml for development
 ```
+
+## Versioning
+
+Panseg uses [Effort Versioning (`EffVer`)](https://jacobtomlinson.dev/effver/).
+
+Versions look like `2.3.1`.
+A change of the last number indicates a small change, that should not require any change of the users behaviour.
+It the middle number changes, a small effort maybe required to benefit from the update.
+Breaking changes that require attention and maybe remove or add important workflows change the first version number.
 
 ## Optional dependencies
 
