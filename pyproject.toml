@@ -110,8 +110,8 @@ setup_hooks = [
 ]
 
 [tool.bumpversion.parts.pre_label]
-optional_value = "stable"
-values = ["a", "b", "rc", "stable"]
+optional_value = "a"
+values = ["a", "b", "rc"]
 
 [[tool.bumpversion.files]]
 filename = "panseg/__version__.py"
