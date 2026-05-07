@@ -249,7 +249,7 @@ def test_panseg_image_to_napari_layer_tuple():
 
     assert isinstance(layer_tuple, tuple)
     layer_tuple = tuple(layer_tuple)
-    np.testing.assert_allclose(layer_tuple[0], ps_image.get_data(normalize_01=True))
+    np.testing.assert_allclose(layer_tuple[0], ps_image.get_data(normalize_01=False))
     assert "metadata" in layer_tuple[1]
     assert layer_tuple[2] == ps_image.image_type.value
 
