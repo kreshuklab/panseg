@@ -1,5 +1,12 @@
 # Known Issues
 
+## Updates
+
+The build-in updater can not handle all cases.
+If you encounter issues during or after an update, please remove the 
+installation directory, and reinstall using the new installer.
+
+
 ## Boundary prediction not starting
 
 !!! tip "Relevant for:"

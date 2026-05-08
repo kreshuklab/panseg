@@ -84,6 +84,10 @@ Make sure to start PanSeg from the startmenu, or to activate the conda environme
 
 Go to the `Plugins` menu on top, then click `Update Panseg`!
 
+In some cases the update might not be successful. In such a case, please 
+remove the installation directory and install the new version from
+a freshly downloaded installer.
+
 If you have cloned the git repository, you need to update your local repo:
 
 ```bash
