@@ -8,7 +8,10 @@ import pytest
 from napari.qt.threading import WorkerBase, thread_worker
 
 from panseg.core.image import PanSegImage
-from panseg.viewer_napari.widgets import proofreading
+from panseg.viewer_napari.widgets.proofreading import (
+    Proofreading_Tab,
+    ProofreadingHandler,
+)
 
 
 def test_copy_if_not_none(mocker):
@@ -144,7 +147,7 @@ def test_preserve_labels(make_napari_viewer_proxy, napari_raw):
 
 @pytest.fixture
 def proof():
-    return proofreading.ProofreadingHandler()
+    return ProofreadingHandler()
 
 
 class TestProofreadingHandler:

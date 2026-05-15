@@ -9,15 +9,12 @@ from qtpy import QtCore, QtWidgets
 from panseg import logger
 from panseg.__version__ import __version__
 from panseg.utils import check_version
-from panseg.viewer_napari.containers import (
-    get_proofreading_tab,
-)
 from panseg.viewer_napari.updater import update
-from panseg.viewer_napari.widgets import proofreading
 from panseg.viewer_napari.widgets.input import Input_Tab
 from panseg.viewer_napari.widgets.output import Output_Tab
 from panseg.viewer_napari.widgets.postprocessing import Postprocessing_Tab
 from panseg.viewer_napari.widgets.preprocessing import Preprocessing_Tab
+from panseg.viewer_napari.widgets.proofreading import Proofreading_Tab
 from panseg.viewer_napari.widgets.segmentation import Segmentation_Tab
 from panseg.viewer_napari.widgets.training import Training_Tab
 from panseg.viewer_napari.widgets.utils import decrease_font_size, increase_font_size
@@ -58,6 +55,7 @@ class Panseg_viewer:
         self.segmentation_tab = Segmentation_Tab()
         self.postprocessing_tab = Postprocessing_Tab()
         self.training_tab = Training_Tab(self.segmentation_tab.prediction_widgets)
+        self.proofreading_tab = Proofreading_Tab()
 
         self._tabs = [
             self.input_tab,
@@ -66,6 +64,7 @@ class Panseg_viewer:
             self.segmentation_tab,
             self.postprocessing_tab,
             self.training_tab,
+            self.proofreading_tab,
         ]
 
     @property
@@ -77,7 +76,7 @@ class Panseg_viewer:
                 (self.preprocessing_tab.get_container(), "Preprocessing"),
                 (self.segmentation_tab.get_container(), "Segmentation"),
                 (self.postprocessing_tab.get_container(), "Postprocessing"),
-                (get_proofreading_tab(), "Proofreading"),
+                (self.proofreading_tab.get_container(), "Proofreading"),
                 (self.output_tab.get_container(), "Output"),
                 (self.training_tab.get_container(), "Train"),
             ]
@@ -112,9 +111,11 @@ class Panseg_viewer:
         self.viewer.layers.events.inserted.connect(
             self.training_tab.update_layer_selection
         )
-        self.viewer.layers.events.inserted.connect(proofreading.update_layer_selection)
         self.viewer.layers.events.inserted.connect(
             self.output_tab.update_layer_selection
+        )
+        self.viewer.layers.events.inserted.connect(
+            self.proofreading_tab.update_layer_selection
         )
 
         # Drop-down update for renaming of layers
@@ -134,10 +135,10 @@ class Panseg_viewer:
             self.training_tab.update_layer_selection
         )
         self.viewer.layers.selection.events.active.connect(
-            proofreading.update_layer_selection
+            self.output_tab.update_layer_selection
         )
         self.viewer.layers.selection.events.active.connect(
-            self.output_tab.update_layer_selection
+            self.proofreading_tab.update_layer_selection
         )
 
         # welcome overlay
