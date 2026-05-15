@@ -470,6 +470,17 @@ class Prediction_Widgets:
             self.widget_unet_prediction.advanced.hide()
             self.widget_unet_prediction.device.hide()
         else:
+            res = model_zoo.get_model_resolution(model_name)
+            patchsize = model_zoo.get_model_patch_size(model_name)
+            if res and patchsize and len(res) == 3 and len(patchsize) == 3:
+                self.description = "\n".join(
+                    [
+                        self.description,
+                        f"Resolution [um]: {res[0]}, {res[1]}, {res[2]}",
+                        f"Patch size [px]: {patchsize[0]}, {patchsize[1]}, {patchsize[2]}",
+                    ]
+                )
+
             self.widget_unet_prediction.advanced.show()
             self.widget_unet_prediction.device.show()
         self.widget_unet_prediction.model_name.tooltip = (
