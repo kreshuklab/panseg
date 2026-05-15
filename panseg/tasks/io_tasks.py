@@ -1,8 +1,6 @@
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
-
 from panseg.core.image import PanSegImage, import_image, save_image
 from panseg.tasks import task_tracker
 from panseg.tasks.workflow_handler import RunTimeInputSchema, Task_message

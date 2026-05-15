@@ -4,7 +4,7 @@ from typing import Callable
 
 import numpy as np
 import torch
-from scipy.ndimage import convolve, gaussian_filter, map_coordinates, rotate
+from scipy.ndimage import gaussian_filter, map_coordinates, rotate
 from skimage import measure
 from skimage.filters import gaussian
 from skimage.segmentation import find_boundaries

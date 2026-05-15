@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 from magicgui import magic_factory
-from magicgui.widgets import CheckBox, ComboBox, Container, Label
+from magicgui.widgets import ComboBox, Container, Label
 from napari.layers import Image, Labels, Layer
 from psygnal import Signal
 
@@ -12,7 +12,7 @@ from panseg.core.image import PanSegImage
 from panseg.tasks.io_tasks import export_image_task, merge_channels_task
 from panseg.tasks.workflow_handler import workflow_handler
 from panseg.viewer_napari import log
-from panseg.viewer_napari.widgets.utils import add_ps_image_to_viewer, div, get_layers
+from panseg.viewer_napari.widgets.utils import div, get_layers
 from panseg.workflow_gui.editor import Workflow_gui
 
 
