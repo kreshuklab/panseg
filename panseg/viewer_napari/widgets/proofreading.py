@@ -1,21 +1,12 @@
 from collections import deque
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-
-
-# Module-level functions for backward compatibility with imports
-def update_layer_selection(event):
-    """Wrapper function for layer selection updates."""
-    # This will be handled by the tab instance in the viewer
-    pass
-
 
 import h5py
 import napari
 import numpy as np
 from magicgui import magic_factory
-from magicgui.widgets import Container, Label, PushButton
+from magicgui.widgets import Container, Label
 from napari.layers import Image, Labels
 from napari.qt.threading import thread_worker
 from napari.utils import CyclicLabelColormap
@@ -48,7 +39,6 @@ class ProofreadingState(BaseModel):
     """Model for storing proofreading state."""
 
     active: bool = False
-    lock: bool = False
     current_seg_layer_name: str | None = None
     corrected_cells: set = Field(default_factory=set)
     bboxes: dict[int, list[list[int]]] | None = None
@@ -57,7 +47,6 @@ class ProofreadingState(BaseModel):
     history_redo: deque = deque(maxlen=MAX_UNDO_ACTIONS)
 
 
-# We need to use the dataclass decorator to avoid issues with the BaseModel serialization of numpy arrays
 @dataclass()
 class ProofreadingData:
     """Model for storing proofreading data."""
@@ -112,16 +101,24 @@ class ProofreadingHandler:
     def segmentation(self) -> np.ndarray:
         """Returns the current segmentation data."""
         if self._state.current_seg_layer_name is None:
+            # return None
             raise ValueError("Segmentation layer not found")
-        return self._get_layer_data(self._state.current_seg_layer_name)
+        return self.get_layer_data(self._state.current_seg_layer_name)
 
     @property
     def scribbles(self) -> np.ndarray:
         """Returns the current scribbles."""
-        return self._get_layer_data(SCRIBBLES_LAYER_NAME)
+        return self.get_layer_data(SCRIBBLES_LAYER_NAME)
 
-    def _get_layer_data(self, layer_name: str) -> np.ndarray:
-        """Helper to get layer data safely."""
+    def get_layer_data(self, layer_name: str) -> np.ndarray:
+        """Returns the data of a layer in the viewer.
+
+        Args:
+            layer_name (str): The name of the layer to get the data from.
+
+        Returns:
+            np.ndarray: The data of the layer.
+        """
         viewer = napari.current_viewer()
         if viewer is None:
             raise RuntimeError("No viewer found")
@@ -137,7 +134,7 @@ class ProofreadingHandler:
                 thread="Reset Scribbles",
             )
             return
-        self._update_layer(
+        self.update_layer(
             np.zeros_like(self.segmentation), SCRIBBLES_LAYER_NAME, scale=self.scale
         )
 
@@ -149,7 +146,7 @@ class ProofreadingHandler:
     @property
     def corrected_cells_mask(self) -> np.ndarray:
         """Returns the mask for corrected cells."""
-        return self._get_layer_data(CORRECTED_CELLS_LAYER_NAME)
+        return self.get_layer_data(CORRECTED_CELLS_LAYER_NAME)
 
     def reset_corrected(self) -> None:
         """Resets the corrected cells mask to an empty state."""
@@ -161,7 +158,7 @@ class ProofreadingHandler:
             return None
 
         self._state.corrected_cells = set()
-        self._update_layer(
+        self.update_layer(
             np.zeros_like(self.segmentation),
             CORRECTED_CELLS_LAYER_NAME,
             scale=self.scale,
@@ -182,11 +179,13 @@ class ProofreadingHandler:
         """Resets the bounding boxes (bboxes) for the segmentation."""
         if not self.active:
             log(
-                "Proofreading widget not initialized. Run the proofreading widget tool once first",
+                "Proofreading widget not initialized. "
+                "Run the proofreading widget tool once first",
                 thread="Reset Bboxes",
             )
             raise ValueError(
-                "Proofreading widget not initialized. Run the proofreading widget tool once first"
+                "Proofreading widget not initialized. "
+                "Run the proofreading widget tool once first"
             )
         self._state.bboxes = get_bboxes(self.segmentation, slack=(0, 0, 0))
 
@@ -195,7 +194,6 @@ class ProofreadingHandler:
         """Returns the maximum label value in the segmentation."""
         return self.segmentation.max()
 
-    # Global properties
     def reset(self) -> None:
         """Resets the proofreading handler to its initial state."""
         self._state = ProofreadingState()
@@ -234,10 +232,10 @@ class ProofreadingHandler:
 
     def _restore_state(self, state: ProofreadingData) -> None:
         """Restores a given state."""
-        self._update_layer(
+        self.update_layer(
             data=state.segmentation, layer_name=self.seg_layer_name, scale=self.scale
         )
-        self._update_layer(
+        self.update_layer(
             data=state.corrected_cells_mask,
             layer_name=CORRECTED_CELLS_LAYER_NAME,
             scale=self.scale,
@@ -352,7 +350,7 @@ class ProofreadingHandler:
         viewer._add_layer_from_data(*ps_image_layer_tuple)
         self.setup(ps_segmentation)
 
-        self._update_layer(
+        self.update_layer(
             mask,
             CORRECTED_CELLS_LAYER_NAME,
             scale=self.scale,
@@ -362,7 +360,6 @@ class ProofreadingHandler:
         self._state.corrected_cells = corrected_cells
         log(f"State loaded from {filepath}", thread="Load State")
 
-    # Corrected cells Operations
     def _toggle_corrected_cell(self, cell_id: int):
         """Adds or removes the cell from the corrected set.
 
@@ -382,10 +379,10 @@ class ProofreadingHandler:
         """
         id_mask = self.segmentation == cell_id
 
-        corrected_mask = self._get_layer_data(CORRECTED_CELLS_LAYER_NAME)
+        corrected_mask = self.get_layer_data(CORRECTED_CELLS_LAYER_NAME)
         corrected_mask[id_mask] += 1
         corrected_mask[id_mask] %= 2
-        self._update_layer(corrected_mask, CORRECTED_CELLS_LAYER_NAME, scale=self.scale)
+        self.update_layer(corrected_mask, CORRECTED_CELLS_LAYER_NAME, scale=self.scale)
 
     def toggle_corrected_cell(self, cell_id: int):
         """Toggles a cell as corrected or not.
@@ -396,14 +393,17 @@ class ProofreadingHandler:
         self._toggle_corrected_cell(cell_id)
         self._update_masks(cell_id)
 
-    def _update_layer(
+    def update_layer(
         self, data: np.ndarray, layer_name: str, scale: tuple[float, ...], **kwargs
     ) -> None:
         """Updates a layer in the viewer with new data.
 
         Args:
-            data (np.ndarray): The new data to update the layer with.
-            layer_name (str): The name of the layer to update.
+            data: The new data to update the layer with.
+            layer_name: The name of the layer to update.
+            scale: scale of this layer
+            kwargs: will be passed to `viewer.add_labels`.
+                E.g. colormap, opacity, ..
         """
         viewer = napari.current_viewer()
         if viewer is None:
@@ -415,25 +415,6 @@ class ProofreadingHandler:
 
         else:
             viewer.add_labels(data, name=layer_name, scale=scale, **kwargs)
-
-    def update_corrected_cells_mask_slice_to_viewer(
-        self, slice_data: np.ndarray, region_slice: tuple[slice, ...]
-    ):
-        """Updates a slice of the corrected cells mask in the viewer.
-
-        Args:
-            slice_data (np.ndarray): The data to update the slice with.
-            region_slice (tuple[slice, ...]): The region slice to update.
-        """
-        viewer = napari.current_viewer()
-        if viewer is None:
-            raise RuntimeError("No viewer found")
-        if CORRECTED_CELLS_LAYER_NAME in viewer.layers:
-            viewer.layers[CORRECTED_CELLS_LAYER_NAME].data[region_slice] = slice_data
-            viewer.layers[CORRECTED_CELLS_LAYER_NAME].scale = self.scale  # type: ignore
-            viewer.layers[CORRECTED_CELLS_LAYER_NAME].refresh()
-        else:
-            raise ValueError(f"Layer {CORRECTED_CELLS_LAYER_NAME} not found in viewer")
 
     def update_after_proofreading(
         self,
@@ -462,6 +443,8 @@ class ProofreadingHandler:
 
 class Proofreading_Tab:
     def __init__(self):
+        self.busy = False
+
         # Initialize the handler
         self.handler = ProofreadingHandler()
 
@@ -691,7 +674,7 @@ class Proofreading_Tab:
                 if layer.name not in [SCRIBBLES_LAYER_NAME, CORRECTED_CELLS_LAYER_NAME]
             ]
 
-    def _initialize_from_file(self, state: Path, are_you_sure: bool = False) -> None:
+    def _initialize_from_file(self, file: Path, are_you_sure: bool = False) -> None:
         if self.handler.active and not are_you_sure:
             log(
                 "Proofreading is already initialized. Are you sure you want to reset everything?",
@@ -704,7 +687,7 @@ class Proofreading_Tab:
             )
             return
 
-        self.handler.load_state_from_disk(state)
+        self.handler.load_state_from_disk(file)
 
         # Hide help text
         self.tab_help.hide()
@@ -777,8 +760,7 @@ class Proofreading_Tab:
         @thread_worker(progress=True)
         def func():
             if self.handler.scribbles.sum() == 0:
-                log("No scribbles found", thread="Proofreading tool")
-                return None
+                return 2
             self.handler.save_to_history()
 
             new_seg, region_slice, bboxes = split_merge_from_seeds(
@@ -792,7 +774,33 @@ class Proofreading_Tab:
 
             self.handler.update_after_proofreading(new_seg, region_slice, bboxes)
 
+        def on_done(result):
+            if result == 2:
+                log("No scribbles found", thread="Proofreading tool")
+            else:
+                log(
+                    "Done splitting/merging!",
+                    thread="filter_segmentation",
+                    level="INFO",
+                )
+            self.busy = False
+
+        def on_error(err):
+            log(
+                "Error while splitting/merging!",
+                thread="filter_segmentation",
+                level="Warning",
+            )
+            self.busy = False
+
+        if self.busy:
+            log("Busy! Try again later!", thread="filter_segmentation", level="Warning")
+            return
+
+        self.busy = True
         worker = func()  # type: ignore
+        worker.returned.connect(on_done)
+        worker.errored.connect(on_error)
         worker.start()
         return worker
 
@@ -816,12 +824,9 @@ class Proofreading_Tab:
         self.handler.reset_scribbles()
 
     @magic_factory(call_button="Extract Corrected labels")
-    def factory_filter_segmentation(self) -> None:
-        """Extracts corrected labels from the segmentation.
+    def factory_filter_segmentation(self):
+        """Extracts corrected labels from the segmentation."""
 
-        Returns:
-            Future[LayerDataTuple]: A future that will return the extracted segmentation layer.
-        """
         if not self.handler.active:
             log(
                 "Proofreading widget not initialized. Run the proofreading widget tool once first",
@@ -855,10 +860,31 @@ class Proofreading_Tab:
             viewer = napari.current_viewer()
             if result is not None and viewer is not None:
                 viewer._add_layer_from_data(*result)
+            self.busy = False
+            log(
+                "Done extracting corrected labels",
+                thread="filter_segmentation",
+                level="INFO",
+            )
 
+        def on_error(err):
+            log(
+                "Error in filter segmentation",
+                thread="filter_segmentation",
+                level="WARNING",
+            )
+            self.busy = False
+
+        if self.busy:
+            log("Busy! Try again later!", thread="filter_segmentation", level="Warning")
+            return
+
+        self.busy = True
         worker = func()  # type: ignore
         worker.returned.connect(on_done)
+        worker.errored.connect(on_error)
         worker.start()
+        return worker
 
     @magic_factory(call_button="Undo Last Action")
     def factory_undo(self):
