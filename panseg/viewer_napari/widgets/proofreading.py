@@ -316,7 +316,7 @@ class ProofreadingHandler:
 
         if not filepath.exists():
             log(f"File not found: {filepath}", thread="Load State")
-            return None
+            raise ValueError(f"File not found! {filepath}")
 
         viewer = napari.current_viewer()
         ps_segmentation = PanSegImage.from_h5(filepath, key="label")

@@ -41,6 +41,10 @@ class TestProofreadingHandler:
         viewer.add_layer(napari_raw)
         assert np.all(proof.get_layer_data("test_image_3D") == napari_raw.data)
 
+    def test_get_layer_data_no_viewer(self, proof):
+        with pytest.raises(RuntimeError):
+            proof.get_layer_data("some_layer")
+
     def test_update_layer(self, make_napari_viewer_proxy, napari_segmentation, proof):
         with pytest.raises(RuntimeError):
             proof.update_layer(
@@ -231,6 +235,10 @@ class TestProofreadingHandler:
             opacity=1,
         )
 
+    def test_load_state_from_disk_no_file(self, proof):
+        with pytest.raises(ValueError):
+            proof.load_state_from_disk(Path("wrong_path"))
+
     def test_toggle_corrected_cell(self, mocker, proof):
         mock = mocker.patch.object(proof._state, "corrected_cells")
         proof._toggle_corrected_cell(0)
@@ -402,6 +410,10 @@ class TestProofreadingTab:
             thread="Proofreading tool",
             level="error",
         )
+
+    def test_widget_proofreading_initialisation_bad_mode(self, tab):
+        with pytest.raises(ValueError):
+            tab.widget_proofreading_initialisation(mode="bad")
 
     def test_widget_proofreading_initialisation_wrong(
         self, tab, mocker, napari_segmentation
@@ -645,6 +657,18 @@ class TestProofreadingTab:
         )
         mocks["PanSegImage"].assert_called_once()
         mocks["ImageProperties"].assert_called_once()
+
+    def test_widget_filter_segmentation_busy(self, tab, mocker):
+        tab.handler._state.active = True
+        tab.busy = True
+
+        mock_log = mocker.patch(
+            "panseg.viewer_napari.widgets.proofreading.log",
+        )
+        tab.widget_filter_segmentation()
+        mock_log.assert_called_with(
+            "Busy! Try again later!", thread="filter_segmentation", level="Warning"
+        )
 
     def test_widget_undo(self, tab, mocker):
         mock_log = mocker.patch(
