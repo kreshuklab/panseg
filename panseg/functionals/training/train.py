@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 from typing import Literal, Optional, Tuple
 
+import numpy as np
 import torch
 import yaml
 from torch import nn
@@ -16,6 +17,7 @@ from panseg import (
 )
 from panseg.core.zoo import model_zoo
 from panseg.functionals.training.augs import Augmenter
+from panseg.functionals.training.biio import make_model_description, test_model_desc
 from panseg.functionals.training.h5dataset import HDF5Dataset
 from panseg.functionals.training.losses import DiceLoss
 from panseg.functionals.training.model import UNet2D, UNet3D
@@ -187,6 +189,37 @@ def unet_training(
         modality=modality,
         output_type=output_type,
     )
+
+    weights = checkpoint_dir / "best_checkpoint.pytorch"
+    if not weights.exists():
+        weights = checkpoint_dir / "last_checkpoint.pytorch"
+    assert weights.exists()
+
+    test_in, _ = iter(loaders["train"]).__next__()
+    model.training = False
+    test_out = model.forward(test_in.to(device))
+
+    np.save(checkpoint_dir / "test_in.npy", test_in.numpy())
+    np.save(checkpoint_dir / "test_out.npy", test_out.detach().cpu().numpy())
+
+    model_desc = make_model_description(
+        weights=weights,
+        model_name=model_name,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        feature_maps=feature_maps,
+        patch_size=patch_size,
+        dimensionality=dimensionality,
+        modality=modality,
+        output_type=output_type,
+        description=description,
+        resolution=resolution,
+        test_in=checkpoint_dir / "test_in.npy",
+        test_out=checkpoint_dir / "test_out.npy",
+    )
+
+    summary = test_model_desc(model_desc=model_desc)
+    summary.display()
 
 
 def create_datasets(

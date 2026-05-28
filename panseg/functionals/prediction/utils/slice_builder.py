@@ -39,6 +39,12 @@ class SliceBuilder:
     def _build_slices(dataset, patch_shape, stride_shape):
         """Iterates over a given n-dim dataset patch-by-patch with a given stride
         and builds an array of slice positions.
+        If channels are present, each patch contains all channels.
+
+        Args:
+            dataset: 3D or 4D dataset in (C)ZYX ordering
+            patch_shape: 3D shape of each patch
+            stride_shape: 3D stride
 
         Returns:
             list of slices, i.e.
