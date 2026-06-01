@@ -1,6 +1,7 @@
 # pylint: disable=import-outside-toplevel
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -12,7 +13,7 @@ from panseg.utils import check_version, clean_models, load_config
 def create_parser():
     """Create and return the argument parser for the CLI."""
     arg_parser = argparse.ArgumentParser(
-        description="PanSeg: Plant cell/nucler instance segmentation software"
+        description="PanSeg: Cell/nuclei instance segmentation software"
     )
     arg_parser.add_argument(
         "--config",
@@ -57,7 +58,7 @@ def create_parser():
         choices=["ERROR", "WARNING", "INFO", "DEBUG"],
         help="Set the level of the logger. DEBUG level will also show all warnings including compatibility warnings.",
     )
-    return arg_parser.parse_args()
+    return arg_parser
 
 
 def launch_napari(loglevel: str = "INFO"):
@@ -111,16 +112,19 @@ def launch_editor(path: Optional[Path]):
 
 def main():
     """Main function to parse arguments and call corresponding functionality."""
-    args = create_parser()
+    parser = create_parser()
+    args = parser.parse_args()
     check_version(__version__)
+
+    if args.version:
+        print(__version__)
+        sys.exit(0)
 
     if args.loglevel:
         logger.setLevel(args.loglevel)
         logger.info(f"Setting loglevel to {args.loglevel}.")
 
-    if args.version:
-        print(__version__)
-    elif args.clean:
+    if args.clean:
         clean_models()
     elif args.napari:
         launch_napari(loglevel=args.loglevel or "INFO")
@@ -131,9 +135,7 @@ def main():
     elif args.edit or args.edit is None:
         launch_editor(args.edit)
     else:
-        raise ValueError(
-            "Not enough arguments. Run `panseg -h` to see the available options."
-        )
+        parser.print_help()
 
 
 if __name__ == "__main__":
