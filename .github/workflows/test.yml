@@ -44,7 +44,7 @@ jobs:
         shell: bash -l {0}
         run: |
           conda activate panseg-dev
-          pytest --cov --cov-report=xml --durations=10 -v
+          pytest --cov --cov-report=xml --durations=10
           conda deactivate
 
       # Upload Codecov report

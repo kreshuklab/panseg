@@ -12,10 +12,9 @@ def test_create_parser():
 
 
 def test_launch_napari(mocker):
-    mock = mocker.Mock()
-    sys.modules["panseg.viewer_napari.viewer"] = mock
+    mock = mocker.patch("panseg.viewer_napari.viewer.Panseg_viewer")
     launch_napari()
-    mock.Panseg_viewer.assert_called_once()
+    mock.assert_called_once()
 
 
 def test_main_version(mocker):
