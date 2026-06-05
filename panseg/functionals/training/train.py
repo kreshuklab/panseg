@@ -1,9 +1,12 @@
 import logging
+from contextlib import chdir
 from pathlib import Path
 from typing import Literal, Optional, Tuple
 
+import numpy as np
 import torch
 import yaml
+from bioimageio.core import test_description
 from torch import nn
 from torch.optim.adam import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -16,6 +19,7 @@ from panseg import (
 )
 from panseg.core.zoo import model_zoo
 from panseg.functionals.training.augs import Augmenter
+from panseg.functionals.training.biio import make_model_description
 from panseg.functionals.training.h5dataset import HDF5Dataset
 from panseg.functionals.training.losses import DiceLoss
 from panseg.functionals.training.model import UNet2D, UNet3D
@@ -187,6 +191,39 @@ def unet_training(
         modality=modality,
         output_type=output_type,
     )
+
+    weights = checkpoint_dir / "best_checkpoint.pytorch"
+    if not weights.exists():
+        weights = checkpoint_dir / "last_checkpoint.pytorch"
+
+    test_in, _ = next(iter(loaders["train"]))
+    model.training = False
+    test_out = model.forward(test_in.to(device))
+
+    np.save(checkpoint_dir / "test_in.npy", test_in.numpy())
+    np.save(checkpoint_dir / "test_out.npy", test_out.detach().cpu().numpy())
+
+    with chdir(checkpoint_dir):
+        model_desc = make_model_description(
+            weights=weights,
+            model_name=model_name,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_maps=feature_maps,
+            patch_size=patch_size,
+            dimensionality=dimensionality,
+            modality=modality,
+            output_type=output_type,
+            description=description,
+            resolution=resolution,
+            test_in=Path("test_in.npy"),
+            test_out=Path("test_out.npy"),
+            panseg_config=checkpoint_dir / FILE_CONFIG_TRAIN_YAML,
+        )
+        model_desc.package(
+            checkpoint_dir
+            / f"biio_model_{''.join(c for c in model_name if c.isalnum())}.zip"
+        )
 
 
 def create_datasets(
