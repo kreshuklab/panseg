@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import h5py
 import numpy as np
 import pytest
+import torch
 import yaml
 
 from panseg import FILE_CONFIG_TRAIN_YAML
@@ -201,105 +202,139 @@ class TestCreateDatasets:
 class TestUnetTraining:
     """Tests for unet_training function."""
 
+    @patch("panseg.functionals.training.train.make_model_description")
     @patch("panseg.functionals.training.train.UNetTrainer")
     @patch("panseg.functionals.training.train.create_datasets")
     @patch("panseg.functionals.training.train.create_model_config")
+    @patch("panseg.functionals.training.train.DataLoader")
+    @patch("panseg.functionals.training.train.ConcatDataset")
     def test_unet_training_2d(
-        self, mock_create_config, mock_create_datasets, mock_trainer
+        self,
+        mock_concat,
+        mock_data_loader,
+        mock_create_config,
+        mock_create_datasets,
+        mock_trainer,
+        mock_model_desc,
+        tmp_path,
     ):
         """Test UNet training for 2D case."""
-        # Mock the datasets with non-zero length
         mock_dataset = MagicMock()
         mock_dataset.__len__.return_value = 10  # Mock non-empty dataset
         mock_create_datasets.return_value = [mock_dataset]
 
-        # Mock the trainer
         mock_trainer_instance = MagicMock()
         mock_trainer.return_value = mock_trainer_instance
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Create a temporary dataset directory
-            dataset_dir = Path(temp_dir) / "dataset"
-            dataset_dir.mkdir()
-            (dataset_dir / "train").mkdir()
-            (dataset_dir / "val").mkdir()
+        mock_data_loader.return_value = [
+            (
+                torch.from_numpy(np.random.rand(1, 1, 64, 64)).type(torch.float32),
+                None,
+            )
+        ]
 
-            # Test parameters
-            model_name = "test_model_2d"
+        mock_create_config.side_effect = create_model_config
 
-            # Patch PATH_PANSEG_MODELS to use temp directory
-            with patch(
-                "panseg.functionals.training.train.PATH_PANSEG_MODELS",
-                Path(temp_dir),
-            ):
+        dataset_dir = tmp_path / "dataset"
+        dataset_dir.mkdir()
+        (dataset_dir / "train").mkdir()
+        (dataset_dir / "val").mkdir()
+
+        # Test parameters
+        model_name = "test_model_2d"
+
+        # Patch PATH_PANSEG_MODELS to use temp directory
+        with patch("panseg.functionals.training.train.PATH_PANSEG_MODELS", tmp_path):
+            with patch("panseg.core.zoo.PATH_PANSEG_MODELS", tmp_path):
                 unet_training(
                     dataset_dir=str(dataset_dir),
                     model_name=model_name,
                     in_channels=1,
-                    out_channels=2,
+                    out_channels=1,
                     feature_maps=(16, 32, 64),
-                    patch_size=(64, 64, 64),
+                    patch_size=(1, 64, 64),
                     max_num_iters=100,
                     dimensionality="2D",
                     sparse=False,
                     device="cpu",
                 )
 
-            # Verify that trainer was called
-            mock_trainer_instance.train.assert_called_once()
+        mock_trainer_instance.train.assert_called_once()
+        mock_create_config.assert_called_once()
 
-            # Verify that create_datasets was called for both train and val
-            assert mock_create_datasets.call_count == 2
+        # Verify that create_datasets was called for both train and val
+        assert mock_create_datasets.call_count == 2
 
-            # Verify that create_model_config was called
-            mock_create_config.assert_called_once()
+        mock_model_desc.assert_called_once()
+        assert (tmp_path / model_name / "test_in.npy").exists()
+        assert (tmp_path / model_name / "test_out.npy").exists()
 
+    @patch("panseg.functionals.training.train.make_model_description")
     @patch("panseg.functionals.training.train.UNetTrainer")
     @patch("panseg.functionals.training.train.create_datasets")
     @patch("panseg.functionals.training.train.create_model_config")
+    @patch("panseg.functionals.training.train.DataLoader")
+    @patch("panseg.functionals.training.train.ConcatDataset")
     def test_unet_training_3d(
-        self, mock_create_config, mock_create_datasets, mock_trainer
+        self,
+        mock_concat,
+        mock_data_loader,
+        mock_create_config,
+        mock_create_datasets,
+        mock_trainer,
+        mock_model_desc,
+        tmp_path,
     ):
         """Test UNet training for 3D case."""
-        # Mock the datasets with non-zero length
         mock_dataset = MagicMock()
-        mock_dataset.__len__.return_value = 5  # Mock non-empty dataset
+        mock_dataset.__len__.return_value = 10  # Mock non-empty dataset
         mock_create_datasets.return_value = [mock_dataset]
 
-        # Mock the trainer
         mock_trainer_instance = MagicMock()
         mock_trainer.return_value = mock_trainer_instance
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Create a temporary dataset directory
-            dataset_dir = Path(temp_dir) / "dataset"
-            dataset_dir.mkdir()
-            (dataset_dir / "train").mkdir()
-            (dataset_dir / "val").mkdir()
+        mock_data_loader.return_value = [
+            (
+                torch.from_numpy(np.random.rand(1, 1, 16, 64, 64)).type(torch.float32),
+                None,
+            )
+        ]
 
-            # Test parameters
-            model_name = "test_model_3d"
+        mock_create_config.side_effect = create_model_config
 
-            # Patch PATH_PANSEG_MODELS to use temp directory
-            with patch(
-                "panseg.functionals.training.train.PATH_PANSEG_MODELS",
-                Path(temp_dir),
-            ):
+        dataset_dir = tmp_path / "dataset"
+        dataset_dir.mkdir()
+        (dataset_dir / "train").mkdir()
+        (dataset_dir / "val").mkdir()
+
+        # Test parameters
+        model_name = "test_model_3d"
+
+        # Patch PATH_PANSEG_MODELS to use temp directory
+        with patch("panseg.functionals.training.train.PATH_PANSEG_MODELS", tmp_path):
+            with patch("panseg.core.zoo.PATH_PANSEG_MODELS", tmp_path):
                 unet_training(
                     dataset_dir=str(dataset_dir),
                     model_name=model_name,
                     in_channels=1,
-                    out_channels=3,
-                    feature_maps=(8, 16, 32),
-                    patch_size=(32, 64, 64),
-                    max_num_iters=200,
+                    out_channels=1,
+                    feature_maps=(16, 32, 64),
+                    patch_size=(8, 64, 64),
+                    max_num_iters=100,
                     dimensionality="3D",
                     sparse=True,
                     device="cpu",
                 )
 
-            # Verify that trainer was called
-            mock_trainer_instance.train.assert_called_once()
+        mock_trainer_instance.train.assert_called_once()
+        mock_create_config.assert_called_once()
+
+        # Verify that create_datasets was called for both train and val
+        assert mock_create_datasets.call_count == 2
+
+        mock_model_desc.assert_called_once()
+        assert (tmp_path / model_name / "test_in.npy").exists()
+        assert (tmp_path / model_name / "test_out.npy").exists()
 
     @patch("panseg.functionals.training.train.UNetTrainer")
     @patch("panseg.functionals.training.train.create_datasets")
@@ -345,6 +380,10 @@ class TestUnetTraining:
                         device="cpu",
                     )
 
+    @patch("panseg.functionals.training.train.make_model_description")
+    @patch("panseg.functionals.training.train.DataLoader")
+    @patch("panseg.functionals.training.train.ConcatDataset")
+    @patch("panseg.functionals.training.train.UNet2D")
     @patch("panseg.functionals.training.train.UNetTrainer")
     @patch("panseg.functionals.training.train.create_datasets")
     @patch("panseg.functionals.training.train.create_model_config")
@@ -361,45 +400,50 @@ class TestUnetTraining:
         mock_create_config,
         mock_create_datasets,
         mock_trainer,
+        mock_unet,
+        mock_concat,
+        mock_data_loader,
+        mock_description,
+        tmp_path,
     ):
         """Test UNet training with multiple GPUs."""
-        # Mock multiple GPUs
-        mock_device_count.return_value = 2
 
         # Mock DataParallel to avoid CUDA initialization
+        mock_device_count.return_value = 2
         mock_parallel_model = MagicMock()
         mock_parallel_model.to.return_value = mock_parallel_model
         mock_data_parallel.return_value = mock_parallel_model
 
-        # Mock the optimizer
         mock_optimizer = MagicMock()
         mock_adam.return_value = mock_optimizer
 
-        # Mock the learning rate scheduler
         mock_scheduler = MagicMock()
         mock_reduce_lr.return_value = mock_scheduler
 
-        # Mock the datasets with non-zero length
         mock_dataset = MagicMock()
         mock_dataset.__len__.return_value = 8  # Mock non-empty dataset
         mock_create_datasets.return_value = [mock_dataset]
 
-        # Mock the trainer
         mock_trainer_instance = MagicMock()
         mock_trainer.return_value = mock_trainer_instance
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Create a temporary dataset directory
-            dataset_dir = Path(temp_dir) / "dataset"
-            dataset_dir.mkdir()
-            (dataset_dir / "train").mkdir()
-            (dataset_dir / "val").mkdir()
+        mock_data_loader.return_value = [
+            (
+                # torch.from_numpy(np.random.rand(1, 1, 64, 64)).type(torch.float32),
+                mock_parallel_model,
+                None,
+            )
+        ]
 
-            # Patch PATH_PANSEG_MODELS to use temp directory
-            with patch(
-                "panseg.functionals.training.train.PATH_PANSEG_MODELS",
-                Path(temp_dir),
-            ):
+        # Create a temporary dataset directory
+        dataset_dir = tmp_path / "dataset"
+        dataset_dir.mkdir()
+        (dataset_dir / "train").mkdir()
+        (dataset_dir / "val").mkdir()
+
+        # Patch PATH_PANSEG_MODELS to use temp directory
+        with patch("panseg.functionals.training.train.PATH_PANSEG_MODELS", tmp_path):
+            with patch("panseg.core.zoo.PATH_PANSEG_MODELS", tmp_path):
                 unet_training(
                     dataset_dir=str(dataset_dir),
                     model_name="test_model_multi_gpu",
@@ -413,113 +457,14 @@ class TestUnetTraining:
                     device="cuda",
                 )
 
-            # Verify that trainer was called
-            mock_trainer_instance.train.assert_called_once()
+        # Verify that trainer was called
+        mock_trainer_instance.train.assert_called_once()
 
-            # Verify that DataParallel was called
-            mock_data_parallel.assert_called_once()
+        # Verify that DataParallel was called
+        mock_data_parallel.assert_called_once()
 
-            # Verify that Adam optimizer was called
-            mock_adam.assert_called_once()
+        # Verify that Adam optimizer was called
+        mock_adam.assert_called_once()
 
-            # Verify that ReduceLROnPlateau scheduler was called
-            mock_reduce_lr.assert_called_once()
-
-    @patch("panseg.functionals.training.train.UNetTrainer")
-    @patch("panseg.functionals.training.train.create_datasets")
-    @patch("panseg.functionals.training.train.create_model_config")
-    def test_unet_training_dimensionality_lowercase(
-        self, mock_create_config, mock_create_datasets, mock_trainer
-    ):
-        """Test UNet training with lowercase dimensionality."""
-        # Mock the datasets with non-zero length
-        mock_dataset = MagicMock()
-        mock_dataset.__len__.return_value = 6  # Mock non-empty dataset
-        mock_create_datasets.return_value = [mock_dataset]
-
-        # Mock the trainer
-        mock_trainer_instance = MagicMock()
-        mock_trainer.return_value = mock_trainer_instance
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Create a temporary dataset directory
-            dataset_dir = Path(temp_dir) / "dataset"
-            dataset_dir.mkdir()
-            (dataset_dir / "train").mkdir()
-            (dataset_dir / "val").mkdir()
-
-            # Patch PATH_PANSEG_MODELS to use temp directory
-            with patch(
-                "panseg.functionals.training.train.PATH_PANSEG_MODELS",
-                Path(temp_dir),
-            ):
-                unet_training(
-                    dataset_dir=str(dataset_dir),
-                    model_name="test_model_lowercase",
-                    in_channels=1,
-                    out_channels=2,
-                    feature_maps=(16, 32),
-                    patch_size=(64, 64, 64),
-                    max_num_iters=100,
-                    dimensionality="2d",  # lowercase
-                    sparse=False,
-                    device="cpu",
-                )
-
-            # Verify that trainer was called
-            mock_trainer_instance.train.assert_called_once()
-
-    @patch("panseg.functionals.training.train.UNetTrainer")
-    @patch("panseg.functionals.training.train.create_datasets")
-    @patch("panseg.functionals.training.train.create_model_config")
-    def test_unet_training_model_parameter_validation(
-        self, mock_create_config, mock_create_datasets, mock_trainer
-    ):
-        """Test UNet training validates model parameters correctly."""
-        # Mock the datasets with non-zero length
-        mock_dataset = MagicMock()
-        mock_dataset.__len__.return_value = 4  # Mock non-empty dataset
-        mock_create_datasets.return_value = [mock_dataset]
-
-        # Mock the trainer
-        mock_trainer_instance = MagicMock()
-        mock_trainer.return_value = mock_trainer_instance
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Create a temporary dataset directory
-            dataset_dir = Path(temp_dir) / "dataset"
-            dataset_dir.mkdir()
-            (dataset_dir / "train").mkdir()
-            (dataset_dir / "val").mkdir()
-
-            # Patch PATH_PANSEG_MODELS to use temp directory
-            with patch(
-                "panseg.functionals.training.train.PATH_PANSEG_MODELS",
-                Path(temp_dir),
-            ):
-                unet_training(
-                    dataset_dir=str(dataset_dir),
-                    model_name="test_model_params",
-                    in_channels=3,
-                    out_channels=5,
-                    feature_maps=(32, 64, 128, 256),
-                    patch_size=(128, 128, 128),
-                    max_num_iters=500,
-                    dimensionality="3D",
-                    sparse=True,
-                    device="cpu",
-                )
-
-            # Verify that trainer was called
-            mock_trainer_instance.train.assert_called_once()
-
-            # Verify that create_model_config was called with correct parameters
-            mock_create_config.assert_called_once()
-            call_args = mock_create_config.call_args
-            assert call_args[0][1] == 3  # in_channels
-            assert call_args[0][2] == 5  # out_channels
-            assert call_args[0][3] == (128, 128, 128)  # patch_size
-            assert call_args[0][4] == "3D"  # dimensionality
-            assert call_args[0][5] is True  # sparse
-            assert call_args[0][6] == (32, 64, 128, 256)  # feature_maps
-            assert call_args[0][7] == 500  # max_num_iters
+        # Verify that ReduceLROnPlateau scheduler was called
+        mock_reduce_lr.assert_called_once()

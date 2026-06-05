@@ -2,7 +2,6 @@ from pathlib import Path
 from typing import Literal
 
 import torch
-from bioimageio.core import test_model
 from bioimageio.spec.model.v0_5 import (
     ArchitectureFromFileDescr,
     AxisId,
@@ -107,16 +106,19 @@ def make_model_description(
             SpaceOutputAxis(
                 id=AxisId("z_out"),
                 size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId("z_in")),
+                scale=resolution[0],
                 unit="micrometer",
             ),
             SpaceOutputAxis(
                 id=AxisId("y_out"),
                 size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId("y_in")),
+                scale=resolution[1],
                 unit="micrometer",
             ),
             SpaceOutputAxis(
                 id=AxisId("x_out"),
                 size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId("x_in")),
+                scale=resolution[2],
                 unit="micrometer",
             ),
         ]
@@ -129,11 +131,13 @@ def make_model_description(
             SpaceOutputAxis(
                 id=AxisId("y_out"),
                 size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId("y_in")),
+                scale=resolution[1],
                 unit="micrometer",
             ),
             SpaceOutputAxis(
                 id=AxisId("x_out"),
                 size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId("x_in")),
+                scale=resolution[2],
                 unit="micrometer",
             ),
         ]
@@ -178,7 +182,3 @@ def make_model_description(
         ),
     )
     return model_desc
-
-
-def test_model_desc(model_desc):
-    return test_model(model_desc)
