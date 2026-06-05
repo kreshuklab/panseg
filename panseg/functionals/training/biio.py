@@ -39,6 +39,7 @@ def make_model_description(
     resolution: tuple[float, float, float],
     test_in: Path,
     test_out: Path,
+    panseg_config: Path,
 ):
 
     if dimensionality == "3D":
@@ -180,5 +181,6 @@ def make_model_description(
                 pytorch_version=pytorch_version,
             )
         ),
+        attachments=[FileDescr(source=panseg_config)],
     )
     return model_desc

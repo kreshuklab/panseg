@@ -218,6 +218,7 @@ def unet_training(
             resolution=resolution,
             test_in=Path("test_in.npy"),
             test_out=Path("test_out.npy"),
+            panseg_config=checkpoint_dir / FILE_CONFIG_TRAIN_YAML,
         )
         model_desc.package(
             checkpoint_dir

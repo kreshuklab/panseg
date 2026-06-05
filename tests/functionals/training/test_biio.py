@@ -36,4 +36,5 @@ def test_make_model_description(tmp_path):
             resolution=(0.5, 0.02, 2),
             test_in=inputs,
             test_out=outputs,
+            panseg_config=Path("best_checkpoint.pytorch"),
         )
