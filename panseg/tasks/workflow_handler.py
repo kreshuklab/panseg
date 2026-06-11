@@ -1,15 +1,16 @@
 import json
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from inspect import signature
 from pathlib import Path
-from pprint import pp
 from typing import Any, Callable, Literal
 from uuid import UUID, uuid4
 
 import yaml
 from pydantic import BaseModel, Field
+from rich.traceback import Traceback
 
 from panseg.__version__ import __version__
 from panseg.core.image import PanSegImage
@@ -33,6 +34,7 @@ class RunTimeInputSchema(BaseModel):
 class Task_message:
     message: str
     name: str
+    trace: Traceback
     level: Literal["warning", "info", "debug"] = "warning"
 
 
@@ -367,7 +369,19 @@ def task_tracker(
                         parameters[name] = arg
 
             # Execute the function
-            out_image = func(*args, **kwargs)
+            try:
+                out_image = func(*args, **kwargs)
+            except Exception as e:
+                exc_type, exc_value, exc_traceback = sys.exc_info()
+                trace = Traceback.from_exception(
+                    exc_type, exc_value, exc_traceback, show_locals=True
+                )
+                out_image = Task_message(
+                    message=str(e),
+                    name=func.__name__,
+                    level="warning",
+                    trace=trace,
+                )
 
             # Parse the output
             if out_image is None:

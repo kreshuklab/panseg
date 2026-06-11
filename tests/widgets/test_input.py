@@ -103,9 +103,10 @@ def test_set_voxel_size(input_tab, napari_raw, mocker):
 def test_on_path_changed(input_tab, mocker):
     mocked_lookup = mocker.patch.object(input_tab, "look_up_dataset_keys")
     assert not input_tab.path_changed_once
-    input_tab._on_path_changed(mocker.sentinel)
+    mock_path = mocker.Mock()
+    input_tab._on_path_changed(mock_path)
     assert input_tab.path_changed_once
-    mocked_lookup.assert_called_with(mocker.sentinel)
+    mocked_lookup.assert_called_with(mock_path)
 
 
 def test_on_refresh_keys_button(input_tab, mocker):
