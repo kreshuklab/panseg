@@ -228,6 +228,8 @@ class Input_Tab:
 
     def look_up_dataset_keys(self, path: Path):
         path = _return_value_if_widget(path)
+        if not path.exists():
+            return
         ext = path.suffix.lower()
 
         if ext in H5_EXTENSIONS:
@@ -274,8 +276,9 @@ class Input_Tab:
     def _on_path_changed(self, path: Path):
         logger.debug("_on_path_changed called!")
         self.path_changed_once = True
-        self.look_up_dataset_keys(path)
-        self.update_stack_layout()
+        if path.exists():
+            self.look_up_dataset_keys(path)
+            self.update_stack_layout()
 
     def _on_refresh_keys_button(self, press: bool):
         logger.debug("_on_refresh_keys_button called!")

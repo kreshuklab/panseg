@@ -285,17 +285,18 @@ def test_label_io_mesh_error(tmp_path):
     )
     image = PanSegImage(data=mock_data, properties=property)
 
-    with pytest.raises(ValueError):
-        export_image_task(
-            image=image,
-            export_directory=tmp_path,
-            name_pattern="test",
-            key="raw",
-            export_format=export_format,
-            data_type="uint16",
-            export_mesh="glb",
-            close_mesh=True,
-        )
+    out = export_image_task(
+        image=image,
+        export_directory=tmp_path,
+        name_pattern="test",
+        key="raw",
+        export_format=export_format,
+        data_type="uint16",
+        export_mesh="glb",
+        close_mesh=True,
+    )
+    assert isinstance(out, Task_message)
+    assert "Mesh export only supported for 3D" in out.message
 
 
 def test_io_slicing_trip(tmp_path):

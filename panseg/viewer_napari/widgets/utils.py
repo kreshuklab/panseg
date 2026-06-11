@@ -11,13 +11,15 @@ from napari.layers import Layer
 from napari.qt.threading import create_worker
 from psygnal import evented
 from psygnal.qt import start_emitting_from_queue
-from pydantic import ValidationError
 from qtpy import QtGui, QtWidgets
+from rich.console import Console
 
 from panseg import logger
 from panseg.core.image import PanSegImage, SemanticType
 from panseg.tasks.workflow_handler import Task_message
 from panseg.viewer_napari import log
+
+console = Console()
 
 
 def _return_value_if_widget(x):
@@ -173,6 +175,7 @@ def schedule_task(
                 add_ps_image_to_viewer(ps_im, replace=True)
 
         elif isinstance(task_result, Task_message):
+            console.print(task_result.trace)
             log(task_result.message, thread=task_result.name, level=task_result.level)
             return None
         elif task_result is None:

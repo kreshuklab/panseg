@@ -41,17 +41,14 @@ def import_image_task(
     if image_name is None:
         image_name = input_path.stem
 
-    try:
-        return import_image(
-            path=input_path,
-            key=key,
-            image_name=image_name,
-            semantic_type=semantic_type,
-            stack_layout=stack_layout,
-            m_slicing=m_slicing,
-        )
-    except Exception as e:
-        return Task_message(message=str(e), name="import image", level="warning")
+    return import_image(
+        path=input_path,
+        key=key,
+        image_name=image_name,
+        semantic_type=semantic_type,
+        stack_layout=stack_layout,
+        m_slicing=m_slicing,
+    )
 
 
 @task_tracker(
