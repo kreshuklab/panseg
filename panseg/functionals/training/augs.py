@@ -563,6 +563,13 @@ def _recover_ignore_index(input, orig, ignore_index):
 
 
 class Augmenter:
+    """Image augmentations for training.
+    Only for 3d images. Inputs must have a channel dimension, labels cannot.
+
+    Attributes:
+        seed: Seed for all random operations.
+    """
+
     def __init__(self):
         self.seed = GLOBAL_RANDOM_STATE.randint(10000000)
 
@@ -581,7 +588,7 @@ class Augmenter:
                 GaussianBlur3D(),
                 AdditiveGaussianNoise(np.random.RandomState()),
                 AdditivePoissonNoise(np.random.RandomState()),
-                ToTensor(expand_dims=True),
+                ToTensor(expand_dims=False),
             ]
         )
 
