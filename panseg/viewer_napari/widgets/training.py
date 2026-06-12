@@ -1,12 +1,10 @@
 from pathlib import Path
 from typing import Literal, Optional
 
-import magicgui
 import torch
 from magicgui import magic_factory, widgets
 from magicgui.types import Undefined
 from magicgui.widgets import Container, FileEdit, Label, ProgressBar
-from napari.components import tooltip
 from napari.layers import Image, Labels
 
 from panseg import PATH_PANSEG_MODELS, logger
@@ -288,6 +286,9 @@ class Training_Tab:
                 return
         if len(model_name) == 0:
             log("Please choose a model name!", thread="train_gui")
+            return
+        if len(model_name) < 5:
+            log("Please choose a longer model name!", thread="train_gui")
             return
 
         # Enable geometric progression by setting type to int
