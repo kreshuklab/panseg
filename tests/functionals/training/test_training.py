@@ -329,8 +329,8 @@ class TestUnetTraining:
         mock_trainer.return_value = mock_trainer_instance
 
         mock_data_loader.return_value = [
-            (
-                torch.from_numpy(np.random.rand(1, 1, 64, 64)).type(torch.float32),
+            (  # b, c, z,  x,  y
+                torch.from_numpy(np.random.rand(1, 1, 1, 64, 64)).type(torch.float32),
                 None,
             )
         ]
@@ -482,6 +482,7 @@ class TestUnetTraining:
                         device="cpu",
                     )
 
+    @patch("panseg.functionals.training.train.isinstance")
     @patch("panseg.functionals.training.train.make_model_description")
     @patch("panseg.functionals.training.train.DataLoader")
     @patch("panseg.functionals.training.train.ConcatDataset")
@@ -506,6 +507,7 @@ class TestUnetTraining:
         mock_concat,
         mock_data_loader,
         mock_description,
+        mock_isinstance,
         tmp_path,
     ):
         """Test UNet training with multiple GPUs."""
@@ -536,6 +538,8 @@ class TestUnetTraining:
                 None,
             )
         ]
+
+        mock_isinstance.return_value = False
 
         # Create a temporary dataset directory
         dataset_dir = tmp_path / "dataset"
