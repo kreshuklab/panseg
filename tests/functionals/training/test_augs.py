@@ -658,7 +658,7 @@ def test_gaussian_blur_3d_execution(mocker, raw_cell_3d_100x128x128):
     img = raw_cell_3d_100x128x128
     mock_random = mocker.patch("panseg.functionals.training.augs.random")
     mock_random.random.return_value = 0.3  # Below probability threshold
-    mock_random.uniform = np.random.RandomState().uniform
+    mock_random.uniform.return_value = 0.5
 
     gb = augs.GaussianBlur3D(execution_probability=0.5)
     result = gb(img)
