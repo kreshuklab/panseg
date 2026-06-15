@@ -1,6 +1,5 @@
 import pytest
 
-import panseg
 from panseg.viewer_napari.widgets.output import Output_Tab
 
 

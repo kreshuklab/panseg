@@ -1,8 +1,6 @@
 from pathlib import Path
 
-import magicgui
 import pytest
-from magicgui.widgets import Label
 
 from panseg.viewer_napari.widgets.input import (
     Docs_Container,

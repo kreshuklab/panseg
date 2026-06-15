@@ -5,7 +5,6 @@ from panseg.functionals.dataprocessing.advanced_dataprocessing import (
     get_bbox,
     remove_false_positives_by_foreground_probability,
 )
-from panseg.functionals.proofreading.utils import get_bboxes as get_bboxes_proof
 
 
 def test_get_bbox_mask_slices():

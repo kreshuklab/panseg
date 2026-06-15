@@ -16,7 +16,6 @@ from panseg.core.image import (
     import_image,
     stack_sort,
 )
-from panseg.io import voxelsize
 from panseg.io.voxelsize import VoxelSize
 
 

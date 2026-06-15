@@ -10,7 +10,7 @@ from napari.layers import Image, Labels, Layer
 from qtpy import QtGui
 
 from panseg import logger
-from panseg.core.image import ImageLayout, ImageType, PanSegImage, SemanticType
+from panseg.core.image import PanSegImage, SemanticType
 from panseg.io import H5_EXTENSIONS, ZARR_EXTENSIONS
 from panseg.io.h5 import list_h5_keys, read_h5_shape
 from panseg.io.io import shape_to_stack_layout

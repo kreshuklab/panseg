@@ -1,9 +1,8 @@
 from typing import Optional
 
 from magicgui import magic_factory
-from magicgui.widgets import Container, Label
+from magicgui.widgets import Container
 from napari.layers import Image, Labels
-from qtpy.QtCore import Qt
 
 from panseg import logger
 from panseg.core.image import PanSegImage, SemanticType

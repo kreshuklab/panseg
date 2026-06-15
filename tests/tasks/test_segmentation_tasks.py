@@ -1,6 +1,5 @@
 import numpy as np
 import pytest
-from torch import layout
 
 from panseg.core.image import (
     ImageLayout,
@@ -127,7 +126,7 @@ def test_lmc_segmentation_pred(mocker):
     )
 
     pred_image = PanSegImage(data=mock_data, properties=pred_property)
-    raw_image = PanSegImage(data=mock_data, properties=raw_property)
+    PanSegImage(data=mock_data, properties=raw_property)
     seg_image = PanSegImage(data=mock_seg, properties=seg_property)
 
     result = lmc_segmentation_task(

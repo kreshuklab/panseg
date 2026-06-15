@@ -1,12 +1,9 @@
-import warnings
 from pathlib import Path
 
 import napari
-from napari._qt.qt_event_loop import _svg_path_to_icon
 from napari.components._viewer_constants import CanvasPosition
-from qtpy import QtCore, QtWidgets
+from qtpy import QtWidgets
 
-from panseg import logger
 from panseg.__version__ import __version__
 from panseg.utils import check_version
 from panseg.viewer_napari.updater import update

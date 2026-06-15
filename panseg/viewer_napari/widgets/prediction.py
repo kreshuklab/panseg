@@ -12,7 +12,6 @@ from magicgui.widgets import ComboBox, Container, ProgressBar, PushButton
 from panseg import logger
 from panseg.core.image import PanSegImage
 from panseg.core.zoo import model_zoo
-from panseg.functionals.prediction.utils.size_finder import find_a_max_patch_shape
 from panseg.tasks.prediction_tasks import biio_prediction_task, unet_prediction_task
 from panseg.viewer_napari import log
 from panseg.viewer_napari.widgets.utils import schedule_task

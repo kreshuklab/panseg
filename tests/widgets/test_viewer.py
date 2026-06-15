@@ -1,4 +1,3 @@
-import napari
 import pytest
 
 from panseg.viewer_napari.viewer import Panseg_viewer

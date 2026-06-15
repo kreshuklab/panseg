@@ -5,7 +5,6 @@ import napari
 from magicgui import magic_factory
 from magicgui.widgets import Container, Label, PushButton
 from napari.layers import Image, Labels, Layer, Shapes
-from qtpy.QtCore import Qt
 
 from panseg import logger
 from panseg.core.image import ImageDimensionality, PanSegImage, SemanticType

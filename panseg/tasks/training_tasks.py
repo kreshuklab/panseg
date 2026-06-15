@@ -1,5 +1,4 @@
 import tempfile
-from functools import reduce
 from pathlib import Path
 from typing import Literal, Optional
 

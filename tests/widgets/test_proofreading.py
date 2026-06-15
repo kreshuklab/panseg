@@ -32,7 +32,7 @@ class TestProofreadingHandler:
         assert not proof.active
 
     def test_get_layer_data_empty(self, make_napari_viewer_proxy, proof):
-        viewer = make_napari_viewer_proxy()
+        make_napari_viewer_proxy()
         with pytest.raises(ValueError):
             proof.get_layer_data("test")
 
@@ -585,7 +585,7 @@ class TestProofreadingTab:
             "panseg.viewer_napari.widgets.proofreading.ProofreadingHandler.segmentation",
             new_callable=mocker.PropertyMock,
         )
-        mock_scale = mocker.patch(
+        mocker.patch(
             "panseg.viewer_napari.widgets.proofreading.ProofreadingHandler.scale",
             new_callable=lambda: [1, 1, 1],
         )
