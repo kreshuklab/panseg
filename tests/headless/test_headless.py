@@ -2,7 +2,6 @@ from pathlib import Path
 
 import numpy as np
 import yaml
-from numpy.testing import assert_allclose
 
 from panseg.core.image import PanSegImage
 from panseg.headless.headless import run_headless_workflow

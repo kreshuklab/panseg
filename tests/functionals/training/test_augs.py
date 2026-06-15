@@ -543,7 +543,7 @@ def test_to_tensor_2d_no_expand(raw_cell_2d_96x96):
     img = raw_cell_2d_96x96
     tt = augs.ToTensor(expand_dims=False)
     with pytest.raises(AssertionError):
-        result = tt(img)
+        tt(img)
 
 
 def test_to_tensor_4d_no_expand(raw_zcyx_96x2x96x96):

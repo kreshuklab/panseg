@@ -1,9 +1,7 @@
 import numpy as np
 import pytest
-from napari.layers import Image
 
 from panseg.core.image import ImageLayout, PanSegImage
-from panseg.functionals.dataprocessing.dataprocessing import ImagePairOperation
 from panseg.io.voxelsize import VoxelSize
 from panseg.tasks import dataprocessing_tasks as dpt
 from panseg.tasks.workflow_handler import Task_message
@@ -24,7 +22,7 @@ def test_compute_slices_3d_with_broken_rectangle(raw_cell_3d_100x128x128):
     shape = raw_cell_3d_100x128x128.shape
     rectangle = np.array([[10, 20, 30], [10, 20, 30], [50, 80, 90], [50, 80, 90]])
     with pytest.raises(ValueError):
-        z_slice, x_slice, y_slice = dpt._compute_slices_3d(rectangle, (0, 30), shape)
+        dpt._compute_slices_3d(rectangle, (0, 30), shape)
 
 
 def test_compute_slices_3d_with_rectangle(raw_cell_3d_100x128x128):
@@ -237,9 +235,7 @@ def test_set_biggest_instance_to_zero_task_bg_is_instance(napari_segmentation):
 
 def test_relabel_segmentation_task_wrong_layer(mocker, napari_raw):
     ps_image = PanSegImage.from_napari_layer(napari_raw)
-    mock_relabel = mocker.patch(
-        "panseg.tasks.dataprocessing_tasks.relabel_segmentation"
-    )
+    mocker.patch("panseg.tasks.dataprocessing_tasks.relabel_segmentation")
     out = dpt.relabel_segmentation_task(image=ps_image, background=0)
     assert isinstance(out, Task_message)
     assert "must be a segmentation" in out.message

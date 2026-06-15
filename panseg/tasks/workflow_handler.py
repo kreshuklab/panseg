@@ -3,6 +3,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from functools import wraps
 from inspect import signature
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -305,6 +306,7 @@ workflow_handler = WorkflowHandler()
 
 def task_tracker(
     func: Callable | None = None,
+    *,
     is_root=False,
     is_leaf=False,
     list_inputs: dict[str, RunTimeInputSchema] | None = None,
@@ -338,6 +340,7 @@ def task_tracker(
     def _inner_decorator(func):
         workflow_handler.register_func(func)
 
+        @wraps(func)
         def wrapper(*args, **kwargs):
             assert len(args) == 0, (
                 "Workflow functions should not have positional arguments"

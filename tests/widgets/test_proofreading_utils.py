@@ -68,7 +68,7 @@ def test_get_bboxes_3D(mocker):
 
 
 def test_p_get_bboxes_4D(mocker):
-    mocks = mocker.patch.multiple(
+    mocker.patch.multiple(
         "panseg.functionals.proofreading.utils",
         _get_bboxes2D=mocker.DEFAULT,
         _get_bboxes3D=mocker.DEFAULT,

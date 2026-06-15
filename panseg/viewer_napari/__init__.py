@@ -26,7 +26,9 @@ def log(
     For historical reasons, the `thread` argument is used to identify the widget that is logging.
     """
     logger.log(
-        logging.getLevelName(level.upper()), message, extra={"widget_name": thread}
+        level=logging.getLevelNamesMapping()[level.upper()],
+        msg=message,
+        extra={"widget_name": thread},
     )
 
 

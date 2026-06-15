@@ -232,7 +232,7 @@ def test_cropping_one_rectangle(preprocessing_tab, mocker, napari_raw):
 
 
 def test_cropping_z_range(preprocessing_tab, mocker, napari_raw):
-    mocked_scheduler = mocker.patch(
+    mocker.patch(
         target="panseg.viewer_napari.widgets.preprocessing.schedule_task",
         autospec=True,
     )
@@ -249,7 +249,7 @@ def test_cropping_activation(
     preprocessing_tab, mocker, napari_raw, make_napari_viewer_proxy
 ):
     viewer = make_napari_viewer_proxy()
-    mocked_scheduler = mocker.patch(
+    mocker.patch(
         target="panseg.viewer_napari.widgets.preprocessing.schedule_task",
         autospec=True,
     )

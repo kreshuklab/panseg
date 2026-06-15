@@ -1,7 +1,6 @@
 import pytest
 from magicgui.widgets import Label, Widget
 from napari.layers import Image, Labels
-from superqt.utils import WorkerBase
 
 from panseg.core.image import PanSegImage
 from panseg.tasks.workflow_handler import task_tracker
