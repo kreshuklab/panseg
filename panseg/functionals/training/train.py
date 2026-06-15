@@ -6,7 +6,6 @@ from typing import Literal, Optional, Tuple
 import numpy as np
 import torch
 import yaml
-from bioimageio.core import test_description
 from torch import nn
 from torch.optim.adam import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -125,8 +124,8 @@ def unet_training(
 
     # Data loaders setup
     logger.info(f"Creating train/val loaders with batch size {batch_size}")
-    train_datasets = create_datasets(dataset_dir, "train", patch_size)
-    val_datasets = create_datasets(dataset_dir, "val", patch_size)
+    train_datasets = create_datasets(dataset_dir, "train", patch_size, dimensionality)
+    val_datasets = create_datasets(dataset_dir, "val", patch_size, dimensionality)
     loaders = {
         "train": DataLoader(
             ConcatDataset(train_datasets),
@@ -196,9 +195,17 @@ def unet_training(
     if not weights.exists():
         weights = checkpoint_dir / "last_checkpoint.pytorch"
 
+    # Obtain and save test in- and output for biio
     test_in, _ = next(iter(loaders["train"]))
-    model.training = False
-    test_out = model.forward(test_in.to(device))
+    if isinstance(model, UNet2D):
+        # remove the singleton z-dimension from the input
+        # Extra dim was only added in the panseg loader for the augmentations
+        # Stored data and model are true 2D models
+        # Note the loader adds a batch dimension
+        test_in = torch.squeeze(test_in, dim=-3)
+
+    model.eval()
+    test_out = model(test_in.to(device))
 
     np.save(checkpoint_dir / "test_in.npy", test_in.numpy())
     np.save(checkpoint_dir / "test_out.npy", test_out.detach().cpu().numpy())
@@ -230,6 +237,7 @@ def create_datasets(
     dataset_dir: str | Path,
     phase: Literal["train", "val"],
     patch_shape: Tuple[int, int, int],
+    dimensionality: Literal["2D", "3D"],
 ):
     """
     Load a dataset for training a unet.
@@ -243,7 +251,12 @@ def create_datasets(
     phase_dir = Path(dataset_dir) / phase
     file_paths = find_h5_files(phase_dir)
     return [
-        HDF5Dataset(file_path=file_path, augmenter=Augmenter(), patch_shape=patch_shape)
+        HDF5Dataset(
+            file_path=file_path,
+            augmenter=Augmenter(),
+            patch_shape=patch_shape,
+            dimensionality=dimensionality,
+        )
         for file_path in file_paths
     ]
 

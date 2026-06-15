@@ -11,6 +11,7 @@ import torch
 import yaml
 
 from panseg import FILE_CONFIG_TRAIN_YAML
+from panseg.functionals.training.h5dataset import HDF5Dataset
 from panseg.functionals.training.train import (
     create_datasets,
     create_model_config,
@@ -140,7 +141,7 @@ class TestCreateModelConfig:
 class TestCreateDatasets:
     """Tests for create_datasets function."""
 
-    def test_create_datasets_train(self):
+    def test_create_datasets_train_3D(self):
         """Test creating training datasets."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -154,16 +155,81 @@ class TestCreateDatasets:
                     f.create_dataset("raw", data=np.random.rand(10, 88, 88))
                     f.create_dataset("label", data=np.random.rand(10, 88, 88))
 
-            datasets = create_datasets(str(temp_path), "train", (8, 64, 64))
+            datasets = create_datasets(str(temp_path), "train", (8, 64, 64), "3D")
 
             assert len(datasets) == 3
-            # Each dataset should be an HDF5Dataset instance
-            from panseg.functionals.training.h5dataset import HDF5Dataset
+            assert len(datasets[0]) == 8
 
             for dataset in datasets:
                 assert isinstance(dataset, HDF5Dataset)
 
-    def test_create_datasets_val(self):
+    def test_create_datasets_train_3Dc(self):
+        """Test creating training datasets."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            train_dir = temp_path / "train"
+            train_dir.mkdir()
+
+            # Create dummy h5 files
+            for i in range(3):
+                h5_file = train_dir / f"data_{i}.h5"
+                with h5py.File(h5_file, "w") as f:
+                    f.create_dataset("raw", data=np.random.rand(3, 10, 88, 88))
+                    f.create_dataset("label", data=np.random.rand(10, 88, 88))
+
+            datasets = create_datasets(str(temp_path), "train", (8, 64, 64), "3D")
+
+            assert len(datasets) == 3
+            assert len(datasets[0]) == 8
+
+            for dataset in datasets:
+                assert isinstance(dataset, HDF5Dataset)
+
+    def test_create_datasets_train_2Dc(self):
+        """Test creating training datasets."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            train_dir = temp_path / "train"
+            train_dir.mkdir()
+
+            # Create dummy h5 files
+            for i in range(3):
+                h5_file = train_dir / f"data_{i}.h5"
+                with h5py.File(h5_file, "w") as f:
+                    f.create_dataset("raw", data=np.random.rand(10, 88, 88))
+                    f.create_dataset("label", data=np.random.rand(88, 88))
+
+            datasets = create_datasets(str(temp_path), "train", (1, 64, 64), "2D")
+
+            assert len(datasets) == 3
+            assert len(datasets[0]) == 4
+
+            for dataset in datasets:
+                assert isinstance(dataset, HDF5Dataset)
+
+    def test_create_datasets_train_2D(self):
+        """Test creating training datasets."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            train_dir = temp_path / "train"
+            train_dir.mkdir()
+
+            # Create dummy h5 files
+            for i in range(3):
+                h5_file = train_dir / f"data_{i}.h5"
+                with h5py.File(h5_file, "w") as f:
+                    f.create_dataset("raw", data=np.random.rand(88, 88))
+                    f.create_dataset("label", data=np.random.rand(88, 88))
+
+            datasets = create_datasets(str(temp_path), "train", (1, 64, 64), "2D")
+
+            assert len(datasets) == 3
+            assert len(datasets[0]) == 4
+
+            for dataset in datasets:
+                assert isinstance(dataset, HDF5Dataset)
+
+    def test_create_datasets_val_3D(self):
         """Test creating validation datasets."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -177,7 +243,43 @@ class TestCreateDatasets:
                     f.create_dataset("raw", data=np.random.rand(10, 88, 88))
                     f.create_dataset("label", data=np.random.rand(10, 88, 88))
 
-            datasets = create_datasets(str(temp_path), "val", (8, 64, 64))
+            datasets = create_datasets(str(temp_path), "val", (8, 64, 64), "3D")
+
+            assert len(datasets) == 2
+
+    def test_create_datasets_val_2Dc(self):
+        """Test creating validation datasets."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            val_dir = temp_path / "val"
+            val_dir.mkdir()
+
+            # Create dummy h5 files
+            for i in range(2):
+                h5_file = val_dir / f"val_data_{i}.h5"
+                with h5py.File(h5_file, "w") as f:
+                    f.create_dataset("raw", data=np.random.rand(10, 88, 88))
+                    f.create_dataset("label", data=np.random.rand(88, 88))
+
+            datasets = create_datasets(str(temp_path), "val", (1, 64, 64), "2D")
+
+            assert len(datasets) == 2
+
+    def test_create_datasets_val_2D(self):
+        """Test creating validation datasets."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            val_dir = temp_path / "val"
+            val_dir.mkdir()
+
+            # Create dummy h5 files
+            for i in range(2):
+                h5_file = val_dir / f"val_data_{i}.h5"
+                with h5py.File(h5_file, "w") as f:
+                    f.create_dataset("raw", data=np.random.rand(88, 88))
+                    f.create_dataset("label", data=np.random.rand(88, 88))
+
+            datasets = create_datasets(str(temp_path), "val", (1, 64, 64), "2D")
 
             assert len(datasets) == 2
 
@@ -196,7 +298,7 @@ class TestCreateDatasets:
                     f.create_dataset("label", data=np.random.rand(10, 88, 88))
 
             with pytest.raises(AssertionError):
-                create_datasets(str(temp_dir), "invalid_phase", (8, 64, 64))
+                create_datasets(str(temp_dir), "invalid_phase", (8, 64, 64), "3D")
 
 
 class TestUnetTraining:
@@ -227,8 +329,8 @@ class TestUnetTraining:
         mock_trainer.return_value = mock_trainer_instance
 
         mock_data_loader.return_value = [
-            (
-                torch.from_numpy(np.random.rand(1, 1, 64, 64)).type(torch.float32),
+            (  # b, c, z,  x,  y
+                torch.from_numpy(np.random.rand(1, 1, 1, 64, 64)).type(torch.float32),
                 None,
             )
         ]
@@ -380,6 +482,7 @@ class TestUnetTraining:
                         device="cpu",
                     )
 
+    @patch("panseg.functionals.training.train.isinstance")
     @patch("panseg.functionals.training.train.make_model_description")
     @patch("panseg.functionals.training.train.DataLoader")
     @patch("panseg.functionals.training.train.ConcatDataset")
@@ -404,6 +507,7 @@ class TestUnetTraining:
         mock_concat,
         mock_data_loader,
         mock_description,
+        mock_isinstance,
         tmp_path,
     ):
         """Test UNet training with multiple GPUs."""
@@ -434,6 +538,8 @@ class TestUnetTraining:
                 None,
             )
         ]
+
+        mock_isinstance.return_value = False
 
         # Create a temporary dataset directory
         dataset_dir = tmp_path / "dataset"

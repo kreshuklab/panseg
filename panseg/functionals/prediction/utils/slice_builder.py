@@ -101,11 +101,11 @@ class FilterSliceBuilder(SliceBuilder):
         raw_dataset,
         label_dataset,
         patch_shape,
-        stride_shape,
         ignore_index=(0,),
         threshold=0.1,
         slack_acceptance=0.01,
     ):
+        stride_shape = tuple(max(i // 2, 1) for i in patch_shape)
         super().__init__(raw_dataset, label_dataset, patch_shape, stride_shape)
         if label_dataset is None:
             return
