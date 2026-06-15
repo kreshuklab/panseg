@@ -8,7 +8,7 @@ from napari.layers import Image, Labels
 from panseg import PATH_PANSEG_MODELS, logger
 from panseg.core.image import PanSegImage, save_image
 from panseg.functionals.training.train import unet_training
-from panseg.tasks.workflow_handler import task_tracker
+from panseg.tasks.workflow_handler import Task_message, task_tracker
 from panseg.viewer_napari import log
 
 
@@ -84,23 +84,31 @@ def unet_training_task(
         )
         return
 
-    unet_training(
-        dataset_dir=dataset_dir,
-        model_name=model_name,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        feature_maps=feature_maps,
-        patch_size=patch_size,
-        max_num_iters=max_num_iters,
-        dimensionality=dimensionality,
-        sparse=False,
-        device=device,
-        modality=modality,
-        output_type=output_type,
-        description=description,
-        resolution=resolution,
-        pre_trained=pre_trained,
-    )
+    try:
+        unet_training(
+            dataset_dir=dataset_dir,
+            model_name=model_name,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_maps=feature_maps,
+            patch_size=patch_size,
+            max_num_iters=max_num_iters,
+            dimensionality=dimensionality,
+            sparse=False,
+            device=device,
+            modality=modality,
+            output_type=output_type,
+            description=description,
+            resolution=resolution,
+            pre_trained=pre_trained,
+        )
+    except RuntimeError as e:
+        if "Output size is too small" in str(e):
+            return Task_message(
+                "Patch size too small for model architecture!",
+                name="training",
+                level="warning",
+            )
 
     checkpoint_dir = PATH_PANSEG_MODELS / model_name
     log(f"Finished training, saved model to {checkpoint_dir}", thread="train_gui_task")

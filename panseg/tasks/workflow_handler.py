@@ -34,8 +34,13 @@ class RunTimeInputSchema(BaseModel):
 class Task_message:
     message: str
     name: str
-    trace: Traceback
     level: Literal["warning", "info", "debug"] = "warning"
+
+    def __post_init__(self):
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        self.trace = Traceback.from_exception(
+            exc_type, exc_value, exc_traceback, show_locals=True
+        )
 
 
 class Infos(BaseModel):
@@ -372,15 +377,10 @@ def task_tracker(
             try:
                 out_image = func(*args, **kwargs)
             except Exception as e:
-                exc_type, exc_value, exc_traceback = sys.exc_info()
-                trace = Traceback.from_exception(
-                    exc_type, exc_value, exc_traceback, show_locals=True
-                )
                 out_image = Task_message(
                     message=str(e),
                     name=func.__name__,
                     level="warning",
-                    trace=trace,
                 )
 
             # Parse the output

@@ -32,7 +32,7 @@ class Training_Tab:
         self.ALL_DEVICES = self.ALL_CUDA_DEVICES + self.MPS + ["cpu"]
         self.CUSTOM = "Custom"
 
-        self.previous_patch_size = [16, 64, 64]
+        self.previous_z_patch_size = 16
 
         # initialize widgets
         self.widget_unet_training = self.factory_unet_training()
@@ -379,12 +379,15 @@ class Training_Tab:
         logger.debug(f"_on_dimensionality_change called with {dimensionality}")
 
         # Patch size:
+        z_patch = self.widget_unet_training.patch_size[0]
         if dimensionality == "2D":
-            ps = self.widget_unet_training.patch_size.value
-            self.previous_patch_size = ps
-            self.widget_unet_training.patch_size.value = [1, ps[1], ps[2]]
+            if z_patch.value != 1:  # guard multiple executions
+                self.previous_z_patch_size = z_patch.value
+            z_patch.value = 1
+            z_patch.enabled = False
         else:
-            self.widget_unet_training.patch_size.value = self.previous_patch_size
+            z_patch.value = self.previous_z_patch_size
+            z_patch.enabled = True
         self.update_channels()
 
     def update_channels(self):

@@ -484,13 +484,13 @@ def test_on_from_disk_change(training_tab, mocker):
 def test_on_dimensionality_change(training_tab):
     training_tab.widget_unet_training.patch_size.value = [9, 8, 7]
     training_tab.widget_unet_training.dimensionality.value = "2D"
-    assert training_tab.previous_patch_size == (9, 8, 7)
+    assert training_tab.previous_z_patch_size == 9
     assert training_tab.widget_unet_training.patch_size.value == (1, 8, 7)
 
     training_tab.widget_unet_training.dimensionality.value = "3D"
     assert (
-        training_tab.widget_unet_training.patch_size.value
-        == training_tab.previous_patch_size
+        training_tab.widget_unet_training.patch_size[0].value
+        == training_tab.previous_z_patch_size
     )
 
 
