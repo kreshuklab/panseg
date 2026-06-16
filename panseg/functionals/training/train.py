@@ -17,6 +17,7 @@ from panseg import (
     PATH_TRAIN_TEMPLATE,
 )
 from panseg.core.zoo import model_zoo
+from panseg.functionals.prediction.utils.size_finder import find_batch_size
 from panseg.functionals.training.augs import Augmenter
 from panseg.functionals.training.biio import make_model_description
 from panseg.functionals.training.h5dataset import HDF5Dataset
@@ -99,6 +100,7 @@ def unet_training(
             out_channels=out_channels,
             f_maps=feature_maps,
             final_sigmoid=final_sigmoid,
+            layer_order="gcr",
         )
     elif dimensionality in ["3D", "3d", "3"]:
         model = UNet3D(
@@ -106,13 +108,21 @@ def unet_training(
             out_channels=out_channels,
             f_maps=feature_maps,
             final_sigmoid=final_sigmoid,
+            layer_order="gcr",
         )
     else:
         raise ValueError(f"Unknown dimensionality {dimensionality}")
     logger.info(f"Using {model.__class__.__name__} model for training.")
 
     # Device configuration
-    batch_size = 1
+    batch_size = find_batch_size(
+        model=model,
+        in_channels=in_channels,
+        patch_shape=patch_size,
+        patch_halo=(4, 4, 4),  # some slack
+        device=device,
+    )
+
     if torch.cuda.device_count() > 1 and device != "cpu":
         model = nn.DataParallel(model)
         logger.info(f"Using {torch.cuda.device_count()} GPUs for prediction.")
@@ -132,7 +142,7 @@ def unet_training(
             batch_size=batch_size,
             shuffle=True,
             pin_memory=True,
-            num_workers=1,
+            num_workers=4,
         )
     }
     if len(val_datasets) > 0:
@@ -141,7 +151,7 @@ def unet_training(
             batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
-            num_workers=1,
+            num_workers=4,
         )
     else:
         loaders["val"] = []
