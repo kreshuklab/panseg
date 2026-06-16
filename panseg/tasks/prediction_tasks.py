@@ -80,6 +80,7 @@ def unet_prediction_task(
 def biio_prediction_task(
     image: PanSegImage,
     model_id: str,
+    device: str,
     suffix: str = "_prediction",
     _tracker: Optional["PBar_Tracker"] = None,
 ) -> list[PanSegImage]:
@@ -90,6 +91,7 @@ def biio_prediction_task(
         raw=data,
         input_layout=input_layout,
         model_id=model_id,
+        device=device,
     )
 
     new_images = []

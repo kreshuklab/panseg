@@ -13,7 +13,7 @@ from panseg.functionals.prediction.prediction import biio_prediction
 )
 def test_biio_prediction(raw_fixture_name, input_layout, model_id, request):
     named_pmaps = biio_prediction(
-        request.getfixturevalue(raw_fixture_name), input_layout, model_id
+        request.getfixturevalue(raw_fixture_name), input_layout, model_id, device="cpu"
     )
     for key, pmap in named_pmaps.items():
         assert pmap is not None, f"Prediction map for {key} is None"

@@ -36,6 +36,7 @@ def biio_prediction(
     raw: np.ndarray,
     input_layout: ImageLayout,
     model_id: str,
+    device: str,
 ) -> dict[str, np.ndarray]:
     assert isinstance(input_layout, str)
     model = load_model_description(model_id, perform_io_checks=False)
@@ -61,7 +62,7 @@ def biio_prediction(
         for item in input_layout
     )  # `AxisId` has to be "channel" not "c"
 
-    pipeline = create_prediction_pipeline(model)
+    pipeline = create_prediction_pipeline(model, devices=[device])
     try:
         if isinstance(
             axes[0], str

@@ -66,9 +66,7 @@ def test_biio_prediction_task(raw_fixture_name, input_layout, model_id, request)
         ),
     )
     result = biio_prediction_task(
-        image=image,
-        model_id=model_id,
-        suffix="_biio_prediction",
+        image=image, model_id=model_id, suffix="_biio_prediction", device="cpu"
     )
     for new_image in result:
         assert new_image.semantic_type == SemanticType.PREDICTION

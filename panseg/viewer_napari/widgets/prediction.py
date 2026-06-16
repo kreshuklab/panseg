@@ -308,6 +308,7 @@ class Prediction_Widgets:
                     "image": ps_image,
                     "model_id": model_id,
                     "suffix": suffix,
+                    "device": device,
                     "_pbar": pbar,
                     "_to_hide": [self.widget_unet_prediction.call_button],
                 },
