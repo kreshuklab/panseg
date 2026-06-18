@@ -34,6 +34,7 @@ def create_model_config(
     out_channels,
     patch_size,
     dimensionality: Literal["2D", "3D"],
+    layer_order: str,
     sparse,
     f_maps,
     max_num_iters,
@@ -47,6 +48,7 @@ def create_model_config(
 
     train_template["model"]["in_channels"] = in_channels
     train_template["model"]["out_channels"] = out_channels
+    train_template["model"]["layer_order"] = layer_order
     train_template["model"]["f_maps"] = f_maps
     if dimensionality in ["2D", "2d", "2"]:
         train_template["model"]["name"] = "UNet2D"
@@ -88,6 +90,7 @@ def unet_training(
     description: str = "",
     resolution: tuple[float, float, float] = (1.0, 1.0, 1.0),
     pre_trained: Optional[Path] = None,
+    layer_order: str = "bcr",
 ) -> None:
     """
     Main entrypoint for training a new unet model. Gets called when calling `panseg --train` from cli.
@@ -100,7 +103,7 @@ def unet_training(
             out_channels=out_channels,
             f_maps=feature_maps,
             final_sigmoid=final_sigmoid,
-            layer_order="gcr",
+            layer_order=layer_order,
         )
     elif dimensionality in ["3D", "3d", "3"]:
         model = UNet3D(
@@ -108,7 +111,7 @@ def unet_training(
             out_channels=out_channels,
             f_maps=feature_maps,
             final_sigmoid=final_sigmoid,
-            layer_order="gcr",
+            layer_order=layer_order,
         )
     else:
         raise ValueError(f"Unknown dimensionality {dimensionality}")
@@ -170,6 +173,7 @@ def unet_training(
         out_channels,
         patch_size,
         dimensionality,
+        layer_order,
         sparse,
         feature_maps,
         max_num_iters,
@@ -229,6 +233,7 @@ def unet_training(
             feature_maps=feature_maps,
             patch_size=patch_size,
             dimensionality=dimensionality,
+            layer_order=layer_order,
             modality=modality,
             output_type=output_type,
             description=description,

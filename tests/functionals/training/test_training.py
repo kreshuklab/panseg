@@ -79,6 +79,7 @@ class TestCreateModelConfig:
                 out_channels=2,
                 patch_size=[64, 64],
                 dimensionality="2D",
+                layer_order="bcr",
                 sparse=False,
                 f_maps=[16, 32, 64],
                 max_num_iters=1000,
@@ -114,6 +115,7 @@ class TestCreateModelConfig:
                 out_channels=3,
                 patch_size=[32, 64, 64],
                 dimensionality="3D",
+                layer_order="bcr",
                 sparse=True,
                 f_maps=[8, 16, 32],
                 max_num_iters=2000,
@@ -494,8 +496,10 @@ class TestUnetTraining:
     @patch("torch.nn.DataParallel")
     @patch("panseg.functionals.training.train.Adam")
     @patch("panseg.functionals.training.train.ReduceLROnPlateau")
+    @patch("panseg.functionals.training.train.find_batch_size")
     def test_unet_training_multi_gpu(
         self,
+        mock_find_batch_size,
         mock_reduce_lr,
         mock_adam,
         mock_data_parallel,
@@ -540,6 +544,8 @@ class TestUnetTraining:
         ]
 
         mock_isinstance.return_value = False
+
+        mock_find_batch_size.return_value = 1
 
         # Create a temporary dataset directory
         dataset_dir = tmp_path / "dataset"
