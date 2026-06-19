@@ -1,5 +1,5 @@
 name: PanSeg
-version: "2.1.0"
+version: "2.1.1"
 channels:
   - conda-forge
 specs:
