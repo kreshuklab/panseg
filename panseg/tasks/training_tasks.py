@@ -24,6 +24,7 @@ def unet_training_task(
     max_num_iters: int,
     dimensionality: Literal["2D", "3D"],
     device: str,
+    layer_order: str,
     modality: str = "",
     output_type: str = "",
     description: str = "",
@@ -100,6 +101,7 @@ def unet_training_task(
             description=description,
             resolution=resolution,
             pre_trained=pre_trained,
+            layer_order=layer_order,
         )
     except RuntimeError as e:
         if "Output size is too small" in str(e):
