@@ -304,11 +304,19 @@ class Training_Tab:
             )
             return
 
+        layer_order = "bcr"
         pre_model_path = None
         if pretrained is not None:
             model, model_config, pre_model_path = model_zoo.get_model_by_name(
                 pretrained
             )
+            pretrained_lo = model_config["layer_order"]
+            if pretrained_lo != layer_order:
+                logger.debug(
+                    f"Pretrained model has non-default layer_order, changing from {layer_order}"
+                )
+                layer_order = pretrained_lo
+        logger.info(f"Model architecture: {layer_order}")
 
         widgets_to_reset = [
             self.widget_unet_training.pretrained,
@@ -342,6 +350,7 @@ class Training_Tab:
                 "description": description,
                 "resolution": resolution,
                 "pre_trained": pre_model_path,
+                "layer_order": layer_order,
                 "widgets_to_reset": widgets_to_reset,
                 "_pbar": pbar,
                 "_to_hide": [self.widget_unet_training.call_button],

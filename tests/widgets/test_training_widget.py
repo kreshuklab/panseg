@@ -417,10 +417,11 @@ def test_unet_training_feature_maps(training_tab, mocker, tmp_path):
 
 def test_unet_training_pretrained(training_tab, mocker, tmp_path):
     m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
+    m_logger = mocker.patch("panseg.viewer_napari.widgets.training.logger")
     m_get_models = mocker.patch(
         "panseg.viewer_napari.widgets.training.model_zoo.get_model_by_name"
     )
-    m_get_models.return_value = [1, 2, mocker.sentinel]
+    m_get_models.return_value = ["model", {"layer_order": "gcr"}, mocker.sentinel]
     m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
     mocker.patch(
         "panseg.viewer_napari.widgets.training.PATH_PANSEG_MODELS", new=tmp_path
@@ -448,6 +449,8 @@ def test_unet_training_pretrained(training_tab, mocker, tmp_path):
         pbar=None,
     )
 
+    m_logger.info.assert_called_once()
+    m_logger.debug.assert_called_once()
     m_log.assert_called_once()
     m_get_models.assert_called_with("SOMETHING")
     m_schedule.assert_called_once()
