@@ -209,7 +209,7 @@ def find_batch_size(
     model = model.to(device)
     model.eval()
     with torch.no_grad():
-        for batch_size in [1, 2, 4, 8, 16, 32, 64, 128]:
+        for batch_size in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]:
             x = None
             try:
                 x = torch.randn((batch_size, in_channels) + actual_patch_shape).to(

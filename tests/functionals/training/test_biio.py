@@ -30,6 +30,7 @@ def test_make_model_description(tmp_path):
             feature_maps=64,
             patch_size=(16, 32, 64),
             dimensionality="3D",
+            layer_order="bcr",
             modality="mod",
             output_type="boundaries",
             description="dummy model",

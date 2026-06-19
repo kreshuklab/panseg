@@ -110,7 +110,7 @@ class TestUnetTrainingIntegration:
             model_name=model_name,
             in_channels=1,
             out_channels=1,
-            feature_maps=16,
+            feature_maps=[16, 32, 64],
             patch_size=(16, 64, 64),
             max_num_iters=100,
             dimensionality="3D",

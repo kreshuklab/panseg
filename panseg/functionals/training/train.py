@@ -17,6 +17,7 @@ from panseg import (
     PATH_TRAIN_TEMPLATE,
 )
 from panseg.core.zoo import model_zoo
+from panseg.functionals.prediction.utils.size_finder import find_batch_size
 from panseg.functionals.training.augs import Augmenter
 from panseg.functionals.training.biio import make_model_description
 from panseg.functionals.training.h5dataset import HDF5Dataset
@@ -33,6 +34,7 @@ def create_model_config(
     out_channels,
     patch_size,
     dimensionality: Literal["2D", "3D"],
+    layer_order: str,
     sparse,
     f_maps,
     max_num_iters,
@@ -46,6 +48,7 @@ def create_model_config(
 
     train_template["model"]["in_channels"] = in_channels
     train_template["model"]["out_channels"] = out_channels
+    train_template["model"]["layer_order"] = layer_order
     train_template["model"]["f_maps"] = f_maps
     if dimensionality in ["2D", "2d", "2"]:
         train_template["model"]["name"] = "UNet2D"
@@ -87,6 +90,7 @@ def unet_training(
     description: str = "",
     resolution: tuple[float, float, float] = (1.0, 1.0, 1.0),
     pre_trained: Optional[Path] = None,
+    layer_order: str = "bcr",
 ) -> None:
     """
     Main entrypoint for training a new unet model. Gets called when calling `panseg --train` from cli.
@@ -99,6 +103,7 @@ def unet_training(
             out_channels=out_channels,
             f_maps=feature_maps,
             final_sigmoid=final_sigmoid,
+            layer_order=layer_order,
         )
     elif dimensionality in ["3D", "3d", "3"]:
         model = UNet3D(
@@ -106,13 +111,21 @@ def unet_training(
             out_channels=out_channels,
             f_maps=feature_maps,
             final_sigmoid=final_sigmoid,
+            layer_order=layer_order,
         )
     else:
         raise ValueError(f"Unknown dimensionality {dimensionality}")
     logger.info(f"Using {model.__class__.__name__} model for training.")
 
     # Device configuration
-    batch_size = 1
+    batch_size = find_batch_size(
+        model=model,
+        in_channels=in_channels,
+        patch_shape=patch_size,
+        patch_halo=(4, 4, 4),  # some slack
+        device=device,
+    )
+
     if torch.cuda.device_count() > 1 and device != "cpu":
         model = nn.DataParallel(model)
         logger.info(f"Using {torch.cuda.device_count()} GPUs for prediction.")
@@ -132,7 +145,7 @@ def unet_training(
             batch_size=batch_size,
             shuffle=True,
             pin_memory=True,
-            num_workers=1,
+            num_workers=4,
         )
     }
     if len(val_datasets) > 0:
@@ -141,7 +154,7 @@ def unet_training(
             batch_size=batch_size,
             shuffle=False,
             pin_memory=True,
-            num_workers=1,
+            num_workers=4,
         )
     else:
         loaders["val"] = []
@@ -160,6 +173,7 @@ def unet_training(
         out_channels,
         patch_size,
         dimensionality,
+        layer_order,
         sparse,
         feature_maps,
         max_num_iters,
@@ -219,6 +233,7 @@ def unet_training(
             feature_maps=feature_maps,
             patch_size=patch_size,
             dimensionality=dimensionality,
+            layer_order=layer_order,
             modality=modality,
             output_type=output_type,
             description=description,

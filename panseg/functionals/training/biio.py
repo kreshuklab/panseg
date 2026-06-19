@@ -33,6 +33,7 @@ def make_model_description(
     feature_maps: int | list[int] | tuple[int, ...],
     patch_size: tuple[int, int, int],
     dimensionality: Literal["2D", "3D"],
+    layer_order: str,
     modality: str,
     output_type: str,
     description: str,
@@ -165,6 +166,7 @@ def make_model_description(
             "in_channels": in_channels,
             "out_channels": out_channels,
             "f_maps": feature_maps,
+            "layer_order": layer_order,
         },
     )
 
