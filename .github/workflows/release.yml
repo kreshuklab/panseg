@@ -56,7 +56,7 @@ jobs:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   build_conda:
-    # needs: test-matrix
+    needs: test-matrix
     runs-on: ubuntu-latest
     defaults:
       run:
