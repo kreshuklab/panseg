@@ -451,10 +451,11 @@ class Docs_Container:
 
         button = PushButton(text="Open Documentation")
         button.changed.connect(self.open_docs)
+        hover_text = Label(value="Hover over any field for more details!")
         container = Container(
-            widgets=[button],
+            widgets=[button, hover_text],
             label=f'<img src="{self.logo_path}" width=250>',
-            layout="horizontal",
+            layout="vertical",
             labels=False,
         )
         container[0].show()
