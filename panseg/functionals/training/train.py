@@ -6,6 +6,7 @@ from typing import Literal, Optional, Tuple
 import numpy as np
 import torch
 import yaml
+from bioimageio.core import test_model
 from torch import nn
 from torch.optim.adam import Adam
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -224,6 +225,13 @@ def unet_training(
     np.save(checkpoint_dir / "test_in.npy", test_in.numpy())
     np.save(checkpoint_dir / "test_out.npy", test_out.detach().cpu().numpy())
 
+    try:
+        axis_min_sizes = np.min(
+            (model_zoo.compute_3D_halo_for_pytorch3dunet(model), patch_size), axis=0
+        )
+    except ValueError:
+        axis_min_sizes = patch_size
+
     with chdir(checkpoint_dir):
         model_desc = make_model_description(
             weights=weights,
@@ -231,7 +239,7 @@ def unet_training(
             in_channels=in_channels,
             out_channels=out_channels,
             feature_maps=feature_maps,
-            patch_size=patch_size,
+            axis_min_sizes=axis_min_sizes,
             dimensionality=dimensionality,
             layer_order=layer_order,
             modality=modality,
@@ -242,6 +250,7 @@ def unet_training(
             test_out=Path("test_out.npy"),
             panseg_config=checkpoint_dir / FILE_CONFIG_TRAIN_YAML,
         )
+        test_model(model_desc).display()
         model_desc.package(
             checkpoint_dir
             / f"biio_model_{''.join(c for c in model_name if c.isalnum())}.zip"

@@ -608,7 +608,7 @@ class ModelZoo:
         return halo
 
     def compute_3D_halo_for_pytorch3dunet(
-        self, module: AbstractUNet
+        self, module: UNet2D | UNet3D
     ) -> tuple[int, int, int]:
         if isinstance(module, UNet3D):
             halo = self.compute_halo(module)
