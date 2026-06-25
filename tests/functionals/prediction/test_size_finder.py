@@ -1,5 +1,6 @@
 import os
 
+import numpy as np
 import pytest
 import torch
 
@@ -90,6 +91,9 @@ except AssertionError:  # catch Pytorch not installed with CUDA support
             (100, 100, 100),
             ((192, 192, 192), (0, 0, 0)),
         ),
+        ((16, 8, 8), (10, 10, 10), (4, 4, 4), ((7, 8, 8), (4, 0, 0))),
+        ((16, 10, 10), (10, 10, 10), (4, 4, 4), ((2, 2, 2), (4, 4, 4))),
+        ((12, 12, 8), (10, 10, 10), (4, 4, 4), ((3, 3, 8), (4, 4, 0))),
     ],
 )
 def test_find_patch_and_halo_shapes(
@@ -99,6 +103,10 @@ def test_find_patch_and_halo_shapes(
         full_volume_shape, max_patch_shape, min_halo_shape
     )
     assert result == expected
+
+    double_halo_out = np.array(result[1]) * 2
+    assert np.prod(result[0] + double_halo_out) <= np.prod(max_patch_shape)
+
     double_halo_shape = (
         min_halo_shape[0] * 2,
         min_halo_shape[1] * 2,
