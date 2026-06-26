@@ -317,7 +317,7 @@ def make_model_description(
     model_desc = ModelDescr(
         name=model_name,
         description=description,
-        tags=["UNet", modality, output_type],
+        tags=["UNet", "PanSeg", modality, output_type],
         authors=parse_authors(authors),
         cite=[PANSEG_CITATION, *parse_citations(additional_citations)],
         license=license,
