@@ -173,7 +173,7 @@ def make_model_description(
     model_desc = ModelDescr(
         name=model_name,
         description=description,
-        tags=["UNet", modality, output_type],
+        tags=["UNet", "PanSeg", modality, output_type],
         inputs=[input_desc],
         outputs=[output_desc],
         weights=WeightsDescr(
