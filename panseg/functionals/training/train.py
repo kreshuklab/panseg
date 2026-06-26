@@ -212,6 +212,9 @@ def unet_training(
 
     # Obtain and save test in- and output for biio
     test_in, _ = next(iter(loaders["train"]))
+    # normalize, as this is post-augmentations
+    test_in = (test_in - test_in.mean()) / (test_in.std() + 1e-6)
+
     if isinstance(model, UNet2D):
         # remove the singleton z-dimension from the input
         # Extra dim was only added in the panseg loader for the augmentations
