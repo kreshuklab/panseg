@@ -298,3 +298,19 @@ def test_on_widget_unet_prediction_panseg_filter_change(segmentation_tab, mocker
 def test_on_any_metadata_changed(segmentation_tab):
     segmentation_tab.prediction_widgets.model_filters[0].value = "2D"
     segmentation_tab.prediction_widgets.model_filters[0].value = "3D"
+
+
+def test_device_choices_include_mps_when_available(mocker):
+    mocker.patch("torch.backends.mps.is_available", return_value=True)
+
+    tab = Segmentation_Tab()
+
+    assert "mps" in tab.prediction_widgets.ALL_DEVICES
+
+
+def test_device_choices_exclude_mps_when_unavailable(mocker):
+    mocker.patch("torch.backends.mps.is_available", return_value=False)
+
+    tab = Segmentation_Tab()
+
+    assert "mps" not in tab.prediction_widgets.ALL_DEVICES

@@ -829,3 +829,19 @@ def test_on_segmentation_change(training_tab, mocker, napari_segmentation):
     m_update_dimensionality = mocker.patch.object(training_tab, "update_dimensionality")
     training_tab._on_image_change(napari_segmentation)
     m_update_dimensionality.assert_called_once()
+
+
+def test_device_choices_include_mps_when_available(mocker):
+    mocker.patch("torch.backends.mps.is_available", return_value=True)
+
+    tab = Training_Tab(None)
+
+    assert "mps" in tab.ALL_DEVICES
+
+
+def test_device_choices_exclude_mps_when_unavailable(mocker):
+    mocker.patch("torch.backends.mps.is_available", return_value=False)
+
+    tab = Training_Tab(None)
+
+    assert "mps" not in tab.ALL_DEVICES
