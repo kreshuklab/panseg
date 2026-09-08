@@ -8,6 +8,10 @@ from panseg.functionals.training.model import UNet2D
 
 logger = logging.getLogger(__name__)
 
+# Voxel-budget multiplier applied to the probed maximum patch shape whenever a derived
+# patch shape fails the batch-size-1 OOM check (see `find_feasible_patch_and_halo_shapes`).
+FEASIBILITY_SHRINK = 0.75
+
 
 def _is_2d_model(model: nn.Module) -> bool:
     if isinstance(model, nn.DataParallel):
@@ -177,6 +181,84 @@ def find_a_max_patch_shape(
         (1, 16 * best_n, 16 * best_n)
         if nn_dim == 2
         else (16 * best_n, 16 * best_n, 16 * best_n)
+    )
+
+
+def find_feasible_patch_and_halo_shapes(
+    model: nn.Module,
+    in_channels: int,
+    full_volume_shape: tuple[int, int, int],
+    min_halo_shape: tuple[int, int, int],
+    device: str,
+    max_attempts: int = 5,
+    both_sides: bool = False,
+) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """Recommend a patch shape and halo size that is verified to fit on the device.
+
+    `find_a_max_patch_shape` probes the GPU with isotropic inputs and returns a tight maximum
+    patch shape with no safety margin. `find_patch_and_halo_shapes` then redistributes that
+    voxel budget to match the aspect ratio of the full volume, so the shape that is actually
+    fed to the model at prediction time can require more GPU memory than the probed maximum
+    (peak memory does not depend on the voxel count alone), and the amount of free memory can
+    change between probing and prediction. On such machines the batch size determination
+    OOMs even for batch size 1 and prediction aborts (see issue #578).
+
+    To prevent that, the shape derived here is verified with an actual batch-size-1 forward
+    pass via `will_CUDA_OOM`. If it does not fit, the voxel budget of the probed maximum is
+    shrunk by `FEASIBILITY_SHRINK` and the shape is derived and verified again, until a
+    feasible shape is found or `max_attempts` is reached.
+
+    Args:
+        model (nn.Module): The model that will run the prediction.
+        in_channels (int): Number of input channels to the model.
+        full_volume_shape (tuple[int, int, int]): The shape of the full 3D volume (Z, Y, X).
+        min_halo_shape (tuple[int, int, int]): The minimum required halo size per side (Z, Y, X).
+        device (str): The computation device ('cpu', 'cuda', etc.).
+        max_attempts (int, optional): Maximum number of derive-and-verify attempts.
+            Defaults to 5.
+        both_sides (bool, optional): If True, the `min_halo_shape` is applied symmetrically
+            on both sides of the patch. Defaults to False.
+
+    Returns:
+        tuple[tuple[int, int, int], tuple[int, int, int]]:
+            - Verified patch shape `(Z, Y, X)`.
+            - Halo size on one side `(Z, Y, X)`.
+
+    Raises:
+        RuntimeError: If no feasible patch shape is found within `max_attempts` attempts.
+    """
+    max_patch_shape = find_a_max_patch_shape(model, in_channels, device)
+
+    if device == "cpu":
+        return find_patch_and_halo_shapes(
+            full_volume_shape, max_patch_shape, min_halo_shape, both_sides
+        )
+    patch, halo = (None, None)
+    for attempt in range(max_attempts):
+        patch, halo = find_patch_and_halo_shapes(
+            full_volume_shape, max_patch_shape, min_halo_shape, both_sides
+        )
+        if not will_CUDA_OOM(
+            model, in_channels, patch, halo, batch_size=1, device=device
+        ):
+            if attempt > 0:
+                logger.info(
+                    f"Using reduced patch shape {patch} and halo {halo} after "
+                    f"{attempt} shrink(s) of the maximum patch shape."
+                )
+            return patch, halo
+        logger.warning(
+            f"Auto-determined patch shape {patch} with halo {halo} does not fit on "
+            f"{device}; retrying with a {1 - FEASIBILITY_SHRINK:.0%} smaller voxel budget."
+        )
+        max_patch_shape = tuple(
+            max(1, int(dim * FEASIBILITY_SHRINK ** (1 / 3))) for dim in max_patch_shape
+        )
+
+    raise RuntimeError(
+        f"Could not determine a feasible patch shape on {device} after {max_attempts} "
+        f"attempts (last tried patch shape {patch} with halo {halo}). "
+        "Please reduce the patch size manually or free up GPU memory."
     )
 
 

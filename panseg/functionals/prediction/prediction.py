@@ -22,8 +22,7 @@ from panseg.functionals.dataprocessing.dataprocessing import (
 from panseg.functionals.prediction.utils.array_dataset import ArrayDataset
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
 from panseg.functionals.prediction.utils.size_finder import (
-    find_a_max_patch_shape,
-    find_patch_and_halo_shapes,
+    find_feasible_patch_and_halo_shapes,
 )
 from panseg.functionals.prediction.utils.slice_builder import SliceBuilder
 from panseg.functionals.prediction.utils.utils import get_stride_shape
@@ -244,9 +243,6 @@ def unet_prediction(
             patch_halo = (0, 0, 0)
 
     if patch is None:
-        maximum_patch_shape = find_a_max_patch_shape(
-            model, model_config["in_channels"], device
-        )
         if input_layout == "YX":
             raw_shape = (1,) + raw.shape
         elif input_layout == "ZYX":
@@ -257,8 +253,13 @@ def unet_prediction(
             raw_shape = raw.shape[1:]
 
         assert len(raw_shape) == 3
-        patch, patch_halo = find_patch_and_halo_shapes(
-            raw_shape, maximum_patch_shape, patch_halo, both_sides=False
+        patch, patch_halo = find_feasible_patch_and_halo_shapes(
+            model,
+            model_config["in_channels"],
+            raw_shape,
+            patch_halo,
+            device,
+            both_sides=False,
         )
 
     logger.info(

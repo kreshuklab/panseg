@@ -3,12 +3,16 @@ import os
 import numpy as np
 import pytest
 import torch
+from torch import nn
 
 from panseg.core.zoo import model_zoo
+from panseg.functionals.prediction.utils import size_finder
 from panseg.functionals.prediction.utils.size_finder import (
     find_a_max_patch_shape,
     find_batch_size,
+    find_feasible_patch_and_halo_shapes,
     find_patch_and_halo_shapes,
+    will_CUDA_OOM,
 )
 
 IN_GITHUB_ACTIONS = (
@@ -27,6 +31,7 @@ ALL_TESTED_GPUS = [
     "NVIDIA A100-PCIE-40GB",
     "NVIDIA A40",
     "NVIDIA GeForce RTX 4050 Laptop GPU",
+    "NVIDIA GeForce RTX 4090",
 ]
 MAX_PATCH_SHAPES = {
     "generic_confocal_3D_unet": {
@@ -35,6 +40,7 @@ MAX_PATCH_SHAPES = {
         "NVIDIA A100-PCIE-40GB": (272, 272, 272),
         "NVIDIA A40": (272, 272, 272),
         "NVIDIA GeForce RTX 4050 Laptop GPU": (160, 160, 160),
+        "NVIDIA GeForce RTX 4090": (256, 256, 256),
     },
     "confocal_2D_unet_ovules_ds2x": {
         "NVIDIA GeForce RTX 2080 Ti": (
@@ -50,6 +56,7 @@ MAX_PATCH_SHAPES = {
         "NVIDIA A100-PCIE-40GB": (1, 3200, 3200),
         "NVIDIA A40": (1, 3200, 3200),
         "NVIDIA GeForce RTX 4050 Laptop GPU": (1, 1280, 1280),
+        "NVIDIA GeForce RTX 4090": (1, 2560, 2560),
     },
 }
 
@@ -58,6 +65,11 @@ try:
     GPU_DEVICE_NAME = torch.cuda.get_device_name(0) if not IN_GITHUB_ACTIONS else ""
 except AssertionError:  # catch Pytorch not installed with CUDA support
     GPU_DEVICE_NAME = ""
+
+# Fixed scenario for the feasibility-loop unit tests (no GPU required, will_CUDA_OOM is faked)
+VOL = (48, 1536, 1536)
+HALO = (0, 44, 44)
+PROBED_MAX = (256, 256, 256)
 
 
 @pytest.mark.parametrize(
@@ -118,6 +130,85 @@ def test_find_patch_and_halo_shapes(
     assert result == expected
 
 
+class FakeOomProbe:
+    """Stand-in for will_CUDA_OOM: OOMs iff the actual forward shape exceeds `threshold` voxels."""
+
+    def __init__(self):
+        self.threshold = None  # None -> never OOM
+        self.verified_shapes = []
+
+    def __call__(self, model, in_channels, patch_shape, patch_halo, batch_size, device):
+        actual = tuple(patch_shape[i] + 2 * patch_halo[i] for i in range(3))
+        self.verified_shapes.append(actual)
+        if self.threshold is None:
+            return False
+        return int(np.prod(actual)) > self.threshold
+
+
+@pytest.fixture()
+def fake_oom_probe(monkeypatch):
+    """Deterministic stand-ins for the GPU-probing pieces of the feasibility loop."""
+    probe = FakeOomProbe()
+    monkeypatch.setattr(size_finder, "will_CUDA_OOM", probe)
+    monkeypatch.setattr(
+        size_finder,
+        "find_a_max_patch_shape",
+        lambda model, in_channels, device: PROBED_MAX,
+    )
+    return probe
+
+
+def test_find_patch_and_halo_shapes_feasibility_loop_drives_oom_probe(fake_oom_probe):
+    expected = find_patch_and_halo_shapes(VOL, PROBED_MAX, HALO)
+    result = find_feasible_patch_and_halo_shapes(
+        nn.Module(), 1, VOL, HALO, device="cuda"
+    )
+    assert result == expected
+    assert len(fake_oom_probe.verified_shapes) == 1
+
+
+def test_find_patch_and_halo_shapes_feasibility_loop_shrinks_until_verified(
+    fake_oom_probe,
+):
+    fake_oom_probe.threshold = (
+        15_000_000  # first attempt (16.8M voxels) OOMs, the shrunken one fits
+    )
+
+    result = find_feasible_patch_and_halo_shapes(
+        nn.Module(), 1, VOL, HALO, device="cuda"
+    )
+
+    result_voxels = int(np.prod([result[0][i] + 2 * result[1][i] for i in range(3)]))
+    assert result_voxels <= fake_oom_probe.threshold
+    assert result_voxels < int(np.prod(fake_oom_probe.verified_shapes[0]))
+    assert len(fake_oom_probe.verified_shapes) == 2
+
+
+def test_find_patch_and_halo_shapes_feasibility_loop_raises_when_nothing_fits(
+    fake_oom_probe,
+):
+    fake_oom_probe.threshold = 1  # every attempt OOMs
+
+    with pytest.raises(
+        RuntimeError, match="Could not determine a feasible patch shape"
+    ):
+        find_feasible_patch_and_halo_shapes(
+            nn.Module(), 1, VOL, HALO, device="cuda", max_attempts=3
+        )
+    assert len(fake_oom_probe.verified_shapes) == 3
+
+
+def test_find_patch_and_halo_shapes_feasibility_loop_skips_verification_on_cpu(
+    fake_oom_probe,
+):
+    result = find_feasible_patch_and_halo_shapes(
+        nn.Module(), 1, VOL, HALO, device="cpu"
+    )
+
+    assert result == find_patch_and_halo_shapes(VOL, PROBED_MAX, HALO)
+    assert fake_oom_probe.verified_shapes == []
+
+
 @pytest.mark.skipif(
     GPU_DEVICE_NAME not in ALL_TESTED_GPUS,
     reason="Measured devices are not available.",
@@ -157,3 +248,51 @@ def test_find_patch_shape_error_handling():
     if "NVIDIA A40" == GPU_DEVICE_NAME:
         print("NVIDIA A40 tested")
         assert found_patch_shape == (352, 352, 352)
+
+
+@pytest.mark.skipif(
+    IN_GITHUB_ACTIONS or GPU_DEVICE_NAME == "",
+    reason="CUDA device not available.",
+)
+def test_find_feasible_patch_and_halo_shapes_shrinks_on_oom(monkeypatch):
+    """Regression for issue #578: when GPU memory becomes unavailable between the
+    max-patch probe and the batch size determination (e.g. other processes on a shared
+    GPU), the auto-determined patch shape must shrink until it fits instead of raising
+    an OOM error at batch size 1."""
+    model, _, _ = model_zoo.get_model_by_name(
+        "confocal_3D_unet_ovules_ds3x", model_update=DOWNLOAD_MODELS
+    )
+    device = "cuda:0"
+    full_volume_shape = (48, 1536, 1536)
+    min_halo_shape = model_zoo.compute_3D_halo_for_pytorch3dunet(model)
+
+    free, total = torch.cuda.mem_get_info()
+    if free < 3 * 2**30:  # not enough spare VRAM to simulate competing allocations
+        pytest.skip("Less than 3 GiB of free VRAM available.")
+    reference = find_patch_and_halo_shapes(
+        full_volume_shape, find_a_max_patch_shape(model, 1, device), min_halo_shape
+    )
+
+    real_find = size_finder.find_patch_and_halo_shapes
+    holder = []
+
+    def reserving_find(*args, **kwargs):
+        if not holder:  # emulate memory appearing after the max-patch probe
+            holder.append(
+                torch.empty(max(total // 10, 2**30), dtype=torch.uint8, device=device)
+            )
+        return real_find(*args, **kwargs)
+
+    monkeypatch.setattr(size_finder, "find_patch_and_halo_shapes", reserving_find)
+    try:
+        patch, patch_halo = find_feasible_patch_and_halo_shapes(
+            model, 1, full_volume_shape, min_halo_shape, device
+        )
+    finally:
+        holder.clear()
+        torch.cuda.empty_cache()
+
+    # the returned shape is verified to fit even with the competing allocation in place
+    assert not will_CUDA_OOM(model, 1, patch, patch_halo, 1, device)
+    # and the shrink loop actually engaged (the unshrunken shape no longer fit)
+    assert int(np.prod(patch)) < int(np.prod(reference[0]))
