@@ -19,7 +19,7 @@ def _is_2d_model(model: nn.Module) -> bool:
     return isinstance(model, UNet2D)
 
 
-def find_patch_and_halo_shapes(
+def derive_patch_and_halo_shapes(
     full_volume_shape: tuple[int, int, int],
     max_patch_shape: tuple[int, int, int],
     min_halo_shape: tuple[int, int, int],
@@ -97,7 +97,7 @@ def find_patch_and_halo_shapes(
         return tuple(patch_size), tuple(halo_shape)
 
 
-def find_a_max_patch_shape(
+def probe_max_patch_shape(
     model: nn.Module,
     in_channels: int,
     device: str,
@@ -195,8 +195,8 @@ def find_feasible_patch_and_halo_shapes(
 ) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     """Recommend a patch shape and halo size that is verified to fit on the device.
 
-    `find_a_max_patch_shape` probes the GPU with isotropic inputs and returns a tight maximum
-    patch shape with no safety margin. `find_patch_and_halo_shapes` then redistributes that
+    `probe_max_patch_shape` probes the GPU with isotropic inputs and returns a tight maximum
+    patch shape with no safety margin. `derive_patch_and_halo_shapes` then redistributes that
     voxel budget to match the aspect ratio of the full volume, so the shape that is actually
     fed to the model at prediction time can require more GPU memory than the probed maximum
     (peak memory does not depend on the voxel count alone), and the amount of free memory can
@@ -227,15 +227,15 @@ def find_feasible_patch_and_halo_shapes(
     Raises:
         RuntimeError: If no feasible patch shape is found within `max_attempts` attempts.
     """
-    max_patch_shape = find_a_max_patch_shape(model, in_channels, device)
+    max_patch_shape = probe_max_patch_shape(model, in_channels, device)
 
     if device == "cpu":
-        return find_patch_and_halo_shapes(
+        return derive_patch_and_halo_shapes(
             full_volume_shape, max_patch_shape, min_halo_shape, both_sides
         )
     patch, halo = (None, None)
     for attempt in range(max_attempts):
-        patch, halo = find_patch_and_halo_shapes(
+        patch, halo = derive_patch_and_halo_shapes(
             full_volume_shape, max_patch_shape, min_halo_shape, both_sides
         )
         if not will_CUDA_OOM(

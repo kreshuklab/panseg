@@ -8,10 +8,10 @@ from torch import nn
 from panseg.core.zoo import model_zoo
 from panseg.functionals.prediction.utils import size_finder
 from panseg.functionals.prediction.utils.size_finder import (
-    find_a_max_patch_shape,
+    derive_patch_and_halo_shapes,
     find_batch_size,
     find_feasible_patch_and_halo_shapes,
-    find_patch_and_halo_shapes,
+    probe_max_patch_shape,
     will_CUDA_OOM,
 )
 
@@ -108,10 +108,10 @@ PROBED_MAX = (256, 256, 256)
         ((12, 12, 8), (10, 10, 10), (4, 4, 4), ((3, 3, 8), (4, 4, 0))),
     ],
 )
-def test_find_patch_and_halo_shapes(
+def test_derive_patch_and_halo_shapes(
     full_volume_shape, max_patch_shape, min_halo_shape, expected
 ):
-    result = find_patch_and_halo_shapes(
+    result = derive_patch_and_halo_shapes(
         full_volume_shape, max_patch_shape, min_halo_shape
     )
     assert result == expected
@@ -124,7 +124,7 @@ def test_find_patch_and_halo_shapes(
         min_halo_shape[1] * 2,
         min_halo_shape[2] * 2,
     )
-    result = find_patch_and_halo_shapes(
+    result = derive_patch_and_halo_shapes(
         full_volume_shape, max_patch_shape, double_halo_shape, both_sides=True
     )
     assert result == expected
@@ -152,14 +152,14 @@ def fake_oom_probe(monkeypatch):
     monkeypatch.setattr(size_finder, "will_CUDA_OOM", probe)
     monkeypatch.setattr(
         size_finder,
-        "find_a_max_patch_shape",
+        "probe_max_patch_shape",
         lambda model, in_channels, device: PROBED_MAX,
     )
     return probe
 
 
-def test_find_patch_and_halo_shapes_feasibility_loop_drives_oom_probe(fake_oom_probe):
-    expected = find_patch_and_halo_shapes(VOL, PROBED_MAX, HALO)
+def test_find_feasible_patch_and_halo_shapes_drives_oom_probe(fake_oom_probe):
+    expected = derive_patch_and_halo_shapes(VOL, PROBED_MAX, HALO)
     result = find_feasible_patch_and_halo_shapes(
         nn.Module(), 1, VOL, HALO, device="cuda"
     )
@@ -167,7 +167,7 @@ def test_find_patch_and_halo_shapes_feasibility_loop_drives_oom_probe(fake_oom_p
     assert len(fake_oom_probe.verified_shapes) == 1
 
 
-def test_find_patch_and_halo_shapes_feasibility_loop_shrinks_until_verified(
+def test_find_feasible_patch_and_halo_shapes_shrinks_until_verified(
     fake_oom_probe,
 ):
     fake_oom_probe.threshold = (
@@ -184,7 +184,7 @@ def test_find_patch_and_halo_shapes_feasibility_loop_shrinks_until_verified(
     assert len(fake_oom_probe.verified_shapes) == 2
 
 
-def test_find_patch_and_halo_shapes_feasibility_loop_raises_when_nothing_fits(
+def test_find_feasible_patch_and_halo_shapes_raises_when_nothing_fits(
     fake_oom_probe,
 ):
     fake_oom_probe.threshold = 1  # every attempt OOMs
@@ -198,14 +198,14 @@ def test_find_patch_and_halo_shapes_feasibility_loop_raises_when_nothing_fits(
     assert len(fake_oom_probe.verified_shapes) == 3
 
 
-def test_find_patch_and_halo_shapes_feasibility_loop_skips_verification_on_cpu(
+def test_find_feasible_patch_and_halo_shapes_skips_verification_on_cpu(
     fake_oom_probe,
 ):
     result = find_feasible_patch_and_halo_shapes(
         nn.Module(), 1, VOL, HALO, device="cpu"
     )
 
-    assert result == find_patch_and_halo_shapes(VOL, PROBED_MAX, HALO)
+    assert result == derive_patch_and_halo_shapes(VOL, PROBED_MAX, HALO)
     assert fake_oom_probe.verified_shapes == []
 
 
@@ -216,7 +216,7 @@ def test_find_patch_and_halo_shapes_feasibility_loop_skips_verification_on_cpu(
 @pytest.mark.parametrize("model_name", MAX_PATCH_SHAPES.keys())
 def test_find_patch_shape(model_name):
     model, _, _ = model_zoo.get_model_by_name(model_name, model_update=DOWNLOAD_MODELS)
-    found_patch_shape = find_a_max_patch_shape(model, 1, "cuda:0")
+    found_patch_shape = probe_max_patch_shape(model, 1, "cuda:0")
     expected_patch_shape = MAX_PATCH_SHAPES[model_name][GPU_DEVICE_NAME]
     assert found_patch_shape == expected_patch_shape
 
@@ -241,7 +241,7 @@ def test_find_patch_shape_error_handling():
     model, _, _ = model_zoo.get_model_by_name(
         "PanSeg_3Dnuc_platinum", model_update=DOWNLOAD_MODELS
     )
-    found_patch_shape = find_a_max_patch_shape(model, 1, "cuda:0")
+    found_patch_shape = probe_max_patch_shape(model, 1, "cuda:0")
     if "NVIDIA A100-PCIE-40GB" == GPU_DEVICE_NAME:
         print("NVIDIA A100-PCIE-40GB tested")
         assert found_patch_shape == (352, 352, 352)
@@ -269,11 +269,11 @@ def test_find_feasible_patch_and_halo_shapes_shrinks_on_oom(monkeypatch):
     free, total = torch.cuda.mem_get_info()
     if free < 3 * 2**30:  # not enough spare VRAM to simulate competing allocations
         pytest.skip("Less than 3 GiB of free VRAM available.")
-    reference = find_patch_and_halo_shapes(
-        full_volume_shape, find_a_max_patch_shape(model, 1, device), min_halo_shape
+    reference = derive_patch_and_halo_shapes(
+        full_volume_shape, probe_max_patch_shape(model, 1, device), min_halo_shape
     )
 
-    real_find = size_finder.find_patch_and_halo_shapes
+    real_find = size_finder.derive_patch_and_halo_shapes
     holder = []
 
     def reserving_find(*args, **kwargs):
@@ -283,7 +283,7 @@ def test_find_feasible_patch_and_halo_shapes_shrinks_on_oom(monkeypatch):
             )
         return real_find(*args, **kwargs)
 
-    monkeypatch.setattr(size_finder, "find_patch_and_halo_shapes", reserving_find)
+    monkeypatch.setattr(size_finder, "derive_patch_and_halo_shapes", reserving_find)
     try:
         patch, patch_halo = find_feasible_patch_and_halo_shapes(
             model, 1, full_volume_shape, min_halo_shape, device
