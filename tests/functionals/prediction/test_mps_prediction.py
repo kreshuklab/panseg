@@ -36,13 +36,13 @@ def test_unet_prediction_with_mps_device(tmp_path):
 """
     )
 
-    raw = np.random.rand(16, 24, 32).astype("float32")  # ZYX
+    raw = np.random.rand(16, 64, 64).astype("float32")  # ZYX
     pmap = unet_prediction(
         raw=raw,
         input_layout="ZYX",
         model_name=None,
         model_id=None,
-        patch=(8, 8, 8),
+        patch=None,
         patch_halo=(0, 0, 0),
         config_path=config_path,
         model_weights_path=weights_path,
