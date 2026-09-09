@@ -1,8 +1,12 @@
+import logging
 import os
+from pathlib import Path
 
 import pytest
 import torch
 
+import panseg.core.zoo as zoo_module
+from panseg import FILE_BEST_MODEL_PYTORCH, FILE_CONFIG_TRAIN_YAML
 from panseg.core.zoo import model_zoo
 from panseg.functionals.training.model import UNet2D
 from tests.conftest import IS_CUDA_AVAILABLE
@@ -72,3 +76,71 @@ class TestBioImageIOModelZoo:
         model, _, _ = model_zoo.get_model_by_id(model_id)
         halo = model_zoo.compute_halo(model)
         assert halo == 44
+
+
+ZOO_MODEL_NAME = "confocal_2D_unet_ovules_ds2x"
+ZOO_MODEL_URL = (
+    "https://zenodo.org/record/7772709/files/confocal_2D_unet_ovules_ds2x.pytorch"
+)
+
+
+class TestCheckModelsVerification:
+    """check_models must verify files on disk and fail loudly when missing."""
+
+    def test_files_present_no_download_attempted(self, mocker, monkeypatch, tmp_path):
+        model_dir = tmp_path / "generic_confocal_3D_unet"
+        model_dir.mkdir()
+        (model_dir / FILE_CONFIG_TRAIN_YAML).write_text("model: {}")
+        (model_dir / FILE_BEST_MODEL_PYTORCH).write_bytes(b"weights")
+        monkeypatch.setattr(zoo_module, "PATH_PANSEG_MODELS", tmp_path)
+        spy = mocker.patch.object(model_zoo, "_download_model_files")
+
+        model_zoo.check_models("generic_confocal_3D_unet")
+
+        spy.assert_not_called()
+
+    def test_download_succeeds_verified_and_logged(
+        self, mocker, monkeypatch, tmp_path, caplog
+    ):
+        monkeypatch.setattr(zoo_module, "PATH_PANSEG_MODELS", tmp_path)
+
+        def fake_download(model_url, out_dir, config_only=False):
+            model_dir = Path(out_dir)
+            (model_dir / FILE_CONFIG_TRAIN_YAML).write_text("model: {}")
+            if not config_only:
+                (model_dir / FILE_BEST_MODEL_PYTORCH).write_bytes(b"weights")
+
+        mocker.patch.object(
+            model_zoo, "_download_model_files", side_effect=fake_download
+        )
+
+        with caplog.at_level(logging.INFO, logger="panseg.core.zoo"):
+            model_zoo.check_models(ZOO_MODEL_NAME)
+
+        assert f"Download finished for {ZOO_MODEL_NAME}" in caplog.text
+
+    def test_download_leaves_files_missing_raises_with_name_and_url(
+        self, mocker, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr(zoo_module, "PATH_PANSEG_MODELS", tmp_path)
+        # no-op downloader: simulates a download that failed silently
+        mocker.patch.object(model_zoo, "_download_model_files")
+
+        with pytest.raises(FileNotFoundError) as excinfo:
+            model_zoo.check_models(ZOO_MODEL_NAME)
+
+        message = str(excinfo.value)
+        assert ZOO_MODEL_NAME in message
+        assert ZOO_MODEL_URL in message
+
+    def test_config_only_skip_when_config_present(self, mocker, monkeypatch, tmp_path):
+        model_dir = tmp_path / "generic_confocal_3D_unet"
+        model_dir.mkdir()
+        (model_dir / FILE_CONFIG_TRAIN_YAML).write_text("model: {}")
+        monkeypatch.setattr(zoo_module, "PATH_PANSEG_MODELS", tmp_path)
+        spy = mocker.patch.object(model_zoo, "_download_model_files")
+
+        # only the config was requested and it is present: no download
+        model_zoo.check_models("generic_confocal_3D_unet", config_only=True)
+
+        spy.assert_not_called()

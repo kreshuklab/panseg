@@ -319,7 +319,12 @@ class ModelZoo:
     def check_models(
         self, model_name: str, update_files: bool = False, config_only: bool = False
     ) -> None:
-        """Check and download model files and configurations as needed."""
+        """Check and download model files and configurations as needed.
+
+        After the download step, verifies that the expected files are on disk
+        and raises a FileNotFoundError naming the model (and its zoo URL when
+        it has one) if anything is missing.
+        """
         model_dir = PATH_PANSEG_MODELS / model_name
         model_dir.mkdir(parents=True, exist_ok=True)
 
@@ -327,25 +332,39 @@ class ModelZoo:
             f"check_models, model_name: {model_name}, "
             f"update_files {update_files}, config_only {config_only}"
         )
-        # Check if the model exists and download it if it doesn't
-        loaded = all(
-            [
-                (model_dir / FILE_CONFIG_TRAIN_YAML).exists(),
-                (model_dir / FILE_BEST_MODEL_PYTORCH).exists(),
-            ]
-        )
-        if (not loaded) or update_files:
-            model_file = PATH_MODEL_ZOO
-            config = load_config(model_file)
 
+        expected_files = [FILE_CONFIG_TRAIN_YAML]
+        if not config_only:
+            expected_files.append(FILE_BEST_MODEL_PYTORCH)
+
+        model_url = None
+        downloaded = False
+        missing = [f for f in expected_files if not (model_dir / f).exists()]
+        if missing or update_files:
+            config = load_config(PATH_MODEL_ZOO)
             model_url = config.get(model_name, {}).get("model_url")
             if model_url:
                 self._download_model_files(model_url, model_dir, config_only)
-                logger_zoo.info(f"Download finished for {model_name}")
+                downloaded = True
             else:
                 logger_zoo.warning(
                     f"Model {model_name} not found in the models zoo configuration."
                 )
+            missing = [f for f in expected_files if not (model_dir / f).exists()]
+
+        if missing:
+            raise FileNotFoundError(
+                f"Model '{model_name}' has missing files after the download step: "
+                f"{', '.join(missing)} (expected in {model_dir}). "
+                + (
+                    f"Model URL: {model_url}"
+                    if model_url is not None
+                    else "The model was not found in the models zoo configuration."
+                )
+            )
+
+        if downloaded:
+            logger_zoo.info(f"Download finished for {model_name}")
 
     def _get_model_config_path_by_name(self, model_name: str) -> Path:
         """Return the path to the training configuration for a model in zoo."""

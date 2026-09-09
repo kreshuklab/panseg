@@ -1,7 +1,10 @@
+from unittest.mock import MagicMock
+
 import pytest
 import requests
 
-from panseg.utils import check_version
+import panseg.utils as utils_mod
+from panseg.utils import check_version, download_file
 
 
 @pytest.fixture
@@ -197,3 +200,77 @@ def test_check_version_value_error(mock_logger, requests_mock):
     mock_logger.warning.assert_called_once_with(
         "Could not parse version information. Error: Invalid version: 'invalid_version'"
     )
+
+
+def _ok_response(payload=b"fake-bytes"):
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.iter_content.side_effect = lambda chunk_size=None: iter([payload])
+    return resp
+
+
+class TestDownloadFileResilience:
+    """download_file must be timeout-bound, retried, atomic and loud."""
+
+    def test_success_first_attempt_writes_file(self, tmp_path, mocker):
+        url = "https://zenodo.org/record/1/files/a.pytorch"
+        target = tmp_path / "a.pytorch"
+        mock_get = mocker.patch.object(
+            utils_mod.requests, "get", return_value=_ok_response(b"weights")
+        )
+
+        download_file(url, target)
+
+        assert target.read_bytes() == b"weights"
+        # every request must carry an explicit (connect, read) timeout
+        for call in mock_get.call_args_list:
+            timeout = call.kwargs.get("timeout")
+            assert timeout is not None, "request was made without a timeout"
+
+    def test_transient_failure_then_retry_succeeds(self, tmp_path, mocker):
+        url = "https://zenodo.org/record/1/files/a.pytorch"
+        target = tmp_path / "a.pytorch"
+        mock_get = mocker.patch.object(
+            utils_mod.requests,
+            "get",
+            side_effect=[
+                requests.exceptions.HTTPError("504 Gateway Timeout"),
+                _ok_response(b"weights"),
+            ],
+        )
+        mock_sleep = mocker.patch.object(utils_mod.time, "sleep")
+
+        download_file(url, target)
+
+        assert target.read_bytes() == b"weights"
+        assert mock_get.call_count == 2
+        # exponential backoff starts at the initial delay (seconds scale)
+        assert [c.args[0] for c in mock_sleep.call_args_list] == [
+            utils_mod.INITIAL_RETRY_DELAY
+        ]
+
+    def test_all_attempts_fail_raises_and_leaves_no_residue(self, tmp_path, mocker):
+        url = "https://zenodo.org/record/1/files/a.pytorch"
+        target = tmp_path / "a.pytorch"
+        mock_get = mocker.patch.object(
+            utils_mod.requests,
+            "get",
+            side_effect=requests.exceptions.ConnectionError("connection reset"),
+        )
+        mock_sleep = mocker.patch.object(utils_mod.time, "sleep")
+        mock_logger = mocker.patch.object(utils_mod, "logger")
+
+        with pytest.raises(requests.RequestException) as excinfo:
+            download_file(url, target)
+
+        message = str(excinfo.value)
+        assert url in message
+        assert "connection reset" in message  # underlying cause is named
+        assert mock_get.call_count == utils_mod.MAX_DOWNLOAD_ATTEMPTS
+        # exponential backoff ramps from seconds up to ~30s across attempts
+        assert [c.args[0] for c in mock_sleep.call_args_list] == [10, 20, 30, 30]
+        # each failed attempt is logged as a warning
+        assert mock_logger.warning.call_count == utils_mod.MAX_DOWNLOAD_ATTEMPTS
+        # neither the final file nor any temp-file residue remains
+        assert not target.exists()
+        assert list(tmp_path.iterdir()) == []

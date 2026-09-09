@@ -1,9 +1,13 @@
 import importlib
 import logging
+import os
 import re
+import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from shutil import rmtree
+from typing import Optional
 
 import requests
 import yaml
@@ -12,6 +16,11 @@ from packaging.version import Version
 from panseg import PATH_PANSEG_MODELS
 
 logger = logging.getLogger(__name__)
+
+REQUEST_TIMEOUT = (10, 60)
+MAX_DOWNLOAD_ATTEMPTS = 5
+INITIAL_RETRY_DELAY = 10
+MAX_RETRY_DELAY = 30
 
 
 def load_config(config_path: Path) -> dict:
@@ -29,23 +38,55 @@ def save_config(config: dict, config_path: Path) -> None:
 
 
 def download_file(url: str, filename: Path) -> None:
-    """Download a single file from a URL to a specified filename."""
+    """Download a single file from a URL to a specified filename.
+
+    Each request uses an explicit (connect, read) timeout, and failed requests
+    are retried with exponential backoff (delays ramping up to
+    MAX_RETRY_DELAY). The file is streamed to a temporary file in the target
+    directory and atomically renamed on success, so an interrupted download
+    can never leave a partial file at the final path. If all attempts fail, a
+    requests.RequestException naming the URL and the underlying error is raised.
+    """
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
-    try:
-        # Use stream for large files
-        response = requests.get(url, stream=True, headers=headers)
-        response.raise_for_status()
-        with open(filename, "wb") as f:
-            for chunk in response.iter_content(
-                chunk_size=8192
-            ):  # Adjust chunk size as needed
-                f.write(chunk)
-    except requests.RequestException as e:
-        logger.warning(f"Failed to download {url}. Error: {e}")
+    filename = Path(filename)
+    delay = INITIAL_RETRY_DELAY
+    last_error: Optional[requests.RequestException] = None
+    for attempt in range(1, MAX_DOWNLOAD_ATTEMPTS + 1):
+        try:
+            response = requests.get(
+                url, stream=True, headers=headers, timeout=REQUEST_TIMEOUT
+            )
+            response.raise_for_status()
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(filename.parent), prefix=f".{filename.name}."
+            )
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                os.replace(tmp_path, filename)
+            except Exception:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                raise
+            return
+        except requests.RequestException as e:
+            last_error = e
+            logger.warning(
+                f"Failed to download {url} "
+                f"(attempt {attempt}/{MAX_DOWNLOAD_ATTEMPTS}): {e}"
+            )
+            if attempt < MAX_DOWNLOAD_ATTEMPTS:
+                time.sleep(delay)
+                delay = min(MAX_RETRY_DELAY, 2 * delay)
+
+    raise requests.RequestException(
+        f"Failed to download {url} after {MAX_DOWNLOAD_ATTEMPTS} attempts: {last_error}"
+    ) from last_error
 
 
 def download_files(urls: dict, out_dir: Path) -> None:
