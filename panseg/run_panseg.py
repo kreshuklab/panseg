@@ -97,10 +97,26 @@ def launch_workflow_headless(path: Path):
 def launch_training(path: Path):
     """Launch the training"""
     config = load_config(path)
+    if not isinstance(config, dict):
+        raise ValueError(f"Invalid training config: {path}")
+
+    # The example config nests the parameters under a `training:` key,
+    # but a flat top-level config is accepted as well.
+    config = config.get("training", config)
+
+    import inspect
 
     from panseg.functionals.training.train import unet_training
 
-    unet_training(*config)
+    valid_keys = set(inspect.signature(unet_training).parameters)
+    unknown_keys = sorted(set(config) - valid_keys)
+    if unknown_keys:
+        raise ValueError(
+            f"Unknown keys in training config {path}: {unknown_keys}. "
+            f"Valid keys are: {sorted(valid_keys)}"
+        )
+
+    unet_training(**config)
 
 
 def launch_editor(path: Optional[Path]):

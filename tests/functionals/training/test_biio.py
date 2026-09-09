@@ -1,41 +1,135 @@
 import shutil
+import zipfile
 from contextlib import chdir
 from pathlib import Path
 
 import numpy as np
+import pytest
 
-from panseg.functionals.training.biio import make_model_description
+from panseg.functionals.training.biio import (
+    PANSEG_CITATION,
+    make_model_description,
+)
+
+WEIGHTS = (
+    Path(__file__).parent.parent.parent
+    / "resources"
+    / "models"
+    / "best_checkpoint.pytorch"
+)
 
 
-def test_make_model_description(tmp_path):
-    weights = (
-        Path(__file__).parent.parent.parent
-        / "resources"
-        / "models"
-        / "best_checkpoint.pytorch"
+@pytest.fixture
+def model_dir(tmp_path):
+    shutil.copy(WEIGHTS, tmp_path)
+    np.save(tmp_path / "inputs.npy", np.random.rand(1, 1, 16, 50, 64))
+    np.save(tmp_path / "outputs.npy", np.random.rand(1, 1, 16, 50, 64))
+    return tmp_path
+
+
+def make_description(model_dir, **overrides):
+    defaults = dict(
+        weights=Path("best_checkpoint.pytorch"),
+        model_name="dummy_model",
+        in_channels=1,
+        out_channels=1,
+        feature_maps=64,
+        patch_size=(16, 32, 64),
+        dimensionality="3D",
+        layer_order="bcr",
+        modality="mod",
+        output_type="boundaries",
+        description="dummy model",
+        resolution=(0.5, 0.02, 2),
+        test_in=model_dir / "inputs.npy",
+        test_out=model_dir / "outputs.npy",
+        panseg_config=Path("best_checkpoint.pytorch"),
     )
-    shutil.copy(weights, tmp_path)
+    with chdir(model_dir):
+        return make_model_description(**{**defaults, **overrides})
 
-    inputs = tmp_path / "inputs.npy"
-    np.save(inputs, np.random.rand(1, 1, 16, 50, 64))
-    outputs = tmp_path / "outputs.npy"
-    np.save(outputs, np.random.rand(1, 1, 16, 50, 64))
 
-    with chdir(tmp_path):
-        make_model_description(
-            weights=Path("best_checkpoint.pytorch"),
-            model_name="dummy_model",
-            in_channels=1,
-            out_channels=1,
-            feature_maps=64,
-            patch_size=(16, 32, 64),
-            dimensionality="3D",
-            layer_order="bcr",
-            modality="mod",
-            output_type="boundaries",
-            description="dummy model",
-            resolution=(0.5, 0.02, 2),
-            test_in=inputs,
-            test_out=outputs,
-            panseg_config=Path("best_checkpoint.pytorch"),
-        )
+def test_make_model_description(model_dir):
+    make_description(model_dir)
+
+
+def test_make_model_description_fair_fields(model_dir):
+    desc = make_description(
+        model_dir,
+        authors=["Jane Doe", "John Smith <john@example.com>"],
+        additional_citations=["Smith, J. et al. Some result. doi:10.1234/abc.def"],
+        license="MIT",
+        documentation="A very good model.",
+    )
+
+    assert [a.name for a in desc.authors] == ["Jane Doe", "John Smith"]
+    assert desc.authors[1].email == "john@example.com"
+
+    assert len(desc.cite) == 2
+    assert desc.cite[0].text == PANSEG_CITATION.text
+    assert desc.cite[0].doi == PANSEG_CITATION.doi
+    assert desc.cite[1].doi == "10.1234/abc.def"
+    assert "Smith, J. et al. Some result." in desc.cite[1].text
+
+    assert desc.license == "MIT"
+    assert str(desc.documentation) == "README.md"
+
+
+def test_make_model_description_citation_url(model_dir):
+    desc = make_description(
+        model_dir,
+        additional_citations=["Some result https://example.com/paper.html"],
+    )
+    assert desc.cite[1].url == "https://example.com/paper.html"
+
+
+def test_make_model_description_defaults(model_dir):
+    desc = make_description(model_dir)
+
+    assert desc.authors == []
+    assert len(desc.cite) == 1
+    assert desc.cite[0].text == PANSEG_CITATION.text
+    assert desc.cite[0].doi == PANSEG_CITATION.doi
+    assert desc.license is None
+    assert desc.documentation is None
+    assert [str(c) for c in desc.covers] == ["cover.png"]
+    assert (model_dir / "cover.png").exists()
+
+
+def test_make_model_description_invalid_author(model_dir):
+    with pytest.raises(ValueError, match="Name <not-an-email>"):
+        make_description(model_dir, authors=["Name <not-an-email>"])
+
+    with pytest.raises(ValueError, match="<john@example.com>"):
+        make_description(model_dir, authors=["<john@example.com>"])
+
+    with pytest.raises(ValueError, match="Invalid author line"):
+        make_description(model_dir, authors=["Inva/lid Name"])
+
+
+def test_make_model_description_invalid_citation(model_dir):
+    with pytest.raises(ValueError, match="just some text"):
+        make_description(model_dir, additional_citations=["just some text"])
+
+
+def test_make_model_description_writes_readme(model_dir):
+    make_description(model_dir, documentation="# My notes\nTrained on blobs.")
+
+    content = (model_dir / "README.md").read_text(encoding="utf-8")
+    assert "# dummy_model" in content
+    assert "# My notes" in content
+    assert "Trained on blobs." in content
+    assert "# Validation" in content
+    assert "test_in.npy" in content
+    assert "test_out.npy" in content
+
+
+def test_package_includes_cover(model_dir):
+    zip_path = model_dir / "model.zip"
+    with chdir(model_dir):
+        desc = make_description(model_dir)
+        desc.package(zip_path)
+
+    with zipfile.ZipFile(zip_path) as zf:
+        names = zf.namelist()
+    assert "cover.png" in names

@@ -4,12 +4,26 @@ from typing import Literal, Optional
 import torch
 from magicgui import magic_factory, widgets
 from magicgui.types import Undefined
-from magicgui.widgets import Container, FileEdit, Label, ProgressBar
+from magicgui.widgets import (
+    ComboBox,
+    Container,
+    FileEdit,
+    Label,
+    ProgressBar,
+    PushButton,
+    TextEdit,
+)
 from napari.layers import Image, Labels
+from qtpy.QtWidgets import QDialog, QHBoxLayout, QPushButton, QVBoxLayout
 
 from panseg import PATH_PANSEG_MODELS, logger
 from panseg.core.image import ImageLayout, PanSegImage, SemanticType
 from panseg.core.zoo import model_zoo
+from panseg.functionals.training.biio import (
+    PANSEG_CITATION,
+    parse_authors,
+    parse_citations,
+)
 from panseg.functionals.training.model import UNet2D, UNet3D
 from panseg.functionals.training.train import find_h5_files
 from panseg.io.h5 import read_h5_shape, read_h5_voxel_size
@@ -17,6 +31,105 @@ from panseg.tasks.training_tasks import unet_training_task
 from panseg.viewer_napari import log
 from panseg.viewer_napari.widgets.prediction import Prediction_Widgets
 from panseg.viewer_napari.widgets.utils import div, get_layers, schedule_task
+
+NONE_LICENSE = "(none)"
+LICENSE_CHOICES = [
+    NONE_LICENSE,
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Apache-2.0",
+    "GPL-3.0-only",
+    "LGPL-3.0-only",
+    "CC0-1.0",
+    "CC-BY-4.0",
+    "CC-BY-SA-4.0",
+    "CC-BY-NC-4.0",
+    "Unlicense",
+]
+
+
+def _split_lines(text: str) -> list[str]:
+    return [stripped for line in text.splitlines() if (stripped := line.strip())]
+
+
+class ModelMetadataDialog(QDialog):
+    """Dialog collecting FAIR metadata (authors, citations, license, documentation)."""
+
+    def __init__(
+        self,
+        parent=None,
+        authors: str = "",
+        additional_citations: str = "",
+        license: str = NONE_LICENSE,
+        documentation: str = "",
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("Model metadata")
+        self.setModal(True)
+        self.metadata: Optional[dict] = None
+
+        self.authors_edit = TextEdit(
+            value=authors,
+            label="Authors",
+            tooltip="One author per line, either 'Name' or 'Name <email>'.",
+        )
+        self.citations_edit = TextEdit(
+            value=additional_citations,
+            label="Additional citations",
+            tooltip="One citation per line. Each line must contain a DOI or URL.\n"
+            f"The PanSeg citation ({PANSEG_CITATION.doi}) is always included.",
+        )
+        self.license_combo = ComboBox(
+            choices=LICENSE_CHOICES, value=license, label="License"
+        )
+        self.documentation_edit = TextEdit(
+            value=documentation,
+            label="Documentation",
+            tooltip="Markdown documentation for the model.\n"
+            "Saved as README.md next to the model.",
+        )
+
+        container = Container(
+            widgets=[
+                self.authors_edit,
+                self.citations_edit,
+                self.license_combo,
+                self.documentation_edit,
+            ]
+        )
+
+        ok_button = QPushButton("OK")
+        ok_button.clicked.connect(self._on_ok)
+        cancel_button = QPushButton("Cancel")
+        cancel_button.clicked.connect(self.reject)
+
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(ok_button)
+        button_layout.addWidget(cancel_button)
+
+        layout = QVBoxLayout()
+        layout.addWidget(container.native)
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+    def _on_ok(self):
+        authors = _split_lines(self.authors_edit.value)
+        citations = _split_lines(self.citations_edit.value)
+        try:
+            parse_authors(authors)
+            parse_citations(citations)
+        except ValueError as e:
+            log(f"Invalid model metadata: {e}", thread="train_gui", level="ERROR")
+            return
+        license_value = self.license_combo.value
+        self.metadata = {
+            "authors": authors,
+            "additional_citations": citations,
+            "license": None if license_value == NONE_LICENSE else license_value,
+            "documentation": self.documentation_edit.value,
+        }
+        self.accept()
 
 
 class Training_Tab:
@@ -89,6 +202,23 @@ class Training_Tab:
             self._on_segmentation_change
         )
 
+        self.model_metadata: dict = {
+            "authors": [],
+            "additional_citations": [],
+            "license": None,
+            "documentation": "",
+        }
+        self.model_metadata_button = PushButton(
+            label="Model metadata",
+            tooltip="Add authors, citations, license and documentation\n"
+            "for FAIR-compliant model export.",
+        )
+        self.model_metadata_button.clicked.connect(self.open_metadata_dialog)
+        self.widget_unet_training.insert(
+            self.widget_unet_training.index(self.widget_unet_training.description) + 1,
+            self.model_metadata_button,
+        )
+
         self.widget_info = Label(value=f"Model dir: {PATH_PANSEG_MODELS}")
         self._automatic_channel_change = False
 
@@ -101,6 +231,26 @@ class Training_Tab:
             ],
             labels=False,
         )
+
+    def make_metadata_dialog(self) -> ModelMetadataDialog:
+        """Build the model metadata dialog, pre-filled with the current values.
+
+        Callable without a running napari viewer.
+        """
+        metadata = self.model_metadata
+        return ModelMetadataDialog(
+            authors="\n".join(metadata["authors"]),
+            additional_citations="\n".join(metadata["additional_citations"]),
+            license=metadata["license"] or NONE_LICENSE,
+            documentation=metadata["documentation"],
+        )
+
+    def open_metadata_dialog(self):
+        """Open the model metadata dialog and store the values on acceptance."""
+        dialog = self.make_metadata_dialog()
+        dialog.exec()
+        if dialog.metadata is not None:
+            self.model_metadata = dialog.metadata
 
     @magic_factory(
         call_button="Start Training",
@@ -350,6 +500,10 @@ class Training_Tab:
                 "resolution": resolution,
                 "pre_trained": pre_model_path,
                 "layer_order": layer_order,
+                "authors": self.model_metadata["authors"],
+                "additional_citations": self.model_metadata["additional_citations"],
+                "license": self.model_metadata["license"],
+                "documentation": self.model_metadata["documentation"],
                 "widgets_to_reset": widgets_to_reset,
                 "_pbar": pbar,
                 "_to_hide": [self.widget_unet_training.call_button],

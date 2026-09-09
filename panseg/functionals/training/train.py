@@ -91,6 +91,10 @@ def unet_training(
     resolution: tuple[float, float, float] = (1.0, 1.0, 1.0),
     pre_trained: Optional[Path] = None,
     layer_order: str = "bcr",
+    authors: list[str] | None = None,
+    additional_citations: list[str] | None = None,
+    license: str | None = None,
+    documentation: str | None = None,
 ) -> None:
     """
     Main entrypoint for training a new unet model. Gets called when calling `panseg --train` from cli.
@@ -241,6 +245,10 @@ def unet_training(
             test_in=Path("test_in.npy"),
             test_out=Path("test_out.npy"),
             panseg_config=checkpoint_dir / FILE_CONFIG_TRAIN_YAML,
+            authors=authors,
+            additional_citations=additional_citations,
+            license=license,
+            documentation=documentation,
         )
         model_desc.package(
             checkpoint_dir

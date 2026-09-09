@@ -1,11 +1,26 @@
+# Example config for `panseg --train CONFIG_YAML`.
+# Keys are passed as keyword arguments to `panseg.functionals.training.train.unet_training`.
+# All required keys must be present; optional keys can be uncommented as needed.
 training:
-  dataset_dir: TRAIN_DIR # contains train/val subdirectories
-  model_name: custom_model
+  # Required:
+  dataset_dir: TRAIN_DIR # contains train/ and val/ subdirectories with h5 files
+  model_name: custom_model # name of the new model, must not exist yet
   in_channels: 1
   out_channels: 2
-  feature_maps: [ 32, 64, 128, 256, 512 ]
-  patch_size: [ 80, 160, 160 ]
+  feature_maps: [32, 64, 128, 256, 512] # single int enables geometric progression
+  patch_size: [80, 160, 160]
   max_num_iters: 50000
-  dimensionality: 3D
-  sparse: false
-  device: cuda
+  dimensionality: 3D # '2D' or '3D'
+  sparse: false # true for affinity/sparse target training
+  device: cuda # 'cuda' or 'cpu'
+  # Optional:
+  # modality: '' # microscopy modality of the model, e.g. confocal
+  # output_type: '' # prediction type, e.g. cell boundaries
+  # description: '' # model description saved alongside the model
+  # resolution: [1.0, 1.0, 1.0] # voxel size of the training data in um
+  # pre_trained: null # path to pretrained model weights for fine-tuning
+  # layer_order: bcr # unet layer order
+  # authors: [] # one author per entry, 'Name' or 'Name <email>' (FAIR metadata)
+  # additional_citations: [] # one per entry, each must contain a DOI or URL (FAIR metadata)
+  # license: null # SPDX license id, e.g. MIT (FAIR metadata)
+  # documentation: '' # markdown documentation, saved as README.md (FAIR metadata)

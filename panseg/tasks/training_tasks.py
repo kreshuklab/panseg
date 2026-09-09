@@ -30,6 +30,10 @@ def unet_training_task(
     description: str = "",
     resolution: tuple[float, float, float] = (1.0, 1.0, 1.0),
     pre_trained: Path | None = None,
+    authors: list[str] | None = None,
+    additional_citations: list[str] | None = None,
+    license: str | None = None,
+    documentation: str | None = None,
     widgets_to_reset: Optional[list] = None,
     _tracker: Optional["PBar_Tracker"] = None,
 ):
@@ -102,6 +106,10 @@ def unet_training_task(
             resolution=resolution,
             pre_trained=pre_trained,
             layer_order=layer_order,
+            authors=authors,
+            additional_citations=additional_citations,
+            license=license,
+            documentation=documentation,
         )
     except RuntimeError as e:
         if "Output size is too small" in str(e):
