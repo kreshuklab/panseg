@@ -63,6 +63,9 @@ extend-exclude = ["tests/**", "panseg/**", "examples/**", "*.yml", "*.yaml"]
 extend-select = ["I"]
 
 [tool.coverage.run]
+source = ["panseg/"]
+omit = ["/tmp/*"]
+
 [tool.coverage.report]
 # Regexes for lines to exclude from consideration
 exclude_also = [
@@ -77,8 +80,6 @@ exclude_also = [
   # Don't complain about abstract methods, they aren't run:
   "@(abc\\.)?abstractmethod",
 ]
-source = ["panseg/"]
-omit = ["/tmp/*"]
 
 [tool.bumpversion]
 current_version = "2.1.1"

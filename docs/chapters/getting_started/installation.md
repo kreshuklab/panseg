@@ -57,7 +57,7 @@ The installer comes complete with its own python installation. During the instal
     see [installing mamba](contributing.md#install-mamba))
 
     ```bash
-    conda create --name panseg panseg
+    conda create --name panseg panseg python=3.11
     conda activate panseg
     panseg --napari
     ```
@@ -84,7 +84,7 @@ Make sure to start PanSeg from the startmenu, or to activate the conda environme
 
 Go to the `Plugins` menu on top, then click `Update Panseg`!
 
-In some cases the update might not be successful. In such a case, please 
+In some cases the update might not be successful. In such a case, please
 remove the installation directory and install the new version from
 a freshly downloaded installer.
 
