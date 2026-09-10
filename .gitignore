@@ -13,6 +13,12 @@ settings.json
 .cache/
 docs/_build/
 
+# Agent issue tracker (local scratch, not part of the site or version control)
+.scratch/
+
+.docs/agents
+AGENTS.md
+
 # Codecov
 .coverage
 .htmlcov
