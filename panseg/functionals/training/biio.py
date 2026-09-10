@@ -30,6 +30,8 @@ from bioimageio.spec.model.v0_5 import (
 from imageio.v3 import imwrite
 from pydantic import ValidationError
 
+from panseg.functionals.training.augs import PercentileNormalizer
+
 PANSEG_CITATION = CiteEntry(
     text=(
         "Wolny, A. et al. Accurate and versatile 3D segmentation of plant "
@@ -118,10 +120,7 @@ def _normalize_for_display(
     Purely for visualization: real (e.g. z-scored) data can have a few
     extreme outliers that make plain min-max rendering come out black.
     """
-    lo, hi = np.percentile(img, [pmin, pmax])
-    if hi <= lo:
-        hi = lo + 1.0
-    return np.clip((img - lo) / (hi - lo), 0.0, 1.0)
+    return np.clip(PercentileNormalizer(pmin=pmin, pmax=pmax)(img), 0.0, 1.0)
 
 
 def _make_cover(test_in: np.ndarray, test_out: np.ndarray) -> Path:
