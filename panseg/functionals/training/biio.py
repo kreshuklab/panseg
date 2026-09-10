@@ -1,8 +1,8 @@
 import re
-import shutil
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 import torch
 from bioimageio.spec.model.v0_5 import (
     ArchitectureFromFileDescr,
@@ -27,6 +27,7 @@ from bioimageio.spec.model.v0_5 import (
     WeightsDescr,
     ZeroMeanUnitVarianceDescr,
 )
+from imageio.v3 import imwrite
 from pydantic import ValidationError
 
 PANSEG_CITATION = CiteEntry(
@@ -94,6 +95,50 @@ def parse_citations(citations: list[str] | None) -> list[CiteEntry]:
                 f"Invalid citation line, must contain a DOI or URL: {line!r}"
             )
     return parsed
+
+
+def _pick_2d_slice(data: np.ndarray) -> np.ndarray:
+    """Extract a representative 2D slice from a test tensor.
+
+    (1, C, [Z,] Y, X) -> (Y, X), taking the middle z-slice and the first channel.
+    """
+    data = data[0]
+    if data.ndim == 4:  # (C, Z, Y, X)
+        data = data[:, data.shape[1] // 2, :]
+    if data.ndim == 3:  # (C, Y, X)
+        data = data[0]
+    return data
+
+
+def _normalize_for_display(
+    img: np.ndarray, pmin: float = 1.0, pmax: float = 99.6
+) -> np.ndarray:
+    """Map an image to [0, 1] using a percentile window.
+
+    Purely for visualization: real (e.g. z-scored) data can have a few
+    extreme outliers that make plain min-max rendering come out black.
+    """
+    lo, hi = np.percentile(img, [pmin, pmax])
+    if hi <= lo:
+        hi = lo + 1.0
+    return np.clip((img - lo) / (hi - lo), 0.0, 1.0)
+
+
+def _make_cover(test_in: np.ndarray, test_out: np.ndarray) -> Path:
+    """Render an input | output cover image from the test tensors.
+
+    The packaged test tensors are left untouched; only the cover differs
+    from the raw data. Input and output are shown side by side so both are
+    fully visible for comparison (a diagonal split would hide the half of
+    the image that contains no signal).
+    """
+    in_img = (_normalize_for_display(_pick_2d_slice(test_in)) * 255).astype("uint8")
+    out_img = (_normalize_for_display(_pick_2d_slice(test_out)) * 255).astype("uint8")
+    gap = np.full((in_img.shape[0], 4, 1), 255, dtype="uint8")
+    canvas = np.concatenate([in_img[:, :, None], gap, out_img[:, :, None]], axis=1)
+    canvas = np.repeat(canvas, 3, axis=2)
+    imwrite("cover.png", canvas)
+    return Path("cover.png")
 
 
 def _write_documentation(documentation: str, model_name: str) -> Path:
@@ -264,6 +309,11 @@ def make_model_description(
         else None
     )
 
+    # Render the cover ourselves: the spec's auto-generated cover uses
+    # min-max normalization and a diagonal split, which renders black for
+    # real (outlier-rich, spatially inhomogeneous) data.
+    cover_path = _make_cover(np.load(test_in), np.load(test_out))
+
     model_desc = ModelDescr(
         name=model_name,
         description=description,
@@ -272,6 +322,7 @@ def make_model_description(
         cite=[PANSEG_CITATION, *parse_citations(additional_citations)],
         license=license,
         documentation=documentation_path,
+        covers=[cover_path],
         inputs=[input_desc],
         outputs=[output_desc],
         weights=WeightsDescr(
@@ -283,16 +334,5 @@ def make_model_description(
         ),
         attachments=[FileDescr(source=panseg_config)],
     )
-
-    # Covers auto-generated from the test tensors live in a tmpdir and are
-    # dropped by the exclude_unset packaging serialization. Copy them into the
-    # model directory and assign explicitly so they end up in the package.
-    if model_desc.covers:
-        copied_covers = []
-        for i, cover in enumerate(model_desc.covers):
-            cover_name = "cover.png" if i == 0 else f"cover_{i}.png"
-            shutil.copy(Path(cover), cover_name)
-            copied_covers.append(Path(cover_name))
-        model_desc.covers = copied_covers
 
     return model_desc
