@@ -357,9 +357,7 @@ class TestUnetTrainingFairMetadata:
                     sparse=False,
                     device="cpu",
                     authors=["Jane Doe <jane@example.com>"],
-                    additional_citations=[
-                        "Smith, J. et al. Some result. doi:10.1234/x.y"
-                    ],
+                    additional_citations=["10.1234/x.y Smith, J. et al. Some result."],
                     license="MIT",
                     documentation="A very good model.",
                 )
@@ -368,7 +366,7 @@ class TestUnetTrainingFairMetadata:
         call_kwargs = mock_model_desc.call_args.kwargs
         assert call_kwargs["authors"] == ["Jane Doe <jane@example.com>"]
         assert call_kwargs["additional_citations"] == [
-            "Smith, J. et al. Some result. doi:10.1234/x.y"
+            "10.1234/x.y Smith, J. et al. Some result."
         ]
         assert call_kwargs["license"] == "MIT"
         assert call_kwargs["documentation"] == "A very good model."

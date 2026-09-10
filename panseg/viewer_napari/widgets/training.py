@@ -5,16 +5,13 @@ import torch
 from magicgui import magic_factory, widgets
 from magicgui.types import Undefined
 from magicgui.widgets import (
-    ComboBox,
     Container,
     FileEdit,
     Label,
     ProgressBar,
     PushButton,
-    TextEdit,
 )
 from napari.layers import Image, Labels
-from qtpy.QtWidgets import QDialog, QHBoxLayout, QPushButton, QVBoxLayout
 
 from panseg import PATH_PANSEG_MODELS, logger
 from panseg.core.image import ImageLayout, PanSegImage, SemanticType
@@ -53,85 +50,6 @@ def _split_lines(text: str) -> list[str]:
     return [stripped for line in text.splitlines() if (stripped := line.strip())]
 
 
-class ModelMetadataDialog(QDialog):
-    """Dialog collecting FAIR metadata (authors, citations, license, documentation)."""
-
-    def __init__(
-        self,
-        parent=None,
-        authors: str = "",
-        additional_citations: str = "",
-        license: str = NONE_LICENSE,
-        documentation: str = "",
-    ):
-        super().__init__(parent)
-        self.setWindowTitle("Model metadata")
-        self.setModal(True)
-        self.metadata: Optional[dict] = None
-
-        self.authors_edit = TextEdit(
-            value=authors,
-            label="Authors",
-            tooltip="One author per line, either 'Name' or 'Name <email>'.",
-        )
-        self.citations_edit = TextEdit(
-            value=additional_citations,
-            label="Additional citations",
-            tooltip="One citation per line. Each line must contain a DOI or URL.\n"
-            f"The PanSeg citation ({PANSEG_CITATION.doi}) is always included.",
-        )
-        self.license_combo = ComboBox(
-            choices=LICENSE_CHOICES, value=license, label="License"
-        )
-        self.documentation_edit = TextEdit(
-            value=documentation,
-            label="Documentation",
-            tooltip="Markdown documentation for the model.\n"
-            "Saved as README.md next to the model.",
-        )
-
-        container = Container(
-            widgets=[
-                self.authors_edit,
-                self.citations_edit,
-                self.license_combo,
-                self.documentation_edit,
-            ]
-        )
-
-        ok_button = QPushButton("OK")
-        ok_button.clicked.connect(self._on_ok)
-        cancel_button = QPushButton("Cancel")
-        cancel_button.clicked.connect(self.reject)
-
-        button_layout = QHBoxLayout()
-        button_layout.addWidget(ok_button)
-        button_layout.addWidget(cancel_button)
-
-        layout = QVBoxLayout()
-        layout.addWidget(container.native)
-        layout.addLayout(button_layout)
-        self.setLayout(layout)
-
-    def _on_ok(self):
-        authors = _split_lines(self.authors_edit.value)
-        citations = _split_lines(self.citations_edit.value)
-        try:
-            parse_authors(authors)
-            parse_citations(citations)
-        except ValueError as e:
-            log(f"Invalid model metadata: {e}", thread="train_gui", level="ERROR")
-            return
-        license_value = self.license_combo.value
-        self.metadata = {
-            "authors": authors,
-            "additional_citations": citations,
-            "license": None if license_value == NONE_LICENSE else license_value,
-            "documentation": self.documentation_edit.value,
-        }
-        self.accept()
-
-
 class Training_Tab:
     def __init__(self, prediction_tab: Optional[Prediction_Widgets]):
         self.prediction_tab = prediction_tab
@@ -146,13 +64,21 @@ class Training_Tab:
 
         self.previous_z_patch_size = 16
 
+        # Section visibility state. The training data section is expanded by
+        # default, the meta data section is collapsed.
+        self.train_data_open = True
+        self.meta_data_open = False
+
         # initialize widgets
         self.widget_unet_training = self.factory_unet_training()
         self.widget_unet_training.self.bind(self)
 
-        self.widget_unet_training.insert(0, div("Training Data", False))
-        self.widget_unet_training.insert(8, div("Model", False))
-        self.widget_unet_training.insert(15, div("Meta Data", False))
+        self.div_train_data = div("Training Data", False)
+        self.div_model = div("Model", False)
+        self.div_meta_data = div("Meta Data", False)
+        self.widget_unet_training.insert(0, self.div_train_data)
+        self.widget_unet_training.insert(8, self.div_model)
+        self.widget_unet_training.insert(15, self.div_meta_data)
 
         # multi-channel container
         self.widget_unet_training.channels[1].enabled = False
@@ -202,22 +128,60 @@ class Training_Tab:
             self._on_segmentation_change
         )
 
-        self.model_metadata: dict = {
-            "authors": [],
-            "additional_citations": [],
-            "license": None,
-            "documentation": "",
-        }
-        self.model_metadata_button = PushButton(
-            label="Model metadata",
-            tooltip="Add authors, citations, license and documentation\n"
-            "for FAIR-compliant model export.",
+        # @@@@@ Hide/Show buttons for the collapsible sections @@@@@
+        self.widget_show_train_data = PushButton(label="Show")
+        self.widget_show_train_data.clicked.connect(
+            lambda *args: self.toggle_visibility_train_data(True)
         )
-        self.model_metadata_button.clicked.connect(self.open_metadata_dialog)
         self.widget_unet_training.insert(
-            self.widget_unet_training.index(self.widget_unet_training.description) + 1,
-            self.model_metadata_button,
+            self.widget_unet_training.index(self.div_train_data) + 1,
+            self.widget_show_train_data,
         )
+
+        self.widget_show_metadata = PushButton(label="Show")
+        self.widget_show_metadata.clicked.connect(
+            lambda *args: self.toggle_visibility_metadata(True)
+        )
+        self.widget_unet_training.insert(
+            self.widget_unet_training.index(self.div_meta_data) + 1,
+            self.widget_show_metadata,
+        )
+
+        self.train_data_widgets = [
+            self.widget_unet_training.from_disk,
+            self.widget_unet_training.dataset,
+            self.widget_unet_training.image,
+            self.widget_unet_training.segmentation,
+            self.additional_inputs,
+            self.widget_unet_training.channels,
+            self.widget_unet_training.resolution,
+        ]
+        # The Model section is shown together with the training data section
+        # and hidden while the meta data section is expanded.
+        self.model_widgets = [
+            self.div_model,
+            self.widget_unet_training.pretrained,
+            self.widget_unet_training.feature_maps,
+            self.widget_unet_training.patch_size,
+            self.widget_unet_training.max_num_iters,
+            self.widget_unet_training.device,
+        ]
+        self.meta_data_widgets = [
+            self.widget_unet_training.model_name,
+            self.widget_unet_training.description,
+            self.widget_unet_training.modality,
+            self.widget_unet_training.custom_modality,
+            self.widget_unet_training.output_type,
+            self.widget_unet_training.custom_output_type,
+            self.widget_unet_training.authors,
+            self.widget_unet_training.additional_citations,
+            self.widget_unet_training.license,
+            self.widget_unet_training.documentation,
+        ]
+
+        # Training data and model are expanded by default, meta data is collapsed.
+        self.widget_show_train_data.hide()
+        self.toggle_visibility_metadata(False)
 
         self.widget_info = Label(value=f"Model dir: {PATH_PANSEG_MODELS}")
         self._automatic_channel_change = False
@@ -232,25 +196,49 @@ class Training_Tab:
             labels=False,
         )
 
-    def make_metadata_dialog(self) -> ModelMetadataDialog:
-        """Build the model metadata dialog, pre-filled with the current values.
+    def toggle_visibility_train_data(self, visible: bool):
+        """Toggles visibility of the training data section"""
+        logger.debug(f"toggle_visibility_train_data called with {visible}")
+        self.train_data_open = visible
+        if visible:
+            self.widget_show_train_data.hide()
+            self.toggle_visibility_metadata(False)
+            for widget in self.model_widgets:
+                widget.show()
+            self.widget_unet_training.from_disk.show()
+            self._on_from_disk_change(self.widget_unet_training.from_disk.value)
+            self.widget_unet_training.channels.show()
+            self.widget_unet_training.resolution.show()
+        else:
+            for widget in self.train_data_widgets:
+                widget.hide()
+            self.widget_show_train_data.show()
 
-        Callable without a running napari viewer.
-        """
-        metadata = self.model_metadata
-        return ModelMetadataDialog(
-            authors="\n".join(metadata["authors"]),
-            additional_citations="\n".join(metadata["additional_citations"]),
-            license=metadata["license"] or NONE_LICENSE,
-            documentation=metadata["documentation"],
-        )
-
-    def open_metadata_dialog(self):
-        """Open the model metadata dialog and store the values on acceptance."""
-        dialog = self.make_metadata_dialog()
-        dialog.exec()
-        if dialog.metadata is not None:
-            self.model_metadata = dialog.metadata
+    def toggle_visibility_metadata(self, visible: bool):
+        """Toggles visibility of the meta data section"""
+        logger.debug(f"toggle_visibility_metadata called with {visible}")
+        self.meta_data_open = visible
+        if visible:
+            self.widget_show_metadata.hide()
+            self.toggle_visibility_train_data(False)
+            for widget in self.model_widgets:
+                widget.hide()
+            self.widget_unet_training.model_name.show()
+            self.widget_unet_training.description.show()
+            self.widget_unet_training.modality.show()
+            self.widget_unet_training.output_type.show()
+            self._on_custom_output_type_change(
+                self.widget_unet_training.output_type.value
+            )
+            self._on_custom_modality_change(self.widget_unet_training.modality.value)
+            self.widget_unet_training.authors.show()
+            self.widget_unet_training.additional_citations.show()
+            self.widget_unet_training.license.show()
+            self.widget_unet_training.documentation.show()
+        else:
+            for widget in self.meta_data_widgets:
+                widget.hide()
+            self.widget_show_metadata.show()
 
     @magic_factory(
         call_button="Start Training",
@@ -369,6 +357,35 @@ class Training_Tab:
             "value": Undefined,
             "visible": False,
         },
+        authors={
+            "label": "Authors",
+            "widget_type": "TextEdit",
+            "tooltip": "One author per line, either 'Name' or 'Name <email>'.",
+            "visible": False,
+        },
+        additional_citations={
+            "label": "Additional citations",
+            "widget_type": "TextEdit",
+            "tooltip": "One citation per line: '<DOI or URL> [free text]'.\n"
+            "Example: 10.7554/eLife.57613 Wolny et al. eLife 2020\n"
+            "bioimage.io requires a DOI or URL for every citation.\n"
+            f"The PanSeg citation ({PANSEG_CITATION.doi}) is always included.",
+            "visible": False,
+        },
+        license={
+            "label": "License",
+            "widget_type": "ComboBox",
+            "choices": LICENSE_CHOICES,
+            "value": NONE_LICENSE,
+            "visible": False,
+        },
+        documentation={
+            "label": "Documentation",
+            "widget_type": "TextEdit",
+            "tooltip": "Markdown documentation for the model.\n"
+            "Saved as README.md next to the model.",
+            "visible": False,
+        },
         device={
             "label": "Device",
             "widget_type": "RadioButtons",
@@ -399,6 +416,11 @@ class Training_Tab:
         custom_modality: str,
         output_type: Optional[str],
         custom_output_type: str,
+        # fair metadata
+        authors: str,
+        additional_citations: str,
+        license: str,
+        documentation: str,
         pbar: Optional[ProgressBar],
     ) -> None:
         """Train a boundary prediction unet"""
@@ -438,6 +460,15 @@ class Training_Tab:
             return
         if len(model_name) < 5:
             log("Please choose a longer model name!", thread="train_gui")
+            return
+
+        author_list = _split_lines(authors)
+        citations = _split_lines(additional_citations)
+        try:
+            parse_authors(author_list)
+            parse_citations(citations)
+        except ValueError as e:
+            log(f"Invalid model metadata: {e}", thread="train_gui", level="ERROR")
             return
 
         # Enable geometric progression by setting type to int
@@ -500,10 +531,10 @@ class Training_Tab:
                 "resolution": resolution,
                 "pre_trained": pre_model_path,
                 "layer_order": layer_order,
-                "authors": self.model_metadata["authors"],
-                "additional_citations": self.model_metadata["additional_citations"],
-                "license": self.model_metadata["license"],
-                "documentation": self.model_metadata["documentation"],
+                "authors": author_list,
+                "additional_citations": citations,
+                "license": None if license == NONE_LICENSE else license,
+                "documentation": documentation,
                 "widgets_to_reset": widgets_to_reset,
                 "_pbar": pbar,
                 "_to_hide": [self.widget_unet_training.call_button],
@@ -512,6 +543,8 @@ class Training_Tab:
 
     def _on_from_disk_change(self, from_disk: str):
         logger.debug(f"_on_from_disk_change called: {from_disk}")
+        if not self.train_data_open:
+            return
         if from_disk == "Disk":
             self.widget_unet_training.image.hide()
             self.widget_unet_training.segmentation.hide()
@@ -628,6 +661,8 @@ class Training_Tab:
         # If the channel change was automatic, do nothing
         if self._automatic_channel_change:
             return
+        if not self.train_data_open:
+            return
         self.additional_inputs.clear()
         if channels[0] <= 1:
             self.additional_inputs.hide()
@@ -649,6 +684,8 @@ class Training_Tab:
 
     def _on_custom_modality_change(self, modality: str):
         logger.debug(f"_on_custom_modality_change called: {modality}")
+        if not self.meta_data_open:
+            return
         if modality == self.CUSTOM:
             self.widget_unet_training.custom_modality.show()
         else:
@@ -656,6 +693,8 @@ class Training_Tab:
 
     def _on_custom_output_type_change(self, output_type: str):
         logger.debug(f"_on_custom_output_type_change called: {output_type}")
+        if not self.meta_data_open:
+            return
         if output_type == self.CUSTOM:
             self.widget_unet_training.custom_output_type.show()
         else:

@@ -21,6 +21,7 @@ training:
   # pre_trained: null # path to pretrained model weights for fine-tuning
   # layer_order: bcr # unet layer order
   # authors: [] # one author per entry, 'Name' or 'Name <email>' (FAIR metadata)
-  # additional_citations: [] # one per entry, each must contain a DOI or URL (FAIR metadata)
+  # additional_citations: [] # one per entry, '<DOI or URL> [free text]';
+  # bioimage.io requires a DOI or URL per citation (FAIR metadata)
   # license: null # SPDX license id, e.g. MIT (FAIR metadata)
   # documentation: '' # markdown documentation, saved as README.md (FAIR metadata)

@@ -1,7 +1,6 @@
 from pathlib import Path
 
 import pytest
-from qtpy.QtWidgets import QDialog
 
 from panseg.functionals.training.model import UNet2D, UNet3D
 from panseg.functionals.training.train import find_h5_files
@@ -18,12 +17,11 @@ def training_tab():
 
 
 @pytest.fixture
-def metadata_dialog(training_tab, qtbot):
-    """A model metadata dialog that is always closed again afterwards."""
-    dialog = training_tab.make_metadata_dialog()
-    qtbot.addWidget(dialog)
-    yield dialog
-    dialog.close()
+def shown_training_tab(training_tab, qtbot):
+    """A training tab whose container is shown, so visibility can be asserted."""
+    qtbot.addWidget(training_tab.widget_unet_training.native)
+    training_tab.widget_unet_training.show()
+    return training_tab
 
 
 def test_get_container(training_tab):
@@ -512,6 +510,7 @@ def test_on_dimensionality_change(training_tab):
 
 
 def test_on_custom_modality_change(training_tab, mocker):
+    training_tab.toggle_visibility_metadata(True)
     m_show = mocker.patch.object(
         training_tab.widget_unet_training.custom_modality, "show"
     )
@@ -529,6 +528,7 @@ def test_on_custom_modality_change(training_tab, mocker):
 
 
 def test_on_custom_output_type_change(training_tab, mocker):
+    training_tab.toggle_visibility_metadata(True)
     m_show = mocker.patch.object(
         training_tab.widget_unet_training.custom_output_type, "show"
     )
@@ -861,150 +861,167 @@ def test_device_choices_exclude_mps_when_unavailable(mocker):
     assert "mps" not in tab.ALL_DEVICES
 
 
-def test_model_metadata_button_present(training_tab):
-    assert training_tab.model_metadata_button is not None
-    assert training_tab.model_metadata_button.label == "Model metadata"
-
-
-def test_model_metadata_button_opens_dialog(training_tab, mocker):
-    m_dialog = mocker.patch("panseg.viewer_napari.widgets.training.ModelMetadataDialog")
-    training_tab.model_metadata_button.clicked()
-    m_dialog.return_value.exec.assert_called_once()
-
-
-def test_open_metadata_dialog_stores_values(training_tab, mocker):
-    metadata = {
-        "authors": ["Jane Doe <jane@example.com>"],
-        "additional_citations": ["Smith, J. doi:10.1234/x.y"],
-        "license": "MIT",
-        "documentation": "notes",
-    }
-    dialog_mock = mocker.MagicMock()
-    dialog_mock.metadata = metadata
-    m_make = mocker.patch.object(
-        training_tab, "make_metadata_dialog", return_value=dialog_mock
-    )
-
-    training_tab.open_metadata_dialog()
-
-    m_make.assert_called_once()
-    dialog_mock.exec.assert_called_once()
-    assert training_tab.model_metadata == metadata
-
-
-def test_open_metadata_dialog_cancel_keeps_previous(training_tab, mocker):
-    previous = {
-        "authors": ["Jane Doe"],
-        "additional_citations": [],
-        "license": None,
-        "documentation": "",
-    }
-    training_tab.model_metadata = dict(previous)
-    dialog_mock = mocker.MagicMock()
-    dialog_mock.metadata = None
-    mocker.patch.object(training_tab, "make_metadata_dialog", return_value=dialog_mock)
-
-    training_tab.open_metadata_dialog()
-
-    assert training_tab.model_metadata == previous
-
-
-def test_make_metadata_dialog_fields(metadata_dialog):
-    dialog = metadata_dialog
-    assert dialog.authors_edit is not None
-    assert dialog.citations_edit is not None
-    assert dialog.documentation_edit is not None
-    assert list(dialog.license_combo.choices) == LICENSE_CHOICES
+def test_metadata_fields_present(training_tab):
+    w = training_tab.widget_unet_training
+    assert list(w.license.choices) == LICENSE_CHOICES
     assert NONE_LICENSE in LICENSE_CHOICES
+    assert w.license.value == NONE_LICENSE
 
 
-def test_make_metadata_dialog_prefill(training_tab, qtbot):
-    training_tab.model_metadata = {
-        "authors": ["Jane Doe", "John Smith <john@example.com>"],
-        "additional_citations": ["Smith, J. doi:10.1234/x.y"],
-        "license": "MIT",
-        "documentation": "# Notes",
-    }
-    dialog = training_tab.make_metadata_dialog()
-    qtbot.addWidget(dialog)
-    try:
-        assert dialog.authors_edit.value == "Jane Doe\nJohn Smith <john@example.com>"
-        assert dialog.citations_edit.value == "Smith, J. doi:10.1234/x.y"
-        assert dialog.license_combo.value == "MIT"
-        assert dialog.documentation_edit.value == "# Notes"
-    finally:
-        dialog.close()
+def test_sections_initial_state(shown_training_tab):
+    tab = shown_training_tab
+    assert tab.train_data_open
+    assert not tab.meta_data_open
+    assert not tab.widget_show_train_data.visible
+    assert tab.widget_show_metadata.visible
+    assert tab.widget_unet_training.from_disk.visible
+    assert tab.widget_unet_training.dataset.visible
+    assert tab.widget_unet_training.channels.visible
+    assert tab.widget_unet_training.resolution.visible
+    for widget in tab.model_widgets:
+        assert widget.visible
+    for widget in tab.meta_data_widgets:
+        assert not widget.visible
 
 
-def test_make_metadata_dialog_prefill_no_license(metadata_dialog):
-    assert metadata_dialog.license_combo.value == NONE_LICENSE
+def test_open_metadata_collapses_train_data_and_model(shown_training_tab):
+    tab = shown_training_tab
+    tab.toggle_visibility_metadata(True)
+
+    assert tab.meta_data_open
+    assert not tab.train_data_open
+    assert not tab.widget_show_metadata.visible
+    assert tab.widget_show_train_data.visible
+    for widget in tab.train_data_widgets + tab.model_widgets:
+        assert not widget.visible
+    assert tab.widget_unet_training.model_name.visible
+    assert tab.widget_unet_training.description.visible
+    assert tab.widget_unet_training.modality.visible
+    assert tab.widget_unet_training.output_type.visible
+    assert tab.widget_unet_training.authors.visible
+    assert tab.widget_unet_training.additional_citations.visible
+    assert tab.widget_unet_training.license.visible
+    assert tab.widget_unet_training.documentation.visible
 
 
-def test_metadata_dialog_ok_stores_and_accepts(metadata_dialog):
-    dialog = metadata_dialog
-    dialog.authors_edit.value = "Jane Doe\nJohn Smith <john@example.com>"
-    dialog.citations_edit.value = "Smith, J. et al. doi:10.1234/x.y"
-    dialog.license_combo.value = "MIT"
-    dialog.documentation_edit.value = "# Notes"
+def test_open_train_data_collapses_metadata(shown_training_tab):
+    tab = shown_training_tab
+    tab.toggle_visibility_metadata(True)
+    tab.toggle_visibility_train_data(True)
 
-    dialog._on_ok()
-
-    assert dialog.result() == QDialog.Accepted
-    assert dialog.metadata == {
-        "authors": ["Jane Doe", "John Smith <john@example.com>"],
-        "additional_citations": ["Smith, J. et al. doi:10.1234/x.y"],
-        "license": "MIT",
-        "documentation": "# Notes",
-    }
-
-
-def test_metadata_dialog_none_license_maps_to_none(metadata_dialog):
-    dialog = metadata_dialog
-    dialog.license_combo.value = NONE_LICENSE
-
-    dialog._on_ok()
-
-    assert dialog.metadata is not None
-    assert dialog.metadata["license"] is None
+    assert tab.train_data_open
+    assert not tab.meta_data_open
+    assert tab.widget_unet_training.from_disk.visible
+    assert tab.widget_unet_training.dataset.visible
+    assert tab.widget_unet_training.channels.visible
+    assert tab.widget_unet_training.resolution.visible
+    for widget in tab.model_widgets:
+        assert widget.visible
+    assert not tab.widget_show_train_data.visible
+    assert tab.widget_show_metadata.visible
+    for widget in tab.meta_data_widgets:
+        assert not widget.visible
 
 
-def test_metadata_dialog_invalid_author_keeps_open(metadata_dialog, mocker):
-    m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
-    dialog = metadata_dialog
-    dialog.authors_edit.value = "Name <not-an-email>"
+def test_show_buttons_open_sections(shown_training_tab):
+    tab = shown_training_tab
+    tab.widget_show_metadata.clicked()
+    assert tab.meta_data_open
+    assert not tab.train_data_open
 
-    dialog._on_ok()
-
-    m_log.assert_called_once()
-    assert m_log.call_args.kwargs.get("level") == "ERROR"
-    assert dialog.result() != QDialog.Accepted
-    assert dialog.metadata is None
+    tab.widget_show_train_data.clicked()
+    assert tab.train_data_open
+    assert not tab.meta_data_open
 
 
-def test_metadata_dialog_invalid_citation_keeps_open(metadata_dialog, mocker):
-    m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
-    dialog = metadata_dialog
-    dialog.citations_edit.value = "no identifier here"
+def test_custom_widgets_restored_on_section_open(shown_training_tab):
+    tab = shown_training_tab
+    tab.widget_unet_training.output_type.value = tab.CUSTOM
+    tab.widget_unet_training.modality.value = tab.CUSTOM
+    # The meta data section is collapsed, so the custom widgets must not leak
+    assert not tab.widget_unet_training.custom_output_type.visible
+    assert not tab.widget_unet_training.custom_modality.visible
 
-    dialog._on_ok()
-
-    m_log.assert_called_once()
-    assert m_log.call_args.kwargs.get("level") == "ERROR"
-    assert dialog.result() != QDialog.Accepted
-    assert dialog.metadata is None
+    tab.toggle_visibility_metadata(True)
+    assert tab.widget_unet_training.custom_output_type.visible
+    assert tab.widget_unet_training.custom_modality.visible
 
 
-def test_unet_training_fair_metadata_in_task_kwargs(training_tab, mocker):
+def test_unet_training_invalid_author(shown_training_tab, mocker):
     m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
     m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
-    training_tab.model_metadata = {
-        "authors": ["Jane Doe <jane@example.com>"],
-        "additional_citations": ["Smith, J. et al. doi:10.1234/x.y"],
-        "license": "MIT",
-        "documentation": "A very good model.",
-    }
+    shown_training_tab.widget_unet_training.authors.value = "Name <not-an-email>"
 
-    training_tab.widget_unet_training(
+    shown_training_tab.widget_unet_training(
+        from_disk="Disk",
+        dataset="dataset/data",
+        image=None,
+        segmentation=None,
+        pretrained=None,
+        model_name="test_model",
+        description="description",
+        channels=(1, 1),
+        feature_maps=[16],
+        patch_size=[16, 64, 64],
+        resolution=[1.0, 1.0, 1.0],
+        max_num_iters=100,
+        dimensionality="3D",
+        device="cpu",
+        modality="confocal",
+        custom_modality="",
+        output_type="boundaries",
+        custom_output_type="",
+        pbar=None,
+    )
+
+    m_log.assert_called_once()
+    assert m_log.call_args.kwargs.get("level") == "ERROR"
+    m_schedule.assert_not_called()
+
+
+def test_unet_training_invalid_citation(shown_training_tab, mocker):
+    m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
+    m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
+    shown_training_tab.widget_unet_training.additional_citations.value = (
+        "no identifier here"
+    )
+
+    shown_training_tab.widget_unet_training(
+        from_disk="Disk",
+        dataset="dataset/data",
+        image=None,
+        segmentation=None,
+        pretrained=None,
+        model_name="test_model",
+        description="description",
+        channels=(1, 1),
+        feature_maps=[16],
+        patch_size=[16, 64, 64],
+        resolution=[1.0, 1.0, 1.0],
+        max_num_iters=100,
+        dimensionality="3D",
+        device="cpu",
+        modality="confocal",
+        custom_modality="",
+        output_type="boundaries",
+        custom_output_type="",
+        pbar=None,
+    )
+
+    m_log.assert_called_once()
+    assert m_log.call_args.kwargs.get("level") == "ERROR"
+    m_schedule.assert_not_called()
+
+
+def test_unet_training_none_license_maps_to_none(shown_training_tab, mocker, tmp_path):
+    m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
+    m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
+    mocker.patch(
+        "panseg.viewer_napari.widgets.training.PATH_PANSEG_MODELS", new=tmp_path
+    )
+    shown_training_tab.widget_unet_training.license.value = NONE_LICENSE
+
+    shown_training_tab.widget_unet_training(
         from_disk="Disk",
         dataset="dataset/data",
         image=None,
@@ -1028,7 +1045,47 @@ def test_unet_training_fair_metadata_in_task_kwargs(training_tab, mocker):
 
     m_log.assert_called_with("Starting training task", thread="train_gui")
     task_kwargs = m_schedule.call_args.kwargs["task_kwargs"]
-    assert task_kwargs["authors"] == ["Jane Doe <jane@example.com>"]
-    assert task_kwargs["additional_citations"] == ["Smith, J. et al. doi:10.1234/x.y"]
+    assert task_kwargs["license"] is None
+    assert task_kwargs["authors"] == []
+
+
+def test_unet_training_fair_metadata_in_task_kwargs(shown_training_tab, mocker):
+    m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
+    m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
+    shown_training_tab.widget_unet_training.authors.value = (
+        "Jane Doe <jane@example.com>\nJohn Smith"
+    )
+    shown_training_tab.widget_unet_training.additional_citations.value = (
+        "10.1234/x.y Smith, J. et al."
+    )
+    shown_training_tab.widget_unet_training.license.value = "MIT"
+    shown_training_tab.widget_unet_training.documentation.value = "A very good model."
+
+    shown_training_tab.widget_unet_training(
+        from_disk="Disk",
+        dataset="dataset/data",
+        image=None,
+        segmentation=None,
+        pretrained=None,
+        model_name="test_model",
+        description="description",
+        channels=(1, 1),
+        feature_maps=[16],
+        patch_size=[16, 64, 64],
+        resolution=[1.0, 1.0, 1.0],
+        max_num_iters=100,
+        dimensionality="3D",
+        device="cpu",
+        modality="confocal",
+        custom_modality="",
+        output_type="boundaries",
+        custom_output_type="",
+        pbar=None,
+    )
+
+    m_log.assert_called_with("Starting training task", thread="train_gui")
+    task_kwargs = m_schedule.call_args.kwargs["task_kwargs"]
+    assert task_kwargs["authors"] == ["Jane Doe <jane@example.com>", "John Smith"]
+    assert task_kwargs["additional_citations"] == ["10.1234/x.y Smith, J. et al."]
     assert task_kwargs["license"] == "MIT"
     assert task_kwargs["documentation"] == "A very good model."

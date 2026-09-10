@@ -58,7 +58,7 @@ def test_make_model_description_fair_fields(model_dir):
     desc = make_description(
         model_dir,
         authors=["Jane Doe", "John Smith <john@example.com>"],
-        additional_citations=["Smith, J. et al. Some result. doi:10.1234/abc.def"],
+        additional_citations=["10.1234/abc.def Smith, J. et al. Some result."],
         license="MIT",
         documentation="A very good model.",
     )
@@ -70,7 +70,7 @@ def test_make_model_description_fair_fields(model_dir):
     assert desc.cite[0].text == PANSEG_CITATION.text
     assert desc.cite[0].doi == PANSEG_CITATION.doi
     assert desc.cite[1].doi == "10.1234/abc.def"
-    assert "Smith, J. et al. Some result." in desc.cite[1].text
+    assert desc.cite[1].text == "Smith, J. et al. Some result."
 
     assert desc.license == "MIT"
     assert str(desc.documentation) == "README.md"
@@ -79,9 +79,21 @@ def test_make_model_description_fair_fields(model_dir):
 def test_make_model_description_citation_url(model_dir):
     desc = make_description(
         model_dir,
-        additional_citations=["Some result https://example.com/paper.html"],
+        additional_citations=["https://example.com/paper.html Some result"],
     )
     assert desc.cite[1].url == "https://example.com/paper.html"
+    assert desc.cite[1].text == "Some result"
+
+
+def test_make_model_description_citation_identifier_only(model_dir):
+    desc = make_description(
+        model_dir,
+        additional_citations=["doi:10.1234/abc.def", "https://example.com/paper.html"],
+    )
+    assert desc.cite[1].doi == "10.1234/abc.def"
+    assert desc.cite[1].text == "10.1234/abc.def"
+    assert desc.cite[2].url == "https://example.com/paper.html"
+    assert desc.cite[2].text == "https://example.com/paper.html"
 
 
 def test_make_model_description_defaults(model_dir):
@@ -110,6 +122,17 @@ def test_make_model_description_invalid_author(model_dir):
 
 def test_make_model_description_invalid_citation(model_dir):
     with pytest.raises(ValueError, match="just some text"):
+        make_description(model_dir, additional_citations=["just some text"])
+
+    # the DOI/URL must come first: it cannot be told apart from the text
+    # if it is embedded in it
+    with pytest.raises(ValueError, match="Some result. doi:10.1234/abc.def"):
+        make_description(
+            model_dir, additional_citations=["Some result. doi:10.1234/abc.def"]
+        )
+
+    # the error must explain why an identifier is required
+    with pytest.raises(ValueError, match="requires a DOI or URL"):
         make_description(model_dir, additional_citations=["just some text"])
 
 

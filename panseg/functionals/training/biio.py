@@ -82,19 +82,25 @@ def parse_citations(citations: list[str] | None) -> list[CiteEntry]:
         stripped = line.strip()
         if not stripped:
             continue
-        doi_match = _DOI_RE.search(stripped)
-        url_match = _URL_RE.search(stripped)
+        # '<DOI or URL> [free text]', split at the first whitespace so the
+        # identifier is not repeated inside the citation text.
+        # A DOI or URL is mandatory: CiteEntry raises
+        # "Either 'doi' or 'url' is required" for text-only citations, even
+        # though the JSON schema docs mark doi/url as optional.
+        identifier, *rest = stripped.split(maxsplit=1)
+        text = rest[0].strip() if rest else ""
+        doi_match = _DOI_RE.search(identifier)
+        url_match = _URL_RE.search(identifier)
         if doi_match is not None:
-            parsed.append(
-                CiteEntry(text=stripped, doi=doi_match.group(0).rstrip(".,;)"))
-            )
+            doi = doi_match.group(0).rstrip(".,;)")
+            parsed.append(CiteEntry(text=text or doi, doi=doi))
         elif url_match is not None:
-            parsed.append(
-                CiteEntry(text=stripped, url=url_match.group(0).rstrip(".,;)"))
-            )
+            url = url_match.group(0).rstrip(".,;)")
+            parsed.append(CiteEntry(text=text or url, url=url))
         else:
             raise ValueError(
-                f"Invalid citation line, must contain a DOI or URL: {line!r}"
+                f"Invalid citation line, expected '<DOI or URL> [free text]': {line!r}\n"
+                "bioimage.io requires a DOI or URL for every citation."
             )
     return parsed
 
