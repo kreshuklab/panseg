@@ -1,7 +1,7 @@
 import logging
 from contextlib import chdir
 from pathlib import Path
-from typing import Literal, Optional, Tuple
+from typing import Literal, Optional
 
 import numpy as np
 import torch
@@ -259,7 +259,7 @@ def unet_training(
 def create_datasets(
     dataset_dir: str | Path,
     phase: Literal["train", "val"],
-    patch_shape: Tuple[int, int, int],
+    patch_shape: tuple[int, int, int],
     dimensionality: Literal["2D", "3D"],
 ):
     """
