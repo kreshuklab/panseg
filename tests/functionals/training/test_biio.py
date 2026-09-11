@@ -34,7 +34,7 @@ def make_description(model_dir, **overrides):
         "in_channels": 1,
         "out_channels": 1,
         "feature_maps": 64,
-        "patch_size": (16, 32, 64),
+        "axis_min_sizes": (16, 32, 64),
         "dimensionality": "3D",
         "layer_order": "bcr",
         "modality": "mod",

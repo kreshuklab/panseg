@@ -306,6 +306,7 @@ class TestCreateDatasets:
 class TestUnetTraining:
     """Tests for unet_training function."""
 
+    @patch("panseg.functionals.training.train.test_model")
     @patch("panseg.functionals.training.train.make_model_description")
     @patch("panseg.functionals.training.train.UNetTrainer")
     @patch("panseg.functionals.training.train.create_datasets")
@@ -320,6 +321,7 @@ class TestUnetTraining:
         mock_create_datasets,
         mock_trainer,
         mock_model_desc,
+        mock_test_model,
         tmp_path,
     ):
         """Test UNet training for 2D case."""
@@ -373,6 +375,7 @@ class TestUnetTraining:
         assert (tmp_path / model_name / "test_in.npy").exists()
         assert (tmp_path / model_name / "test_out.npy").exists()
 
+    @patch("panseg.functionals.training.train.test_model")
     @patch("panseg.functionals.training.train.make_model_description")
     @patch("panseg.functionals.training.train.UNetTrainer")
     @patch("panseg.functionals.training.train.create_datasets")
@@ -387,6 +390,7 @@ class TestUnetTraining:
         mock_create_datasets,
         mock_trainer,
         mock_model_desc,
+        mock_test_model,
         tmp_path,
     ):
         """Test UNet training for 3D case."""
@@ -484,6 +488,7 @@ class TestUnetTraining:
                         device="cpu",
                     )
 
+    @patch("panseg.functionals.training.train.test_model")
     @patch("panseg.functionals.training.train.isinstance")
     @patch("panseg.functionals.training.train.make_model_description")
     @patch("panseg.functionals.training.train.DataLoader")
@@ -512,6 +517,7 @@ class TestUnetTraining:
         mock_data_loader,
         mock_description,
         mock_isinstance,
+        mock_test_model,
         tmp_path,
     ):
         """Test UNet training with multiple GPUs."""
