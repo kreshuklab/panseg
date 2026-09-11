@@ -26,12 +26,13 @@ LARGE_VRAM_GPUS = [
     "NVIDIA A40",
 ]  # these two are not full names because A100 has multiple models
 ALL_TESTED_GPUS = [
-    "NVIDIA GeForce RTX 2080 Ti",
-    "NVIDIA GeForce RTX 3090",
-    "NVIDIA A100-PCIE-40GB",
-    "NVIDIA A40",
-    "NVIDIA GeForce RTX 4050 Laptop GPU",
-    "NVIDIA GeForce RTX 4090",
+    # # Flaky if the PC is in use while testing
+    # "NVIDIA GeForce RTX 2080 Ti",
+    # "NVIDIA GeForce RTX 3090",
+    # "NVIDIA A100-PCIE-40GB",
+    # "NVIDIA A40",
+    # "NVIDIA GeForce RTX 4050 Laptop GPU",
+    # "NVIDIA GeForce RTX 4090",
 ]
 MAX_PATCH_SHAPES = {
     "generic_confocal_3D_unet": {
