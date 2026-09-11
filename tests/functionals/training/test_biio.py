@@ -28,23 +28,23 @@ def model_dir(tmp_path):
 
 
 def make_description(model_dir, **overrides):
-    defaults = dict(
-        weights=Path("best_checkpoint.pytorch"),
-        model_name="dummy_model",
-        in_channels=1,
-        out_channels=1,
-        feature_maps=64,
-        patch_size=(16, 32, 64),
-        dimensionality="3D",
-        layer_order="bcr",
-        modality="mod",
-        output_type="boundaries",
-        description="dummy model",
-        resolution=(0.5, 0.02, 2),
-        test_in=model_dir / "inputs.npy",
-        test_out=model_dir / "outputs.npy",
-        panseg_config=Path("best_checkpoint.pytorch"),
-    )
+    defaults = {
+        "weights": Path("best_checkpoint.pytorch"),
+        "model_name": "dummy_model",
+        "in_channels": 1,
+        "out_channels": 1,
+        "feature_maps": 64,
+        "patch_size": (16, 32, 64),
+        "dimensionality": "3D",
+        "layer_order": "bcr",
+        "modality": "mod",
+        "output_type": "boundaries",
+        "description": "dummy model",
+        "resolution": (0.5, 0.02, 2),
+        "test_in": model_dir / "inputs.npy",
+        "test_out": model_dir / "outputs.npy",
+        "panseg_config": Path("best_checkpoint.pytorch"),
+    }
     with chdir(model_dir):
         return make_model_description(**{**defaults, **overrides})
 

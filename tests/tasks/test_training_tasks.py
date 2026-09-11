@@ -1,22 +1,13 @@
 """Unit tests for training tasks."""
 
-from pathlib import Path
-
-import pytest
-
 from panseg.tasks.training_tasks import unet_training_task
 
 
-@pytest.fixture
-def dataset_dir(tmp_path):
-    directory = tmp_path / "dataset"
-    (directory / "train").mkdir(parents=True)
-    (directory / "val").mkdir()
-    return directory
-
-
-def test_unet_training_task_defaults(dataset_dir, mocker):
+def test_unet_training_task_defaults(tmp_path, mocker):
     m_unet_training = mocker.patch("panseg.tasks.training_tasks.unet_training")
+    dataset_dir = tmp_path / "dataset"
+    (dataset_dir / "train").mkdir(parents=True)
+    (dataset_dir / "val").mkdir()
 
     unet_training_task(
         dataset_dir=dataset_dir,
