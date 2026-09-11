@@ -1,4 +1,5 @@
-from typing import Optional
+import logging
+import multiprocessing
 
 import nifty
 import numpy as np
@@ -14,10 +15,16 @@ from elf.segmentation.features import (
     lifted_problem_from_segmentation,
 )
 from elf.segmentation.multicut import multicut_kernighan_lin
-from elf.segmentation.watershed import apply_size_filter, distance_transform_watershed
+from elf.segmentation.watershed import (
+    apply_size_filter,
+    blockwise_two_pass_watershed,
+    distance_transform_watershed,
+)
 from vigra.filters import gaussianSmoothing
 
 from panseg.functionals.segmentation.utils import compute_mc_costs, shift_affinities
+
+logger = logging.getLogger(__name__)
 
 try:
     import SimpleITK as sitk  # type: ignore[import]
@@ -25,6 +32,48 @@ try:
     SIMPLE_ITK_INSTALLED = True
 except ImportError:
     SIMPLE_ITK_INSTALLED = False
+
+
+def _default_block_shape(
+    shape: tuple[int, ...], n_threads: int | None
+) -> tuple[int, ...]:
+    """Derive a block shape for blockwise processing of a volume with the given shape.
+
+    Starting from a single block, dimensions are greedily split (always the one with the
+    largest extent per block) until the total number of blocks reaches max(2, 2 * n_threads)
+    or until no dimension can be split further without yielding block dimensions of less
+    than 32 voxels.
+
+    Args:
+        shape (tuple[int, ...]): Shape of the volume to split.
+        n_threads (Optional[int]): Number of threads to target. If None, the number of
+            available CPU cores is used.
+
+    Returns:
+        tuple[int, ...]: The derived block shape.
+    """
+    n_threads = multiprocessing.cpu_count() if n_threads is None else n_threads
+    target_blocks = max(2, 2 * n_threads)
+    blocks = [1] * len(shape)
+    while int(np.prod(blocks)) < target_blocks:
+        splittable = [d for d in range(len(shape)) if shape[d] / (blocks[d] + 1) >= 32]
+        if not splittable:
+            break
+        split_dim = max(splittable, key=lambda d: shape[d] / blocks[d])
+        blocks[split_dim] += 1
+    return tuple(int(np.ceil(shape[d] / blocks[d])) for d in range(len(shape)))
+
+
+def _default_halo(block_shape: tuple[int, ...]) -> tuple[int, ...]:
+    """Derive a halo for blockwise processing with the given block shape.
+
+    Args:
+        block_shape (tuple[int, ...]): Block shape to derive the halo from.
+
+    Returns:
+        tuple[int, ...]: The derived halo, capped at 32 voxels per dimension.
+    """
+    return tuple(min(32, b // 3) for b in block_shape)
 
 
 def dt_watershed(
@@ -35,10 +84,13 @@ def dt_watershed(
     sigma_weights: float = 2.0,
     min_size: int = 100,
     alpha: float = 1.0,
-    pixel_pitch: Optional[tuple[int, ...]] = None,
+    pixel_pitch: tuple[int, ...] | None = None,
     apply_nonmax_suppression: bool = False,
-    n_threads: Optional[int] = None,
-    mask: Optional[np.ndarray] = None,
+    n_threads: int | None = None,
+    blockwise: bool = False,
+    block_shape: tuple[int, ...] | None = None,
+    halo: tuple[int, ...] | None = None,
+    mask: np.ndarray | None = None,
 ) -> np.ndarray:
     """Performs watershed segmentation using distance transforms on boundary probability maps.
 
@@ -76,8 +128,19 @@ def dt_watershed(
             the detected seeds, reducing seed redundancy. This requires the Nifty library.
             Defaults to False.
         n_threads (Optional[int], optional): Number of threads to use for parallel processing in
-            2D mode (stacked mode). If None, the default number of threads will be used.
-            Defaults to None.
+            2D mode (stacked mode) and 3D blockwise mode. If None, the default number of threads
+            (all available CPU cores) will be used. Defaults to None.
+        blockwise (bool, optional): If True, runs the 3D watershed blockwise across multiple
+            CPU cores instead of a single full-volume pass. Falls back to the single-pass
+            watershed (with a warning) if the input is 2D, if the volume has fewer than
+            2,000,000 voxels, or if the block layout yields fewer than two blocks. Ignored
+            when 'stacked' is True. Defaults to False.
+        block_shape (Optional[tuple[int, ...]], optional): Block shape in voxels for the
+            blockwise mode. If None, it is derived from the volume shape and 'n_threads'.
+            Dimensions are clamped to the volume shape. Defaults to None.
+        halo (Optional[tuple[int, ...]], optional): Halo size in voxels added around each block
+            in the blockwise mode. If None, it is derived from the block shape. Dimensions are
+            clamped to half of the corresponding block dimension. Defaults to None.
         mask (Optional[np.ndarray], optional): A binary mask that excludes certain regions from
             segmentation. Only regions within the mask will be considered. If None, all regions
             are included. Must have the same shape as 'boundary_pmaps'. Defaults to None.
@@ -96,7 +159,6 @@ def dt_watershed(
         "alpha": alpha,
         "pixel_pitch": pixel_pitch,
         "apply_nonmax_suppression": apply_nonmax_suppression,
-        "mask": mask,
     }
     if stacked:
         # Apply watershed slice by slice (for 3D data)
@@ -104,18 +166,78 @@ def dt_watershed(
             boundary_pmaps,
             ws_function=distance_transform_watershed,
             n_threads=n_threads,
+            mask=mask,
             **ws_kwargs,
         )
+    elif blockwise:
+        shape = boundary_pmaps.shape
+        if block_shape is None:
+            resolved_block_shape = _default_block_shape(shape, n_threads)
+        else:
+            # Nifty requires the block shape to fit within the volume
+            resolved_block_shape = tuple(
+                min(int(b), int(s)) for b, s in zip(block_shape, shape)
+            )
+        if halo is None:
+            resolved_halo = _default_halo(resolved_block_shape)
+        else:
+            # Nifty requires the halo to be smaller than the block size
+            resolved_halo = tuple(
+                min(int(h), b // 2) for h, b in zip(halo, resolved_block_shape)
+            )
+        n_blocks = int(
+            np.prod(
+                np.ceil(
+                    np.array(shape, dtype="float64") / np.array(resolved_block_shape)
+                )
+            )
+        )
+        if (
+            boundary_pmaps.ndim == 3
+            and boundary_pmaps.size >= 2_000_000
+            and n_blocks >= 2
+        ):
+            # Apply watershed blockwise in two passes (for large 3D data)
+            logger.debug(
+                "Running blockwise watershed, "
+                f"shape:{resolved_block_shape}, halo: {resolved_halo}"
+            )
+            segmentation, _ = blockwise_two_pass_watershed(
+                boundary_pmaps,
+                resolved_block_shape,
+                resolved_halo,
+                ws_function=distance_transform_watershed,
+                n_threads=n_threads,
+                mask=mask,
+                **ws_kwargs,
+            )
+        else:
+            if boundary_pmaps.ndim != 3:
+                reason = "the input is 2D"
+            elif boundary_pmaps.size < 2_000_000:
+                reason = "the volume has fewer than 2,000,000 voxels"
+            else:
+                reason = "the block layout yields fewer than two blocks"
+            logger.warning(
+                "dt_watershed: blockwise mode not applicable (%s); "
+                "falling back to the single-pass watershed.",
+                reason,
+            )
+            segmentation, _ = distance_transform_watershed(
+                boundary_pmaps, mask=mask, **ws_kwargs
+            )
     else:
         # Apply watershed in 3D for 3D data or in 2D for 2D data
-        segmentation, _ = distance_transform_watershed(boundary_pmaps, **ws_kwargs)
+        segmentation, _ = distance_transform_watershed(
+            boundary_pmaps, mask=mask, **ws_kwargs
+        )
 
     return segmentation
 
 
 def gasp(
     boundary_pmaps: np.ndarray,
-    superpixels: Optional[np.ndarray] = None,
+    superpixels: np.ndarray | None = None,
     gasp_linkage_criteria: str = "average",
     beta: float = 0.5,
     post_minsize: int = 100,
@@ -189,7 +311,7 @@ def gasp(
 
 def mutex_ws(
     boundary_pmaps: np.ndarray,
-    superpixels: Optional[np.ndarray] = None,
+    superpixels: np.ndarray | None = None,
     beta: float = 0.5,
     post_minsize: int = 100,
     n_threads: int = 6,

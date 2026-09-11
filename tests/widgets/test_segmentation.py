@@ -26,6 +26,13 @@ def test_set_separate_steps_list(segmentation_tab):
     assert len(containers) == 13
 
 
+def test_watershed_default_mode(segmentation_tab):
+    assert segmentation_tab.widget_dt_ws.stacked.value is False
+    assert segmentation_tab.widget_aio_ws.stacked.value is False
+    assert segmentation_tab.widget_dt_ws.stacked.choices == (True, False)
+    assert segmentation_tab.widget_aio_ws.stacked.choices == (True, False)
+
+
 def test_toggle_visibility_1(segmentation_tab, mocker):
     mocked_switch_2 = mocker.patch.object(segmentation_tab, "toggle_visibility_2")
     mocked_switch_3 = mocker.patch.object(segmentation_tab, "toggle_visibility_3")
@@ -124,6 +131,32 @@ def test_dt_watershed(segmentation_tab, mocker, napari_prediction):
     segmentation_tab.widget_layer_select.prediction.value = napari_prediction
     segmentation_tab.widget_dt_ws(stacked=False)
     mocked_scheduler.assert_called_once()
+    mocked_log.assert_not_called()
+
+
+def test_dt_watershed_modes(segmentation_tab, mocker, napari_prediction):
+    mocked_scheduler = mocker.patch(
+        target="panseg.viewer_napari.widgets.segmentation.schedule_task",
+        autospec=True,
+    )
+    mocked_log = mocker.patch(
+        target="panseg.viewer_napari.widgets.segmentation.log",
+        autospec=True,
+    )
+    segmentation_tab.widget_layer_select.prediction.choices = (napari_prediction,)
+    segmentation_tab.widget_layer_select.prediction.value = napari_prediction
+
+    expected_params = {
+        True: {"stacked": True, "blockwise": False},
+        False: {"stacked": False, "blockwise": True},
+    }
+    for mode, expected in expected_params.items():
+        mocked_scheduler.reset_mock()
+        segmentation_tab.widget_dt_ws(stacked=mode)
+        mocked_scheduler.assert_called_once()
+        task_kwargs = mocked_scheduler.call_args.kwargs["task_kwargs"]
+        assert task_kwargs["stacked"] is expected["stacked"]
+        assert task_kwargs["blockwise"] is expected["blockwise"]
     mocked_log.assert_not_called()
 
 
@@ -399,4 +432,31 @@ def test_aio_ws_lmc(segmentation_tab, mocker, napari_prediction, napari_raw):
 
     segmentation_tab.widget_aio_ws(mode=AGGLOMERATION_MODES[3][1])
     mocked_scheduler.assert_called_once()
+    mocked_log.assert_not_called()
+
+
+def test_aio_ws_modes(segmentation_tab, mocker, napari_prediction):
+    mocked_scheduler = mocker.patch(
+        target="panseg.viewer_napari.widgets.segmentation.schedule_task",
+        autospec=True,
+    )
+    mocked_log = mocker.patch(
+        target="panseg.viewer_napari.widgets.segmentation.log",
+        autospec=True,
+    )
+    segmentation_tab.widget_layer_select.prediction.choices = (napari_prediction,)
+    segmentation_tab.widget_layer_select.prediction.value = napari_prediction
+
+    expected_params = {
+        True: {"stacked": True, "blockwise": False},
+        False: {"stacked": False, "blockwise": True},
+    }
+    for mode, expected in expected_params.items():
+        mocked_scheduler.reset_mock()
+        segmentation_tab.widget_aio_ws(stacked=mode)
+        mocked_scheduler.assert_called_once()
+        task_kwargs = mocked_scheduler.call_args.kwargs["task_kwargs"]
+        assert task_kwargs["stacked"] is expected["stacked"]
+        assert task_kwargs["blockwise"] is expected["blockwise"]
+        assert task_kwargs["mode"] == AGGLOMERATION_MODES[0][1]
     mocked_log.assert_not_called()
