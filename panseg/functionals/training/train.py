@@ -63,9 +63,9 @@ def create_model_config(
         str(pre_trained) if pre_trained else "null"
     )
     train_template["loaders"]["train"]["slice_builder"]["patch_shape"] = patch_size
-    train_template["loaders"]["train"]["slice_builder"]["stride_shape"] = list(
+    train_template["loaders"]["train"]["slice_builder"]["stride_shape"] = [
         i // 2 for i in patch_size
-    )
+    ]
     train_template["loaders"]["val"]["slice_builder"]["patch_shape"] = patch_size
     train_template["loaders"]["val"]["slice_builder"]["stride_shape"] = patch_size
 

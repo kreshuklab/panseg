@@ -6,6 +6,7 @@ dependencies:
   - bioimageio.spec==0.5.9.1
   - bump-my-version
   - h5py==3.16.0
+  - imageio==2.37.0
   - mike
   - mkdocs-autorefs==1.4.4
   - mkdocs-git-committers-plugin-2==2.5.0
