@@ -20,8 +20,8 @@ training:
   # resolution: [1.0, 1.0, 1.0] # voxel size of the training data in um
   # pre_trained: null # path to pretrained model weights for fine-tuning
   # layer_order: bcr # unet layer order
-  # authors: [] # one author per entry, 'Name' or 'Name <email>' (FAIR metadata)
-  # additional_citations: [] # one per entry, '<DOI or URL> [free text]';
-  # bioimage.io requires a DOI or URL per citation (FAIR metadata)
-  # license: null # SPDX license id, e.g. MIT (FAIR metadata)
-  # documentation: '' # markdown documentation, saved as README.md (FAIR metadata)
+  # FAIR metadata:
+  # authors: [] # one author per entry, 'Name' or 'Name <email>'
+  # additional_citations: [] # one per entry, '<DOI or URL> [free text]'
+  # license: null # SPDX license id, e.g. MIT
+  # documentation: '' # markdown documentation, saved as README.md

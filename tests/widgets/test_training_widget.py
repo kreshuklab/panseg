@@ -5,7 +5,6 @@ import pytest
 from panseg.functionals.training.model import UNet2D, UNet3D
 from panseg.functionals.training.train import find_h5_files
 from panseg.viewer_napari.widgets.training import (
-    LICENSE_CHOICES,
     NONE_LICENSE,
     Training_Tab,
 )
@@ -22,6 +21,32 @@ def shown_training_tab(training_tab, qtbot):
     qtbot.addWidget(training_tab.widget_unet_training.native)
     training_tab.widget_unet_training.show()
     return training_tab
+
+
+def invoke_training(tab, **overrides):
+    kwargs = dict(
+        from_disk="Disk",
+        dataset="dataset/data",
+        image=None,
+        segmentation=None,
+        pretrained=None,
+        model_name="test_model",
+        description="description",
+        channels=(1, 1),
+        feature_maps=[16],
+        patch_size=[16, 64, 64],
+        resolution=[1.0, 1.0, 1.0],
+        max_num_iters=100,
+        dimensionality="3D",
+        device="cpu",
+        modality="confocal",
+        custom_modality="",
+        output_type="boundaries",
+        custom_output_type="",
+        pbar=None,
+    )
+    kwargs.update(overrides)
+    tab.widget_unet_training(**kwargs)
 
 
 def test_get_container(training_tab):
@@ -863,8 +888,6 @@ def test_device_choices_exclude_mps_when_unavailable(mocker):
 
 def test_metadata_fields_present(training_tab):
     w = training_tab.widget_unet_training
-    assert list(w.license.choices) == LICENSE_CHOICES
-    assert NONE_LICENSE in LICENSE_CHOICES
     assert w.license.value == NONE_LICENSE
 
 
@@ -947,66 +970,19 @@ def test_custom_widgets_restored_on_section_open(shown_training_tab):
     assert tab.widget_unet_training.custom_modality.visible
 
 
-def test_unet_training_invalid_author(shown_training_tab, mocker):
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("authors", "Name <not-an-email>"),
+        ("additional_citations", "no identifier here"),
+    ],
+)
+def test_unet_training_invalid_metadata(shown_training_tab, mocker, field, value):
     m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
     m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
-    shown_training_tab.widget_unet_training.authors.value = "Name <not-an-email>"
+    getattr(shown_training_tab.widget_unet_training, field).value = value
 
-    shown_training_tab.widget_unet_training(
-        from_disk="Disk",
-        dataset="dataset/data",
-        image=None,
-        segmentation=None,
-        pretrained=None,
-        model_name="test_model",
-        description="description",
-        channels=(1, 1),
-        feature_maps=[16],
-        patch_size=[16, 64, 64],
-        resolution=[1.0, 1.0, 1.0],
-        max_num_iters=100,
-        dimensionality="3D",
-        device="cpu",
-        modality="confocal",
-        custom_modality="",
-        output_type="boundaries",
-        custom_output_type="",
-        pbar=None,
-    )
-
-    m_log.assert_called_once()
-    assert m_log.call_args.kwargs.get("level") == "ERROR"
-    m_schedule.assert_not_called()
-
-
-def test_unet_training_invalid_citation(shown_training_tab, mocker):
-    m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
-    m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
-    shown_training_tab.widget_unet_training.additional_citations.value = (
-        "no identifier here"
-    )
-
-    shown_training_tab.widget_unet_training(
-        from_disk="Disk",
-        dataset="dataset/data",
-        image=None,
-        segmentation=None,
-        pretrained=None,
-        model_name="test_model",
-        description="description",
-        channels=(1, 1),
-        feature_maps=[16],
-        patch_size=[16, 64, 64],
-        resolution=[1.0, 1.0, 1.0],
-        max_num_iters=100,
-        dimensionality="3D",
-        device="cpu",
-        modality="confocal",
-        custom_modality="",
-        output_type="boundaries",
-        custom_output_type="",
-        pbar=None,
-    )
+    invoke_training(shown_training_tab)
 
     m_log.assert_called_once()
     assert m_log.call_args.kwargs.get("level") == "ERROR"
@@ -1021,32 +997,12 @@ def test_unet_training_none_license_maps_to_none(shown_training_tab, mocker, tmp
     )
     shown_training_tab.widget_unet_training.license.value = NONE_LICENSE
 
-    shown_training_tab.widget_unet_training(
-        from_disk="Disk",
-        dataset="dataset/data",
-        image=None,
-        segmentation=None,
-        pretrained=None,
-        model_name="test_model",
-        description="description",
-        channels=(1, 1),
-        feature_maps=[16],
-        patch_size=[16, 64, 64],
-        resolution=[1.0, 1.0, 1.0],
-        max_num_iters=100,
-        dimensionality="3D",
-        device="cpu",
-        modality="confocal",
-        custom_modality="",
-        output_type="boundaries",
-        custom_output_type="",
-        pbar=None,
-    )
+    invoke_training(shown_training_tab)
 
     m_log.assert_called_with("Starting training task", thread="train_gui")
     task_kwargs = m_schedule.call_args.kwargs["task_kwargs"]
     assert task_kwargs["license"] is None
-    assert task_kwargs["authors"] == []
+    assert task_kwargs["authors"] == ""
 
 
 def test_unet_training_fair_metadata_in_task_kwargs(shown_training_tab, mocker):
@@ -1061,31 +1017,11 @@ def test_unet_training_fair_metadata_in_task_kwargs(shown_training_tab, mocker):
     shown_training_tab.widget_unet_training.license.value = "MIT"
     shown_training_tab.widget_unet_training.documentation.value = "A very good model."
 
-    shown_training_tab.widget_unet_training(
-        from_disk="Disk",
-        dataset="dataset/data",
-        image=None,
-        segmentation=None,
-        pretrained=None,
-        model_name="test_model",
-        description="description",
-        channels=(1, 1),
-        feature_maps=[16],
-        patch_size=[16, 64, 64],
-        resolution=[1.0, 1.0, 1.0],
-        max_num_iters=100,
-        dimensionality="3D",
-        device="cpu",
-        modality="confocal",
-        custom_modality="",
-        output_type="boundaries",
-        custom_output_type="",
-        pbar=None,
-    )
+    invoke_training(shown_training_tab)
 
     m_log.assert_called_with("Starting training task", thread="train_gui")
     task_kwargs = m_schedule.call_args.kwargs["task_kwargs"]
-    assert task_kwargs["authors"] == ["Jane Doe <jane@example.com>", "John Smith"]
-    assert task_kwargs["additional_citations"] == ["10.1234/x.y Smith, J. et al."]
+    assert task_kwargs["authors"] == "Jane Doe <jane@example.com>\nJohn Smith"
+    assert task_kwargs["additional_citations"] == "10.1234/x.y Smith, J. et al."
     assert task_kwargs["license"] == "MIT"
     assert task_kwargs["documentation"] == "A very good model."

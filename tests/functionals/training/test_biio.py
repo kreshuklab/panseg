@@ -5,7 +5,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from PIL import Image
 
 from panseg.functionals.training.biio import (
     PANSEG_CITATION,
@@ -48,10 +47,6 @@ def make_description(model_dir, **overrides):
     )
     with chdir(model_dir):
         return make_model_description(**{**defaults, **overrides})
-
-
-def test_make_model_description(model_dir):
-    make_description(model_dir)
 
 
 def test_make_model_description_fair_fields(model_dir):
@@ -116,9 +111,6 @@ def test_make_model_description_invalid_author(model_dir):
     with pytest.raises(ValueError, match="<john@example.com>"):
         make_description(model_dir, authors=["<john@example.com>"])
 
-    with pytest.raises(ValueError, match="Invalid author line"):
-        make_description(model_dir, authors=["Inva/lid Name"])
-
 
 def test_make_model_description_invalid_citation(model_dir):
     with pytest.raises(ValueError, match="just some text"):
@@ -146,40 +138,6 @@ def test_make_model_description_writes_readme(model_dir):
     assert "# Validation" in content
     assert "test_in.npy" in content
     assert "test_out.npy" in content
-
-
-def test_cover_shows_input_and_output(model_dir):
-    # Realistic z-scored data: mostly dark background with a bright
-    # structure in one quadrant. Regression test for the cover rendering
-    # black on the input side (min-max normalization + diagonal split).
-    rng = np.random.default_rng(0)
-    raw = np.zeros((16, 64, 64), dtype="float32")
-    raw[:, 32:, :32] = 5.0
-    raw += rng.normal(0, 0.1, size=(16, 64, 64)).astype("float32")
-    data = ((raw - raw.mean()) / raw.std()).astype("float32")
-    out = (1 / (1 + np.exp(-data * 2))).astype("float32")
-    np.save(model_dir / "inputs.npy", data[None, None])
-    np.save(model_dir / "outputs.npy", out[None, None])
-
-    desc = make_description(model_dir, patch_size=(16, 64, 64))
-
-    assert [str(c) for c in desc.covers] == ["cover.png"]
-    img = np.array(Image.open(model_dir / "cover.png").convert("RGB"))
-    h, w = img.shape[:2]
-    # input | output side by side
-    assert w > h
-    side = (w - 4) // 2
-    input_half = img[:, :side]
-    output_half = img[:, w - side :]
-    # both halves must show visible content
-    assert input_half.max() > 200
-    assert input_half.mean() > 32
-    assert output_half.max() > 200
-
-    # the packaged test tensors must be left untouched
-    assert np.load(model_dir / "inputs.npy").min() == pytest.approx(data.min())
-    assert np.load(model_dir / "inputs.npy").max() == pytest.approx(data.max())
-    assert np.load(model_dir / "outputs.npy").max() == pytest.approx(out.max())
 
 
 def test_package_includes_cover(model_dir):

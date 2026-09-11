@@ -46,10 +46,6 @@ LICENSE_CHOICES = [
 ]
 
 
-def _split_lines(text: str) -> list[str]:
-    return [stripped for line in text.splitlines() if (stripped := line.strip())]
-
-
 class Training_Tab:
     def __init__(self, prediction_tab: Optional[Prediction_Widgets]):
         self.prediction_tab = prediction_tab
@@ -64,8 +60,7 @@ class Training_Tab:
 
         self.previous_z_patch_size = 16
 
-        # Section visibility state. The training data section is expanded by
-        # default, the meta data section is collapsed.
+        # Section visibility state
         self.train_data_open = True
         self.meta_data_open = False
 
@@ -179,7 +174,6 @@ class Training_Tab:
             self.widget_unet_training.documentation,
         ]
 
-        # Training data and model are expanded by default, meta data is collapsed.
         self.widget_show_train_data.hide()
         self.toggle_visibility_metadata(False)
 
@@ -367,8 +361,7 @@ class Training_Tab:
             "label": "Additional citations",
             "widget_type": "TextEdit",
             "tooltip": "One citation per line: '<DOI or URL> [free text]'.\n"
-            "Example: 10.7554/eLife.57613 Wolny et al. eLife 2020\n"
-            "bioimage.io requires a DOI or URL for every citation.\n"
+            "Example: 10.1234/abc.def Smith, J. et al. Some result.\n"
             f"The PanSeg citation ({PANSEG_CITATION.doi}) is always included.",
             "visible": False,
         },
@@ -462,11 +455,9 @@ class Training_Tab:
             log("Please choose a longer model name!", thread="train_gui")
             return
 
-        author_list = _split_lines(authors)
-        citations = _split_lines(additional_citations)
         try:
-            parse_authors(author_list)
-            parse_citations(citations)
+            parse_authors(authors)
+            parse_citations(additional_citations)
         except ValueError as e:
             log(f"Invalid model metadata: {e}", thread="train_gui", level="ERROR")
             return
@@ -531,8 +522,8 @@ class Training_Tab:
                 "resolution": resolution,
                 "pre_trained": pre_model_path,
                 "layer_order": layer_order,
-                "authors": author_list,
-                "additional_citations": citations,
+                "authors": authors,
+                "additional_citations": additional_citations,
                 "license": None if license == NONE_LICENSE else license,
                 "documentation": documentation,
                 "widgets_to_reset": widgets_to_reset,

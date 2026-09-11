@@ -46,14 +46,16 @@ _DOI_RE = re.compile(r"\b10\.\d{4,9}/\S+")
 _URL_RE = re.compile(r"https?://\S+")
 
 
-def parse_authors(authors: list[str] | None) -> list[Author]:
+def _split_lines(text: str | list[str] | None) -> list[str]:
+    lines = text.splitlines() if isinstance(text, str) else text or []
+    return [stripped for line in lines if (stripped := line.strip())]
+
+
+def parse_authors(authors: str | list[str] | None) -> list[Author]:
     parsed: list[Author] = []
-    for line in authors or []:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if "<" in stripped or ">" in stripped:
-            match = _AUTHOR_LINE_RE.match(stripped)
+    for line in _split_lines(authors):
+        if "<" in line or ">" in line:
+            match = _AUTHOR_LINE_RE.match(line)
             if match is None:
                 raise ValueError(
                     f"Invalid author line, expected 'Name <email>': {line!r}"
@@ -70,24 +72,20 @@ def parse_authors(authors: list[str] | None) -> list[Author]:
                 raise ValueError(f"Invalid author line: {line!r}") from e
         else:
             try:
-                parsed.append(Author(name=stripped))
+                parsed.append(Author(name=line))
             except ValidationError as e:
                 raise ValueError(f"Invalid author line: {line!r}") from e
     return parsed
 
 
-def parse_citations(citations: list[str] | None) -> list[CiteEntry]:
+def parse_citations(citations: str | list[str] | None) -> list[CiteEntry]:
     parsed: list[CiteEntry] = []
-    for line in citations or []:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        # '<DOI or URL> [free text]', split at the first whitespace so the
-        # identifier is not repeated inside the citation text.
+    for line in _split_lines(citations):
+        # maxsplit=1 keeps the identifier out of the citation text.
         # A DOI or URL is mandatory: CiteEntry raises
         # "Either 'doi' or 'url' is required" for text-only citations, even
         # though the JSON schema docs mark doi/url as optional.
-        identifier, *rest = stripped.split(maxsplit=1)
+        identifier, *rest = line.split(maxsplit=1)
         text = rest[0].strip() if rest else ""
         doi_match = _DOI_RE.search(identifier)
         url_match = _URL_RE.search(identifier)
@@ -111,9 +109,9 @@ def _pick_2d_slice(data: np.ndarray) -> np.ndarray:
     (1, C, [Z,] Y, X) -> (Y, X), taking the middle z-slice and the first channel.
     """
     data = data[0]
-    if data.ndim == 4:  # (C, Z, Y, X)
+    if data.ndim == 4:
         data = data[:, data.shape[1] // 2, :]
-    if data.ndim == 3:  # (C, Y, X)
+    if data.ndim == 3:
         data = data[0]
     return data
 
@@ -132,10 +130,7 @@ def _normalize_for_display(
 def _make_cover(test_in: np.ndarray, test_out: np.ndarray) -> Path:
     """Render an input | output cover image from the test tensors.
 
-    The packaged test tensors are left untouched; only the cover differs
-    from the raw data. Input and output are shown side by side so both are
-    fully visible for comparison (a diagonal split would hide the half of
-    the image that contains no signal).
+    Side by side so both halves stay visible.
     """
     in_img = (_normalize_for_display(_pick_2d_slice(test_in)) * 255).astype("uint8")
     out_img = (_normalize_for_display(_pick_2d_slice(test_out)) * 255).astype("uint8")
@@ -175,8 +170,8 @@ def make_model_description(
     test_in: Path,
     test_out: Path,
     panseg_config: Path,
-    authors: list[str] | None = None,
-    additional_citations: list[str] | None = None,
+    authors: str | list[str] | None = None,
+    additional_citations: str | list[str] | None = None,
     license: str | None = None,
     documentation: str | None = None,
 ):
