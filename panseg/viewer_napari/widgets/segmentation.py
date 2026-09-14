@@ -23,6 +23,7 @@ AGGLOMERATION_MODES = [
     ("LiftedMultiCut", "lmc"),
 ]
 
+
 class Segmentation_Tab:
     def __init__(self):
         self.STACKED = [
