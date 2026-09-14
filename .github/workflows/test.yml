@@ -27,7 +27,7 @@ jobs:
           echo "hash=$(git rev-parse HEAD:panseg/resources/models_zoo.yaml)" >> "$GITHUB_OUTPUT"
 
       - name: Cache PanSeg models
-        uses: actions/cache@v4
+        uses: actions/cache@v6.1.0
         with:
           path: ~/.panseg_models
           key: panseg-models-${{ steps.model-zoo-key.outputs.hash }}
