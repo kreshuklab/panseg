@@ -229,8 +229,6 @@ def create_tiff(
     resolution = (1.0 / x, 1.0 / y)
     # Save output results as tiff
 
-    force_bigtiff = True
-    logger.debug("Forching bigtiff for debug")
     if stack.nbytes > 4294967295 or force_bigtiff:
         # OME-XML (unlike the shaped-JSON format) does not read `spacing`/`unit`
         # metadata keys and rejects the 6-D TZCYXS reshape, so write the logical
