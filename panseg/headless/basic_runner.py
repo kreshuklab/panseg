@@ -1,6 +1,8 @@
 import logging
 from pathlib import Path
 
+import yaml
+
 from panseg.core.image import PanSegImage
 from panseg.tasks.workflow_handler import DAG, Task, WorkflowHandler
 
@@ -85,6 +87,17 @@ class SerialRunner:
 
         return inputs
 
+    def _load_dag(self) -> DAG:
+        with self.dag_path.open("r") as f:
+            config = yaml.safe_load(f)
+
+        # A headless configuration may list multiple jobs under "inputs";
+        # the DAG only carries the task graph and the input schema. The job
+        # inputs are passed to submit_job.
+        config.pop("inputs", None)
+
+        return DAG(**config)
+
     def submit_job(self, inputs: dict[str, str]):
         """Submit a job to the runner
 
@@ -94,7 +107,7 @@ class SerialRunner:
         Returns:
             bool: True if the job has been submitted successfully
         """
-        dag = WorkflowHandler().from_yaml(self.dag_path)._dag
+        dag = self._load_dag()
 
         var_space = {}
         for key in dag.list_inputs:

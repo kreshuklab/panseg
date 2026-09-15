@@ -10,7 +10,7 @@ from typing import Any, Callable, Literal
 from uuid import UUID, uuid4
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from rich.traceback import Traceback
 
 from panseg.__version__ import __version__
@@ -97,7 +97,7 @@ class Task(BaseModel):
 
 class DAG(BaseModel):
     infos: Infos = Field(default_factory=Infos)
-    inputs: list[dict[str, Any]] = Field(default_factory=lambda: [{}])
+    inputs: dict[str, Any] = Field(default_factory=dict)
     list_tasks: list[Task] = Field(default_factory=list)
 
     """
@@ -105,10 +105,28 @@ class DAG(BaseModel):
 
     Attributes:
         infos (Infos): A dictionary with the information of the workflow.
-        inputs (list[dict[str, Any]): A dictionary of the inputs of the workflow. For example path to the images and other runtime parameters.
+        inputs (dict[str, Any]): A dictionary of the inputs of the workflow. For example path to the images and other runtime parameters.
         list_tasks (list[Task]): A list of the tasks in the workflow.
 
     """
+
+    @field_validator("inputs", mode="before")
+    @classmethod
+    def _coerce_legacy_inputs(cls, value):
+        # Workflow files saved before the inputs field was a plain dict
+        # stored the inputs as a list with a single dict entry.
+        if isinstance(value, list):
+            if len(value) == 0:
+                return {}
+            if len(value) == 1 and isinstance(value[0], dict):
+                return value[0]
+            raise ValueError(
+                "A DAG holds the inputs of a single workflow, but a list of "
+                f"{len(value)} input dicts was given. Such a list is a headless "
+                "batch configuration: run it with `panseg --config` / "
+                "run_headless_workflow instead of loading it as a DAG."
+            )
+        return value
 
     @property
     def list_inputs(self):
@@ -155,9 +173,9 @@ def prune_dag(dag: DAG) -> DAG:
         if task.id in reachable:
             new_dag.list_tasks.append(task)
 
-    for input_key, text in dag.inputs[0].items():
+    for input_key, text in dag.inputs.items():
         if input_key in reachable_inputs:
-            new_dag.inputs[0][input_key] = text
+            new_dag.inputs[input_key] = text
             new_dag.infos.inputs_schema[input_key] = dag.infos.inputs_schema[input_key]
 
     return new_dag
@@ -269,7 +287,7 @@ class WorkflowHandler:
         value_schema.task = func_name
         self._dag.infos.inputs_schema[unique_name] = value_schema
 
-        self._dag.inputs[0][unique_name] = value
+        self._dag.inputs[unique_name] = value
         return unique_name
 
     def clean_dag(self):
@@ -294,6 +312,13 @@ class WorkflowHandler:
             yaml.dump(dag_dict, f)
 
     def from_yaml(self, path: Path) -> "WorkflowHandler":
+        """Load a workflow from a yaml file.
+
+        The file must describe a single workflow: ``inputs`` is a dict (or a
+        legacy list with a single dict entry). Headless batch configurations,
+        where ``inputs`` is a list of one dict per job, are not workflows and
+        are rejected; run them with `run_headless_workflow`.
+        """
         with open(path, "r") as f:
             dag_dict = yaml.load(f, Loader=yaml.FullLoader)
 

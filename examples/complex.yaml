@@ -40,11 +40,11 @@ infos:
     on how to do this, please visit the PlantSeg documentation (https://kreshuklab.github.io/plant-seg/).
   version: 2.0.0b4
 inputs:
-  - export_directory: /tmp
-    export_directory_0: /tmp
-    input_path: /home/kriedmiller/Downloads/Col0_03_T3.tif
-    name_pattern: "{file_name}_export"
-    name_pattern_0: "{file_name}_export"
+  export_directory: /tmp
+  export_directory_0: /tmp
+  input_path: /home/kriedmiller/Downloads/Col0_03_T3.tif
+  name_pattern: "{file_name}_export"
+  name_pattern_0: "{file_name}_export"
 list_tasks:
   - func: import_image_task
     id: 7475c802-7afb-48cf-912a-1ad7510d98fe
