@@ -2,10 +2,11 @@ import logging
 import warnings
 from pathlib import Path
 from typing import Optional
-from xml.etree import cElementTree as ElementTree
+from xml.etree import ElementTree
 
 import numpy as np
 import tifffile
+from pydantic import ValidationError
 
 from panseg.io.voxelsize import VoxelSize
 
@@ -91,7 +92,7 @@ def _read_ome_meta(tiff) -> VoxelSize:
     if units:
         voxel_size_unit = units[0]
         if not all(unit == voxel_size_unit for unit in units):
-            warnings.warn("Units are not homogeneous: {units}")
+            warnings.warn(f"Units are not homogeneous: {units}")
 
     if x is None or y is None or z is None:
         warnings.warn("Error parsing omero tiff meta. ")
@@ -112,11 +113,18 @@ def read_tiff_voxel_size(file_path: Path) -> VoxelSize:
 
     """
     with tifffile.TiffFile(file_path) as tiff:
-        if tiff.imagej_metadata is not None:
-            return _read_imagej_meta(tiff)
+        try:
+            if tiff.imagej_metadata is not None:
+                return _read_imagej_meta(tiff)
 
-        elif tiff.ome_metadata is not None:
-            return _read_ome_meta(tiff)
+            elif tiff.ome_metadata is not None:
+                return _read_ome_meta(tiff)
+        except ValidationError:
+            warnings.warn(
+                "Error parsing tiff meta unit. Reverting to default "
+                "voxel size (1., 1., 1.) um"
+            )
+            return VoxelSize()
 
         warnings.warn("No metadata found.")
         return VoxelSize()
@@ -179,27 +187,32 @@ def create_tiff(
     if layout == "ZYX":
         assert stack.ndim == 3, "Stack dimensions must be in ZYX order"
         z, y, x = stack.shape
+        logical_stack, logical_axes = stack, "ZYX"
         stack = stack.reshape(1, z, 1, y, x, 1)
 
     elif layout == "YX":
         assert stack.ndim == 2, "Stack dimensions must be in YX order"
         y, x = stack.shape
+        logical_stack, logical_axes = stack, "YX"
         stack = stack.reshape(1, 1, 1, y, x, 1)
 
     elif layout == "CYX":
         assert stack.ndim == 3, "Stack dimensions must be in CYX order"
         c, y, x = stack.shape
+        logical_stack, logical_axes = stack, "CYX"
         stack = stack.reshape(1, 1, c, y, x, 1)
 
     elif layout == "ZCYX":
         assert stack.ndim == 4, "Stack dimensions must be in ZCYX order"
         z, c, y, x = stack.shape
+        logical_stack, logical_axes = stack, "ZCYX"
         stack = stack.reshape(1, z, c, y, x, 1)
 
     elif layout == "CZYX":
         assert stack.ndim == 4, "Stack dimensions must be in CZYX order"
         stack = np.transpose(stack, (1, 0, 2, 3))
         z, c, y, x = stack.shape
+        logical_stack, logical_axes = stack, "ZCYX"
         stack = stack.reshape(1, z, c, y, x, 1)
 
     else:
@@ -216,15 +229,29 @@ def create_tiff(
     resolution = (1.0 / x, 1.0 / y)
     # Save output results as tiff
 
+    force_bigtiff = True
+    logger.debug("Forching bigtiff for debug")
     if stack.nbytes > 4294967295 or force_bigtiff:
+        # OME-XML (unlike the shaped-JSON format) does not read `spacing`/`unit`
+        # metadata keys and rejects the 6-D TZCYXS reshape, so write the logical
+        # stack with explicit PhysicalSize* attributes to keep the voxel size.
         tifffile.imwrite(
             path,
-            data=stack,
-            dtype=stack.dtype,
-            imagej=False,
+            data=logical_stack,
+            dtype=logical_stack.dtype,
             bigtiff=True,
+            ome=True,
+            photometric="minisblack",
             resolution=resolution,
-            metadata={"axes": "TZCYXS", "spacing": spacing, "unit": voxel_size.unit},
+            metadata={
+                "axes": logical_axes,
+                "PhysicalSizeX": x,
+                "PhysicalSizeXUnit": voxel_size.unit,
+                "PhysicalSizeY": y,
+                "PhysicalSizeYUnit": voxel_size.unit,
+                "PhysicalSizeZ": spacing,
+                "PhysicalSizeZUnit": voxel_size.unit,
+            },
         )
     else:
         tifffile.imwrite(
