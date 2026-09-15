@@ -280,7 +280,8 @@ class Segmentation_Tab:
         call_button="Boundary to Superpixels",
         stacked={
             "label": "Mode",
-            "tooltip": "Define if the Watershed will run slice by slice (faster) or on the full volume (slower).",
+            "tooltip": "Define if the Watershed will run slice by slice (faster) "
+            "or in 3D (more accurate)",
             "widget_type": "RadioButtons",
             "orientation": "horizontal",
         },
@@ -372,6 +373,7 @@ class Segmentation_Tab:
                 "threshold": threshold,
                 "sigma_seeds": sigma_seeds,
                 "stacked": stacked,
+                "blockwise": not stacked,
                 "sigma_weights": sigma_weights,
                 "min_size": min_size,
                 "alpha": alpha,
@@ -550,7 +552,8 @@ class Segmentation_Tab:
         call_button=False,
         stacked={
             "label": "Mode",
-            "tooltip": "Define if the Watershed will run slice by slice (faster) or on the full volume (slower).",
+            "tooltip": "Define if the Watershed will run slice by slice (faster) "
+            "or on the full volume across all CPUs (fastest for large volumes).",
             "widget_type": "RadioButtons",
             "orientation": "horizontal",
         },
@@ -673,6 +676,7 @@ class Segmentation_Tab:
                 "threshold": threshold,
                 "sigma_seeds": sigma_seeds,
                 "stacked": stacked,
+                "blockwise": not stacked,
                 "sigma_weights": sigma_weights,
                 "min_size": min_size,
                 "alpha": alpha,

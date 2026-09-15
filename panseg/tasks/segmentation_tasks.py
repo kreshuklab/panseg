@@ -28,6 +28,7 @@ def dt_watershed_task(
     pixel_pitch: tuple[int, ...] | None = None,
     apply_nonmax_suppression: bool = False,
     n_threads: int | None = None,
+    blockwise: bool = False,
     is_nuclei_image: bool = False,
     _tracker: Optional["PBar_Tracker"] = None,
 ) -> PanSegImage:
@@ -56,7 +57,11 @@ def dt_watershed_task(
         apply_nonmax_suppression (bool, optional): Whether to apply non-maximum suppression
             to the seeds. Requires the Nifty library. Defaults to False.
         n_threads (int | None, optional): Number of threads to use for parallel processing
-            in 2D mode. Defaults to None.
+            in 2D mode (stacked) and 3D blockwise mode. Defaults to None.
+        blockwise (bool, optional): If True, runs the 3D watershed blockwise across multiple
+            CPU cores instead of a single full-volume pass. Falls back to the single-pass
+            watershed (with a warning) for 2D inputs and small volumes. Ignored when
+            'stacked' is True. Defaults to False.
         is_nuclei_image (bool, optional): If True, indicates that the input image is a nuclei
             image, and preprocessing is applied accordingly. Defaults to False.
 
@@ -96,6 +101,7 @@ def dt_watershed_task(
         pixel_pitch=pixel_pitch,
         apply_nonmax_suppression=apply_nonmax_suppression,
         n_threads=n_threads,
+        blockwise=blockwise,
         mask=mask,
     )
 
@@ -238,11 +244,54 @@ def aio_watershed_task(
     pixel_pitch: tuple[int, ...] | None = None,
     apply_nonmax_suppression: bool = False,
     n_threads: int | None = None,
+    blockwise: bool = False,
     is_nuclei_image: bool = False,
     mode: str = "gasp",
     beta: float = 0.6,
     _tracker: Optional["PBar_Tracker"] = None,
-):
+) -> PanSegImage:
+    """All-in-one watershed segmentation and agglomeration task.
+
+    This function applies the distance transform watershed algorithm to over-segment the
+    input image, and then agglomerates the resulting superpixels into a final
+    segmentation. It handles both standard boundary probability maps and nuclei images.
+
+    Args:
+        image (PanSegImage): The input image to segment.
+        nuclei (Optional[PanSegImage]): The nuclei image. Required for the 'lmc' mode.
+        threshold (float, optional): Threshold value for the boundary probability maps.
+            Defaults to 0.5.
+        sigma_seeds (float, optional): Standard deviation for Gaussian smoothing applied to
+            the seed map. Defaults to 1.0.
+        stacked (bool, optional): If True and the image is 3D, processes the image
+            slice-by-slice (2D). Defaults to False.
+        sigma_weights (float, optional): Standard deviation for Gaussian smoothing applied to
+            the weight map. Defaults to 2.0.
+        min_size (int, optional): Minimum size of the segments to keep. Smaller segments
+            will be removed. Defaults to 100.
+        alpha (float, optional): Blending factor between the input image and the distance
+            transform when computing the weight map. Defaults to 1.0.
+        pixel_pitch (tuple[int, ...] | None, optional): Anisotropy factors for the distance
+            transform. If None, isotropic distances are assumed. Defaults to None.
+        apply_nonmax_suppression (bool, optional): Whether to apply non-maximum suppression
+            to the seeds. Requires the Nifty library. Defaults to False.
+        n_threads (int | None, optional): Number of threads to use for parallel processing
+            in 2D mode (stacked) and 3D blockwise mode. Defaults to None.
+        blockwise (bool, optional): If True, runs the 3D watershed blockwise across multiple
+            CPU cores instead of a single full-volume pass. Falls back to the single-pass
+            watershed (with a warning) for 2D inputs and small volumes. Ignored when
+            'stacked' is True. Defaults to False.
+        is_nuclei_image (bool, optional): If True, indicates that the input image is a nuclei
+            image, and preprocessing is applied accordingly. Defaults to False.
+        mode (str, optional): Mode for the agglomerative segmentation. One of
+            ['gasp', 'multicut', 'mutex_ws', 'lmc']. Defaults to 'gasp'.
+        beta (float, optional): Beta parameter for the agglomeration. Small values steer
+            towards under-segmentation, while high values bias towards
+            over-segmentation. Defaults to 0.6.
+
+    Returns:
+        PanSegImage: The segmented image as a new `PanSegImage` object.
+    """
     # Segmentation
     if image.is_multichannel:
         raise ValueError("Multichannel images are not supported for this task.")
@@ -277,6 +326,7 @@ def aio_watershed_task(
         pixel_pitch=pixel_pitch,
         apply_nonmax_suppression=apply_nonmax_suppression,
         n_threads=n_threads,
+        blockwise=blockwise,
         mask=mask,
     )
 

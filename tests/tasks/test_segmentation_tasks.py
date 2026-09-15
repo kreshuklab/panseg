@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pytest
 
@@ -19,24 +21,30 @@ from panseg.tasks.segmentation_tasks import (
 
 
 @pytest.mark.parametrize(
-    "shape, layout, stacked, is_nuclei, clustering, mode",
+    "shape, layout, stacked, blockwise, is_nuclei, clustering, mode",
     [
-        ((32, 64, 64), ImageLayout.ZYX, False, False, False, "-"),
-        ((32, 64, 64), ImageLayout.ZYX, False, True, False, "-"),
-        ((32, 64, 64), ImageLayout.ZYX, False, False, True, "gasp"),
-        ((32, 64, 64), ImageLayout.ZYX, True, False, True, "gasp"),
-        ((32, 64, 64), ImageLayout.ZYX, True, False, True, "multicut"),
-        ((32, 64, 64), ImageLayout.ZYX, True, False, True, "mutex_ws"),
-        ((64, 64), ImageLayout.YX, False, False, False, "-"),
-        ((64, 64), ImageLayout.YX, False, True, False, "-"),
-        ((64, 64), ImageLayout.YX, False, False, True, "gasp"),
-        ((64, 64), ImageLayout.YX, True, False, True, "gasp"),
-        ((64, 64), ImageLayout.YX, False, False, True, "multicut"),
-        ((64, 64), ImageLayout.YX, False, False, True, "mutex_ws"),
+        ((32, 64, 64), ImageLayout.ZYX, False, False, False, False, "-"),
+        ((32, 64, 64), ImageLayout.ZYX, False, False, True, False, "-"),
+        ((32, 64, 64), ImageLayout.ZYX, False, False, False, True, "gasp"),
+        ((32, 64, 64), ImageLayout.ZYX, True, False, False, True, "gasp"),
+        ((32, 64, 64), ImageLayout.ZYX, True, False, False, True, "multicut"),
+        ((32, 64, 64), ImageLayout.ZYX, True, False, False, True, "mutex_ws"),
+        ((64, 64), ImageLayout.YX, False, False, False, False, "-"),
+        ((64, 64), ImageLayout.YX, False, False, True, False, "-"),
+        ((64, 64), ImageLayout.YX, False, False, False, True, "gasp"),
+        ((64, 64), ImageLayout.YX, True, False, False, True, "gasp"),
+        ((64, 64), ImageLayout.YX, False, False, False, True, "multicut"),
+        ((64, 64), ImageLayout.YX, False, False, False, True, "mutex_ws"),
+        # blockwise=True on small 3D volumes falls back to the single-pass
+        # watershed in the functional; these rows verify the task plumbing
+        ((32, 64, 64), ImageLayout.ZYX, False, True, False, False, "-"),
+        ((32, 64, 64), ImageLayout.ZYX, False, True, True, False, "-"),
+        ((32, 64, 64), ImageLayout.ZYX, False, True, False, True, "gasp"),
+        ((32, 64, 64), ImageLayout.ZYX, False, True, True, True, "gasp"),
     ],
 )
 def test_dt_watershed_and_clustering(
-    shape, layout, stacked, is_nuclei, clustering, mode
+    shape, layout, stacked, blockwise, is_nuclei, clustering, mode
 ):
     mock_data = np.random.rand(*shape).astype("float32")
 
@@ -49,7 +57,12 @@ def test_dt_watershed_and_clustering(
     )
     image = PanSegImage(data=mock_data, properties=property_)
 
-    result = dt_watershed_task(image=image, stacked=stacked, is_nuclei_image=is_nuclei)
+    result = dt_watershed_task(
+        image=image,
+        stacked=stacked,
+        blockwise=blockwise,
+        is_nuclei_image=is_nuclei,
+    )
 
     assert result.semantic_type == SemanticType.SEGMENTATION
     assert result.image_layout == property_.image_layout
@@ -66,6 +79,40 @@ def test_dt_watershed_and_clustering(
     assert result_clustering.image_layout == property_.image_layout
     assert result_clustering.voxel_size == property_.voxel_size
     assert result_clustering.shape == mock_data.shape
+
+
+def test_dt_watershed_task_blockwise_large_volume(caplog):
+    # large enough volume (>= 2M voxels) so the functional takes the real
+    # blockwise path instead of falling back to the single-pass watershed
+    mock_data = np.random.rand(128, 128, 128).astype("float32")
+
+    property_ = ImageProperties(
+        name="test",
+        voxel_size=VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um"),
+        semantic_type=SemanticType.PREDICTION,
+        image_layout=ImageLayout.ZYX,
+        original_voxel_size=VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um"),
+    )
+    image = PanSegImage(data=mock_data, properties=property_)
+
+    with caplog.at_level(
+        logging.WARNING, logger="panseg.functionals.segmentation.segmentation"
+    ):
+        result = dt_watershed_task(image=image, blockwise=True)
+
+    fallback_warnings = [
+        record
+        for record in caplog.records
+        if "blockwise mode not applicable" in record.getMessage()
+    ]
+    assert not fallback_warnings, [r.getMessage() for r in fallback_warnings]
+
+    segmentation = result.get_data()
+    assert result.semantic_type == SemanticType.SEGMENTATION
+    assert result.shape == mock_data.shape
+    assert segmentation.dtype == np.uint64
+    assert segmentation.max() > segmentation.min() >= 0
+    assert len(np.unique(segmentation)) > 1
 
 
 def test_mutex():
@@ -174,22 +221,30 @@ def test_lmc_segmentation_seg(mocker, napari_prediction, napari_segmentation, h5
 
 
 @pytest.mark.parametrize(
-    "shape, layout, stacked, is_nuclei, mode",
+    "shape, layout, stacked, blockwise, is_nuclei, mode",
     [
-        ((32, 64, 64), ImageLayout.ZYX, False, False, "gasp"),
-        ((32, 64, 64), ImageLayout.ZYX, False, True, "gasp"),
-        ((32, 64, 64), ImageLayout.ZYX, True, False, "gasp"),
-        ((32, 64, 64), ImageLayout.ZYX, True, False, "multicut"),
-        ((32, 64, 64), ImageLayout.ZYX, True, False, "lmc"),
-        ((64, 64), ImageLayout.YX, False, False, "gasp"),
-        ((64, 64), ImageLayout.YX, False, True, "gasp"),
-        ((64, 64), ImageLayout.YX, True, False, "gasp"),
-        ((64, 64), ImageLayout.YX, False, False, "multicut"),
-        ((64, 64), ImageLayout.YX, False, False, "mutex_ws"),
-        ((64, 64), ImageLayout.YX, False, False, "lmc"),
+        ((32, 64, 64), ImageLayout.ZYX, False, False, False, "gasp"),
+        ((32, 64, 64), ImageLayout.ZYX, False, False, True, "gasp"),
+        ((32, 64, 64), ImageLayout.ZYX, True, False, False, "gasp"),
+        ((32, 64, 64), ImageLayout.ZYX, True, False, False, "multicut"),
+        ((32, 64, 64), ImageLayout.ZYX, True, False, False, "lmc"),
+        ((64, 64), ImageLayout.YX, False, False, False, "gasp"),
+        ((64, 64), ImageLayout.YX, False, False, True, "gasp"),
+        ((64, 64), ImageLayout.YX, True, False, False, "gasp"),
+        ((64, 64), ImageLayout.YX, False, False, False, "multicut"),
+        ((64, 64), ImageLayout.YX, False, False, False, "mutex_ws"),
+        ((64, 64), ImageLayout.YX, False, False, False, "lmc"),
+        # blockwise=True on small 3D volumes falls back to the single-pass
+        # watershed in the functional; these rows verify the task plumbing
+        ((32, 64, 64), ImageLayout.ZYX, False, True, False, "gasp"),
+        ((32, 64, 64), ImageLayout.ZYX, False, True, False, "multicut"),
+        ((32, 64, 64), ImageLayout.ZYX, False, True, False, "mutex_ws"),
+        ((32, 64, 64), ImageLayout.ZYX, False, True, False, "lmc"),
     ],
 )
-def test_aio_watershed_and_clustering(shape, layout, stacked, is_nuclei, mode):
+def test_aio_watershed_and_clustering(
+    shape, layout, stacked, blockwise, is_nuclei, mode
+):
     mock_data = np.random.rand(*shape).astype("float32")
 
     raw_property = ImageProperties(
@@ -216,6 +271,7 @@ def test_aio_watershed_and_clustering(shape, layout, stacked, is_nuclei, mode):
         image=image,
         nuclei=nuclei,
         stacked=stacked,
+        blockwise=blockwise,
         is_nuclei_image=is_nuclei,
         mode=mode,
     )

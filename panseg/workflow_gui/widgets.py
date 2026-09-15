@@ -116,7 +116,22 @@ class Workflow_widgets:
         with open(config_path, "r") as f:
             self.config = yaml.safe_load(f)
             logger.debug(f"LOADED:\n{self.config}")
+
+        self._normalize_inputs()
         self.show_config()
+
+    def _normalize_inputs(self):
+        """Legacy workflow files stored the inputs as a list of one dict.
+
+        The canonical form is a plain dict; convert on load so the file is
+        migrated to the new format when it is saved again.
+        """
+        if not isinstance(self.config, dict):
+            return
+
+        inputs = self.config.get("inputs")
+        if isinstance(inputs, list):
+            self.config["inputs"] = inputs[0] if inputs else {}
 
     def fill_config_c(self):
         """Fills content container with everything about one workflow."""
@@ -153,8 +168,7 @@ class Workflow_widgets:
 
         logger.debug("Filling input section")
 
-        # TODO:The inputs section is currently a list of dicts, should be just a dict (#429)
-        inputs = self.config["inputs"][0]
+        inputs = self.config["inputs"]
 
         header_c = Container(
             widgets=[
@@ -302,8 +316,8 @@ class Workflow_widgets:
 
         output = self.config.copy()
         for field, w in self.changing_fields["inputs"].items():
-            output["inputs"][0][field] = w()
-        logger.debug(f"IO part: {output['inputs'][0]}")
+            output["inputs"][field] = w()
+        logger.debug(f"IO part: {output['inputs']}")
 
         for id, w in self.changing_fields["tasks"].items():
             for i, task in enumerate(output["list_tasks"]):
@@ -368,7 +382,7 @@ class Task_node:
                 choices=list(
                     filter(
                         lambda s: s.startswith("input"),
-                        config["inputs"][0],
+                        config["inputs"],
                     )
                 ),
             )
@@ -387,7 +401,7 @@ class Task_node:
                     choices=list(
                         filter(
                             lambda s: s.startswith("export"),
-                            config["inputs"][0],
+                            config["inputs"],
                         )
                     ),
                 )
@@ -399,7 +413,7 @@ class Task_node:
                     choices=list(
                         filter(
                             lambda s: s.startswith("name"),
-                            config["inputs"][0],
+                            config["inputs"],
                         )
                     ),
                 )

@@ -144,11 +144,8 @@ def probe_max_patch_shape(
 
                         high = mid - 1  # Try smaller patches
                     else:
-                        logger.warning(
-                            f"Encountered '{e}' at patch shape {patch_shape}, "
-                            "unexpected but continuing."
-                        )
-                        high = mid - 1  # Try smaller patches
+                        del model
+                        raise
                 finally:
                     del x
                     torch.cuda.empty_cache()

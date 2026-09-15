@@ -21,7 +21,7 @@ jobs:
           qt: true
 
       - name: Checkout Repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
 
       - name: Set Up Miniforge
         uses: conda-incubator/setup-miniconda@v4.0.0
@@ -37,9 +37,4 @@ jobs:
       - name: Run checks
         run: |
           panseg --help
-          pytest --cov --cov-report=xml --durations=10
-
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v6.0.0
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          pytest --durations=10

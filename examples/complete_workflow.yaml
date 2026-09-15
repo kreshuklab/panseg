@@ -28,9 +28,9 @@ infos:
     on how to do this, please visit the PlantSeg documentation (https://kreshuklab.github.io/plant-seg/).
   version: 2.0.0b4
 inputs:
-  - export_directory: /tmp
-    input_path_2: /home/kriedmiller/projects/plant-seg/tests/resources/sample_ovule.h5
-    name_pattern: "{file_name}_export"
+  export_directory: /tmp
+  input_path_2: /home/kriedmiller/projects/plant-seg/tests/resources/sample_ovule.h5
+  name_pattern: "{file_name}_export"
 list_tasks:
   - func: import_image_task
     id: f0e7ee0b-c7c2-4010-b01c-3756ad8402ba

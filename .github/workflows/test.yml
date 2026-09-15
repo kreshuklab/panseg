@@ -5,6 +5,9 @@ on:
   pull_request:
     branches:
       - "main"
+  push:
+    branches:
+      - "main"
 
 jobs:
   test-linux:
@@ -15,7 +18,7 @@ jobs:
     steps:
       # Checkout the repository
       - name: Checkout Repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
 
       # Cache the PanSeg model directory across runs. The key is the git blob
       # hash of the official zoo config: the downloaded files are a pure
@@ -27,7 +30,7 @@ jobs:
           echo "hash=$(git rev-parse HEAD:panseg/resources/models_zoo.yaml)" >> "$GITHUB_OUTPUT"
 
       - name: Cache PanSeg models
-        uses: actions/cache@v4
+        uses: actions/cache@v6.1.0
         with:
           path: ~/.panseg_models
           key: panseg-models-${{ steps.model-zoo-key.outputs.hash }}
@@ -64,6 +67,6 @@ jobs:
 
       # Upload Codecov report
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v6.0.0
+        uses: codecov/codecov-action@v7.0.0
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
