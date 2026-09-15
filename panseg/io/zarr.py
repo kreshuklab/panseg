@@ -43,11 +43,15 @@ def _find_input_key(zarr_file: zarr.Group) -> str:
     """
     found_datasets = []
 
-    def visitor_func(name, node):
-        if isinstance(node, zarr.Array):
-            found_datasets.append(name)
+    def collect_datasets(group, prefix: str = "") -> None:
+        for key, node in group.members():
+            name = f"{prefix}/{key}" if prefix else key
+            if isinstance(node, zarr.Array):
+                found_datasets.append(name)
+            else:
+                collect_datasets(node, name)
 
-    zarr_file.visititems(visitor_func)
+    collect_datasets(zarr_file)
 
     if not found_datasets:
         raise RuntimeError(f"No datasets found - verify '{zarr_file.tree()}'.")
@@ -224,5 +228,10 @@ def rename_zarr_key(path: Path, old_key: str, new_key: str, mode: str = "r+") ->
     """
     zarr_file = zarr.open_group(store=path, mode=mode)
     if old_key in zarr_file:
-        zarr_file[new_key] = zarr_file[old_key]
+        old_array = zarr_file[old_key]
+        new_array = zarr_file.create_array(
+            name=new_key, shape=old_array.shape, dtype=old_array.dtype
+        )
+        new_array[:] = old_array[:]
+        new_array.attrs.update(dict(old_array.attrs))
         del zarr_file[old_key]
