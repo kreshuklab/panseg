@@ -1,11 +1,8 @@
-import os
-
 import numpy as np
 import pytest
 import torch
 from torch import nn
 
-from panseg.core.zoo import model_zoo
 from panseg.functionals.prediction.utils import size_finder
 from panseg.functionals.prediction.utils.size_finder import (
     derive_patch_and_halo_shapes,
@@ -14,58 +11,7 @@ from panseg.functionals.prediction.utils.size_finder import (
     probe_max_patch_shape,
     will_CUDA_OOM,
 )
-
-IN_GITHUB_ACTIONS = (
-    os.getenv("GITHUB_ACTIONS") == "true"
-)  # set to true in GitHub Actions by default to skip CUDA tests
-DOWNLOAD_MODELS = (
-    os.getenv("DOWNLOAD_MODELS") == "true"
-)  # set to false in locall testing to skip downloading models
-LARGE_VRAM_GPUS = [
-    "NVIDIA A100",
-    "NVIDIA A40",
-]  # these two are not full names because A100 has multiple models
-ALL_TESTED_GPUS = [
-    # # Flaky if the PC is in use while testing
-    # "NVIDIA GeForce RTX 2080 Ti",
-    # "NVIDIA GeForce RTX 3090",
-    # "NVIDIA A100-PCIE-40GB",
-    # "NVIDIA A40",
-    # "NVIDIA GeForce RTX 4050 Laptop GPU",
-    # "NVIDIA GeForce RTX 4090",
-]
-MAX_PATCH_SHAPES = {
-    "generic_confocal_3D_unet": {
-        "NVIDIA GeForce RTX 2080 Ti": (208, 208, 208),
-        "NVIDIA GeForce RTX 3090": (256, 256, 256),
-        "NVIDIA A100-PCIE-40GB": (272, 272, 272),
-        "NVIDIA A40": (272, 272, 272),
-        "NVIDIA GeForce RTX 4050 Laptop GPU": (160, 160, 160),
-        "NVIDIA GeForce RTX 4090": (256, 256, 256),
-    },
-    "confocal_2D_unet_ovules_ds2x": {
-        "NVIDIA GeForce RTX 2080 Ti": (
-            1,
-            1920,
-            1920,
-        ),  # (1, 2048, 2048) if search step is 1.
-        "NVIDIA GeForce RTX 3090": (
-            1,
-            2880,
-            2880,
-        ),  # (1, 2960, 2960) if search step is 1.
-        "NVIDIA A100-PCIE-40GB": (1, 3200, 3200),
-        "NVIDIA A40": (1, 3200, 3200),
-        "NVIDIA GeForce RTX 4050 Laptop GPU": (1, 1280, 1280),
-        "NVIDIA GeForce RTX 4090": (1, 2560, 2560),
-    },
-}
-
-try:
-    # This will raise an AssertionError if Pytorch is not installed with CUDA support
-    GPU_DEVICE_NAME = torch.cuda.get_device_name(0) if not IN_GITHUB_ACTIONS else ""
-except AssertionError:  # catch Pytorch not installed with CUDA support
-    GPU_DEVICE_NAME = ""
+from panseg.functionals.training.model import UNet2D, UNet3D
 
 # Fixed scenario for the feasibility-loop unit tests (no GPU required, will_CUDA_OOM is faked)
 VOL = (48, 1536, 1536)
@@ -210,90 +156,199 @@ def test_find_feasible_patch_and_halo_shapes_skips_verification_on_cpu(
     assert fake_oom_probe.verified_shapes == []
 
 
-@pytest.mark.skipif(
-    GPU_DEVICE_NAME not in ALL_TESTED_GPUS,
-    reason="Measured devices are not available.",
-)
-@pytest.mark.parametrize("model_name", MAX_PATCH_SHAPES.keys())
-def test_find_patch_shape(model_name):
-    model, _, _ = model_zoo.get_model_by_name(model_name, model_update=DOWNLOAD_MODELS)
-    found_patch_shape = probe_max_patch_shape(model, 1, "cuda:0")
-    expected_patch_shape = MAX_PATCH_SHAPES[model_name][GPU_DEVICE_NAME]
-    assert found_patch_shape == expected_patch_shape
+class _FakeDeviceTensor:
+    """Stand-in for a `torch.randn` result: carries the requested shape and
+    absorbs `.to(device)` without touching any real device."""
+
+    def __init__(self, shape):
+        self.shape = tuple(shape)
+
+    def to(self, *args, **kwargs):
+        return self
 
 
-@pytest.mark.skipif(
-    not any(gpu in GPU_DEVICE_NAME for gpu in LARGE_VRAM_GPUS),
-    reason="Test requires a large VRAM device (e.g., NVIDIA A100 or NVIDIA A40).",
-)
-def test_find_batch_size_error_handling():
-    model, _, _ = model_zoo.get_model_by_name(
-        "confocal_3D_unet_ovules_ds3x", model_update=DOWNLOAD_MODELS
+def _raise_fake_device_error(model, x):
+    # in_channels is 1 in all these tests, so the total input size is the voxel count
+    voxels = int(np.prod(x.shape))
+    if (
+        model.unexpected_error_above is not None
+        and voxels > model.unexpected_error_above
+    ):
+        raise RuntimeError("unexpected error, not an OOM")
+    if model.oom_voxel_threshold is not None and voxels > model.oom_voxel_threshold:
+        raise RuntimeError("CUDA out of memory. Tried to allocate 999.00 GiB.")
+    return None
+
+
+class FakeUNet3D(UNet3D):
+    """UNet3D double for the OOM unit tests: `forward` raises a fake CUDA OOM (or
+    a non-OOM error) once the input exceeds a configured voxel count, and `to`
+    never moves the model to a real device. No forward pass ever runs."""
+
+    def __init__(
+        self, oom_voxel_threshold=None, unexpected_error_above=None, failure=None
+    ):
+        super().__init__(1, 1, f_maps=8, num_levels=2)
+        self.oom_voxel_threshold = oom_voxel_threshold
+        self.unexpected_error_above = unexpected_error_above
+        self.failure = failure
+        self.seen_input_shapes = []
+
+    def to(self, *args, **kwargs):
+        return self
+
+    def forward(self, x):
+        self.seen_input_shapes.append(tuple(x.shape))
+        if self.failure is not None:
+            raise RuntimeError(self.failure)
+        return _raise_fake_device_error(self, x)
+
+
+class FakeUNet2D(UNet2D):
+    """2D variant of `FakeUNet3D` so that `_is_2d_model` routes to the 2D code paths."""
+
+    def __init__(
+        self, oom_voxel_threshold=None, unexpected_error_above=None, failure=None
+    ):
+        super().__init__(1, 1, f_maps=8, num_levels=2)
+        self.oom_voxel_threshold = oom_voxel_threshold
+        self.unexpected_error_above = unexpected_error_above
+        self.failure = failure
+        self.seen_input_shapes = []
+
+    def to(self, *args, **kwargs):
+        return self
+
+    def forward(self, x):
+        self.seen_input_shapes.append(tuple(x.shape))
+        if self.failure is not None:
+            raise RuntimeError(self.failure)
+        return _raise_fake_device_error(self, x)
+
+
+@pytest.fixture()
+def fake_cuda(monkeypatch):
+    """Route the torch calls the GPU probes make away from any real device, so
+    the search loops run deterministically without a GPU."""
+    monkeypatch.setattr(
+        torch, "randn", lambda shape, *args, **kwargs: _FakeDeviceTensor(shape)
     )
-    found_batch_size = find_batch_size(model, 1, (86, 395, 395), (0, 44, 44), "cuda:0")
-    assert found_batch_size == 1
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
 
 
-@pytest.mark.skipif(
-    not any(gpu in GPU_DEVICE_NAME for gpu in LARGE_VRAM_GPUS),
-    reason="Test requires a large VRAM device (e.g., NVIDIA A100 or NVIDIA A40).",
-)
-def test_find_patch_shape_error_handling():
-    model, _, _ = model_zoo.get_model_by_name(
-        "PanSeg_3Dnuc_platinum", model_update=DOWNLOAD_MODELS
-    )
-    found_patch_shape = probe_max_patch_shape(model, 1, "cuda:0")
-    if "NVIDIA A100-PCIE-40GB" == GPU_DEVICE_NAME:
-        print("NVIDIA A100-PCIE-40GB tested")
-        assert found_patch_shape == (352, 352, 352)
-    if "NVIDIA A40" == GPU_DEVICE_NAME:
-        print("NVIDIA A40 tested")
-        assert found_patch_shape == (352, 352, 352)
+def test_probe_max_patch_shape_3d_binary_search(fake_cuda):
+    # n=4 (64^3 voxels) fits, n=5 (80^3) OOMs
+    model = FakeUNet3D(oom_voxel_threshold=300_000)
+
+    assert probe_max_patch_shape(model, 1, "cuda:0") == (64, 64, 64)
 
 
-@pytest.mark.skipif(
-    IN_GITHUB_ACTIONS or GPU_DEVICE_NAME == "",
-    reason="CUDA device not available.",
-)
-def test_find_feasible_patch_and_halo_shapes_shrinks_on_oom(monkeypatch):
-    """Regression for issue #578: when GPU memory becomes unavailable between the
-    max-patch probe and the batch size determination (e.g. other processes on a shared
-    GPU), the auto-determined patch shape must shrink until it fits instead of raising
-    an OOM error at batch size 1."""
-    model, _, _ = model_zoo.get_model_by_name(
-        "confocal_3D_unet_ovules_ds3x", model_update=DOWNLOAD_MODELS
-    )
-    device = "cuda:0"
-    full_volume_shape = (48, 1536, 1536)
-    min_halo_shape = model_zoo.compute_3D_halo_for_pytorch3dunet(model)
+def test_probe_max_patch_shape_3d_caps_at_50(fake_cuda):
+    assert probe_max_patch_shape(FakeUNet3D(), 1, "cuda:0") == (800, 800, 800)
 
-    free, total = torch.cuda.mem_get_info()
-    if free < 3 * 2**30:  # not enough spare VRAM to simulate competing allocations
-        pytest.skip("Less than 3 GiB of free VRAM available.")
-    reference = derive_patch_and_halo_shapes(
-        full_volume_shape, probe_max_patch_shape(model, 1, device), min_halo_shape
-    )
 
-    real_find = size_finder.derive_patch_and_halo_shapes
-    holder = []
+def test_probe_max_patch_shape_3d_floors_at_low_on_persistent_oom(fake_cuda):
+    model = FakeUNet3D(oom_voxel_threshold=0)  # every candidate OOMs
 
-    def reserving_find(*args, **kwargs):
-        if not holder:  # emulate memory appearing after the max-patch probe
-            holder.append(
-                torch.empty(max(total // 10, 2**30), dtype=torch.uint8, device=device)
-            )
-        return real_find(*args, **kwargs)
+    assert probe_max_patch_shape(model, 1, "cuda:0") == (32, 32, 32)
 
-    monkeypatch.setattr(size_finder, "derive_patch_and_halo_shapes", reserving_find)
-    try:
-        patch, patch_halo = find_feasible_patch_and_halo_shapes(
-            model, 1, full_volume_shape, min_halo_shape, device
-        )
-    finally:
-        holder.clear()
-        torch.cuda.empty_cache()
 
-    # the returned shape is verified to fit even with the competing allocation in place
-    assert not will_CUDA_OOM(model, 1, patch, patch_halo, 1, device)
-    # and the shrink loop actually engaged (the unshrunken shape no longer fit)
-    assert int(np.prod(patch)) < int(np.prod(reference[0]))
+def test_probe_max_patch_shape_3d_reraises_non_oom_errors(fake_cuda):
+    model = FakeUNet3D(unexpected_error_above=0)  # every candidate fails, non-OOM
+
+    with pytest.raises(RuntimeError, match="unexpected error, not an OOM"):
+        probe_max_patch_shape(model, 1, "cuda:0")
+
+
+def test_probe_max_patch_shape_2d_returns_max_on_first_fit(fake_cuda):
+    assert probe_max_patch_shape(FakeUNet2D(), 1, "cuda:0") == (1, 3200, 3200)
+
+
+def test_probe_max_patch_shape_2d_linear_search(fake_cuda):
+    # best_n=160 (2560^2 voxels) fits, best_n=180 (2880^2) OOMs
+    model = FakeUNet2D(oom_voxel_threshold=7_000_000)
+
+    assert probe_max_patch_shape(model, 1, "cuda:0") == (1, 2560, 2560)
+
+
+def test_probe_max_patch_shape_2d_floors_on_persistent_oom(fake_cuda):
+    # the -20 step overshoots the `best_n > 16` loop bound: best_n ends up at 0
+    model = FakeUNet2D(oom_voxel_threshold=0)  # every candidate OOMs
+
+    assert probe_max_patch_shape(model, 1, "cuda:0") == (1, 0, 0)
+
+
+def test_probe_max_patch_shape_2d_reraises_non_oom_errors(fake_cuda):
+    model = FakeUNet2D(failure="boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        probe_max_patch_shape(model, 1, "cuda:0")
+
+
+def test_will_cuda_oom_detects_oom(fake_cuda):
+    model = FakeUNet3D(oom_voxel_threshold=0)
+
+    assert will_CUDA_OOM(model, 1, (64, 64, 64), (0, 0, 0), 1, "cuda:0") is True
+
+
+def test_will_cuda_oom_false_when_input_fits(fake_cuda):
+    model = FakeUNet3D()
+
+    assert will_CUDA_OOM(model, 1, (64, 64, 64), (0, 0, 0), 1, "cuda:0") is False
+
+
+def test_will_cuda_oom_includes_halo_in_input_shape(fake_cuda):
+    model = FakeUNet3D(oom_voxel_threshold=64**3 - 1)  # fits only without the halo
+
+    assert will_CUDA_OOM(model, 1, (64, 64, 64), (4, 4, 4), 1, "cuda:0") is True
+    assert model.seen_input_shapes == [(1, 1, 72, 72, 72)]
+
+
+def test_will_cuda_oom_2d_model_slices_first_dim(fake_cuda):
+    model = FakeUNet2D()
+
+    assert will_CUDA_OOM(model, 1, (1, 16, 16), (0, 2, 2), 1, "cuda:0") is False
+    assert model.seen_input_shapes == [(1, 1, 20, 20)]
+
+
+def test_will_cuda_oom_reraises_non_oom_errors(fake_cuda):
+    model = FakeUNet3D(failure="boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        will_CUDA_OOM(model, 1, (64, 64, 64), (0, 0, 0), 1, "cuda:0")
+
+
+def test_find_batch_size_halves_on_oom(fake_cuda):
+    # 16^3 = 4096 voxels per sample: batch 4 (16384) fits, batch 8 (32768) OOMs
+    model = FakeUNet3D(oom_voxel_threshold=20_000)
+
+    assert find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0") == 4
+
+
+def test_find_batch_size_halves_on_unexpected_error(fake_cuda):
+    model = FakeUNet3D(unexpected_error_above=20_000)
+
+    assert find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0") == 4
+
+
+def test_find_batch_size_includes_halo_in_input_shape(fake_cuda):
+    # with halo (8, 8, 8) a single sample needs 32^3 = 32768 > 20_000 voxels
+    model = FakeUNet3D(oom_voxel_threshold=20_000)
+
+    with pytest.raises(RuntimeError, match="Could not determine a feasible batch size"):
+        find_batch_size(model, 1, (16, 16, 16), (8, 8, 8), "cuda:0")
+
+
+def test_find_batch_size_raises_when_batch_one_ooms(fake_cuda):
+    model = FakeUNet3D(oom_voxel_threshold=0)
+
+    with pytest.raises(RuntimeError, match="Could not determine a feasible batch size"):
+        find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0")
+
+
+def test_find_batch_size_2d_model_slices_first_dim(fake_cuda):
+    # (16, 16) = 256 voxels per sample: batch 64 (16384) fits, batch 128 OOMs
+    model = FakeUNet2D(oom_voxel_threshold=20_000)
+
+    assert find_batch_size(model, 1, (1, 16, 16), (0, 0, 0), "cuda:0") == 64
+    assert all(len(shape) == 4 for shape in model.seen_input_shapes)
