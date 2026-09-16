@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal
 
 import torch
 from magicgui import magic_factory, widgets
@@ -27,7 +27,12 @@ from panseg.io.h5 import read_h5_shape, read_h5_voxel_size
 from panseg.tasks.training_tasks import unet_training_task
 from panseg.viewer_napari import log
 from panseg.viewer_napari.widgets.prediction import Prediction_Widgets
-from panseg.viewer_napari.widgets.utils import div, get_layers, schedule_task
+from panseg.viewer_napari.widgets.utils import (
+    Help_text,
+    div,
+    get_layers,
+    schedule_task,
+)
 
 NONE_LICENSE = "(none)"
 LICENSE_CHOICES = [
@@ -47,7 +52,7 @@ LICENSE_CHOICES = [
 
 
 class Training_Tab:
-    def __init__(self, prediction_tab: Optional[Prediction_Widgets]):
+    def __init__(self, prediction_tab: Prediction_Widgets | None):
         self.prediction_tab = prediction_tab
         self.in_shape = None
         self.out_shape = None
@@ -64,62 +69,78 @@ class Training_Tab:
         self.train_data_open = True
         self.meta_data_open = False
 
-        # initialize widgets
+        # @@@@@ Training Data section @@@@@
+        self.widget_unet_training_data = self.factory_unet_training_data()
+        self.widget_unet_training_data.self.bind(self)
+
+        # @@@@@ Model section @@@@@
+        self.widget_unet_model = self.factory_unet_model()
+        self.widget_unet_model.self.bind(self)
+
+        # @@@@@ Meta Data section @@@@@
+        self.widget_unet_metadata = self.factory_unet_metadata()
+        self.widget_unet_metadata.self.bind(self)
+
+        # @@@@@ Start Training @@@@@
         self.widget_unet_training = self.factory_unet_training()
         self.widget_unet_training.self.bind(self)
 
-        self.div_train_data = div("Training Data", False)
-        self.div_model = div("Model", False)
-        self.div_meta_data = div("Meta Data", False)
-        self.widget_unet_training.insert(0, self.div_train_data)
-        self.widget_unet_training.insert(8, self.div_model)
-        self.widget_unet_training.insert(15, self.div_meta_data)
+        # section dividers (kept at container level so they span full width)
+        self.div_train_data = div("Training Data")
+        self.div_model = div("Model")
+        self.div_meta_data = div("Meta Data")
+        self.div_start_training = div()
 
         # multi-channel container
-        self.widget_unet_training.channels[1].enabled = False
+        self.widget_unet_training_data.channels[1].enabled = False
         self.additional_inputs = Container(
             widgets=[], visible=False, labels=True, label="Additional Inputs"
         )
-        self.widget_unet_training.insert(5, self.additional_inputs)
-        self.widget_unet_training.channels.changed.connect(
+        self.widget_unet_training_data.insert(
+            self.widget_unet_training_data.index(
+                self.widget_unet_training_data.segmentation
+            ),
+            self.additional_inputs,
+        )
+        self.widget_unet_training_data.channels.changed.connect(
             self.update_additional_inputs
         )
 
-        self.widget_unet_training.from_disk.changed.connect(self._on_from_disk_change)
+        self.widget_unet_training_data.from_disk.changed.connect(
+            self._on_from_disk_change
+        )
 
-        self.widget_unet_training.device._default_choices = self.ALL_DEVICES
-        self.widget_unet_training.device.reset_choices()
-        self.widget_unet_training.device.value = self.ALL_DEVICES[0]
+        self.widget_unet_model.device._default_choices = self.ALL_DEVICES
+        self.widget_unet_model.device.reset_choices()
+        self.widget_unet_model.device.value = self.ALL_DEVICES[0]
 
-        self.widget_unet_training.pretrained._default_choices = lambda _: (
+        self.widget_unet_model.pretrained._default_choices = lambda _: (
             model_zoo.list_models()
         )
-        self.widget_unet_training.pretrained.changed.connect(
-            self._on_pretrained_changed
-        )
-        self.widget_unet_training.pretrained.reset_choices()
+        self.widget_unet_model.pretrained.changed.connect(self._on_pretrained_changed)
+        self.widget_unet_model.pretrained.reset_choices()
 
-        self.widget_unet_training.dimensionality.changed.connect(
+        self.widget_unet_model.dimensionality.changed.connect(
             self._on_dimensionality_change
         )
 
-        self.widget_unet_training.modality.changed.connect(
+        self.widget_unet_metadata.modality.changed.connect(
             self._on_custom_modality_change
         )
-        self.widget_unet_training.output_type.changed.connect(
+        self.widget_unet_metadata.output_type.changed.connect(
             self._on_custom_output_type_change
         )
-        self.widget_unet_training.modality._default_choices = (
+        self.widget_unet_metadata.modality._default_choices = (
             model_zoo.get_unique_modalities() + [self.CUSTOM]
         )
-        self.widget_unet_training.modality.reset_choices()
-        self.widget_unet_training.output_type._default_choices = (
+        self.widget_unet_metadata.modality.reset_choices()
+        self.widget_unet_metadata.output_type._default_choices = (
             model_zoo.get_unique_output_types() + [self.CUSTOM]
         )
-        self.widget_unet_training.output_type.reset_choices()
-        self.widget_unet_training.dataset.changed.connect(self._on_dataset_change)
-        self.widget_unet_training.image.changed.connect(self._on_image_change)
-        self.widget_unet_training.segmentation.changed.connect(
+        self.widget_unet_metadata.output_type.reset_choices()
+        self.widget_unet_training_data.dataset.changed.connect(self._on_dataset_change)
+        self.widget_unet_training_data.image.changed.connect(self._on_image_change)
+        self.widget_unet_training_data.segmentation.changed.connect(
             self._on_segmentation_change
         )
 
@@ -128,51 +149,19 @@ class Training_Tab:
         self.widget_show_train_data.clicked.connect(
             lambda *args: self.toggle_visibility_train_data(True)
         )
-        self.widget_unet_training.insert(
-            self.widget_unet_training.index(self.div_train_data) + 1,
-            self.widget_show_train_data,
-        )
 
         self.widget_show_metadata = PushButton(label="Show")
         self.widget_show_metadata.clicked.connect(
             lambda *args: self.toggle_visibility_metadata(True)
         )
-        self.widget_unet_training.insert(
-            self.widget_unet_training.index(self.div_meta_data) + 1,
-            self.widget_show_metadata,
-        )
 
-        self.train_data_widgets = [
-            self.widget_unet_training.from_disk,
-            self.widget_unet_training.dataset,
-            self.widget_unet_training.image,
-            self.widget_unet_training.segmentation,
-            self.additional_inputs,
-            self.widget_unet_training.channels,
-            self.widget_unet_training.resolution,
-        ]
-        # The Model section is shown together with the training data section
-        # and hidden while the meta data section is expanded.
-        self.model_widgets = [
-            self.div_model,
-            self.widget_unet_training.pretrained,
-            self.widget_unet_training.feature_maps,
-            self.widget_unet_training.patch_size,
-            self.widget_unet_training.max_num_iters,
-            self.widget_unet_training.device,
-        ]
-        self.meta_data_widgets = [
-            self.widget_unet_training.model_name,
-            self.widget_unet_training.description,
-            self.widget_unet_training.modality,
-            self.widget_unet_training.custom_modality,
-            self.widget_unet_training.output_type,
-            self.widget_unet_training.custom_output_type,
-            self.widget_unet_training.authors,
-            self.widget_unet_training.additional_citations,
-            self.widget_unet_training.license,
-            self.widget_unet_training.documentation,
-        ]
+        # @@@@@ Help Text @@@@@
+        help_text = "<strong>UNet Training:</strong> Train a custom segmentation model on your own data."
+        self.help_text_container = Help_text()
+        self.tab_help = self.help_text_container.get_doc_container(
+            help_text,
+            sub_url="chapters/panseg_interactive_napari/unet_training/",
+        )
 
         self.widget_show_train_data.hide()
         self.toggle_visibility_metadata(False)
@@ -183,7 +172,16 @@ class Training_Tab:
     def get_container(self):
         return Container(
             widgets=[
-                div("Custom Model Training"),
+                self.tab_help,
+                self.div_train_data,
+                self.widget_show_train_data,
+                self.widget_unet_training_data,
+                self.div_model,
+                self.widget_unet_model,
+                self.div_meta_data,
+                self.widget_show_metadata,
+                self.widget_unet_metadata,
+                self.div_start_training,
                 self.widget_unet_training,
                 self.widget_info,
             ],
@@ -197,15 +195,14 @@ class Training_Tab:
         if visible:
             self.widget_show_train_data.hide()
             self.toggle_visibility_metadata(False)
-            for widget in self.model_widgets:
-                widget.show()
-            self.widget_unet_training.from_disk.show()
-            self._on_from_disk_change(self.widget_unet_training.from_disk.value)
-            self.widget_unet_training.channels.show()
-            self.widget_unet_training.resolution.show()
+            self.div_model.show()
+            self.widget_unet_model.show()
+            self.widget_unet_training_data.show()
+            self._on_from_disk_change(self.widget_unet_training_data.from_disk.value)
+            self.widget_unet_training_data.channels.show()
+            self.widget_unet_training_data.resolution.show()
         else:
-            for widget in self.train_data_widgets:
-                widget.hide()
+            self.widget_unet_training_data.hide()
             self.widget_show_train_data.show()
 
     def toggle_visibility_metadata(self, visible: bool):
@@ -215,27 +212,19 @@ class Training_Tab:
         if visible:
             self.widget_show_metadata.hide()
             self.toggle_visibility_train_data(False)
-            for widget in self.model_widgets:
-                widget.hide()
-            self.widget_unet_training.model_name.show()
-            self.widget_unet_training.description.show()
-            self.widget_unet_training.modality.show()
-            self.widget_unet_training.output_type.show()
+            self.div_model.hide()
+            self.widget_unet_model.hide()
+            self.widget_unet_metadata.show()
             self._on_custom_output_type_change(
-                self.widget_unet_training.output_type.value
+                self.widget_unet_metadata.output_type.value
             )
-            self._on_custom_modality_change(self.widget_unet_training.modality.value)
-            self.widget_unet_training.authors.show()
-            self.widget_unet_training.additional_citations.show()
-            self.widget_unet_training.license.show()
-            self.widget_unet_training.documentation.show()
+            self._on_custom_modality_change(self.widget_unet_metadata.modality.value)
         else:
-            for widget in self.meta_data_widgets:
-                widget.hide()
+            self.widget_unet_metadata.hide()
             self.widget_show_metadata.show()
 
     @magic_factory(
-        call_button="Start Training",
+        call_button=False,
         from_disk={
             "label": "Train from",
             "value": "Disk",
@@ -262,6 +251,45 @@ class Training_Tab:
             "tooltip": "The to the training input corresponding segmentation.",
             "visible": False,
         },
+        channels={
+            "label": "In and Out Channels",
+            "value": (1, 1),
+            "tooltip": "Number of input and output channels",
+            "widget_type": "TupleEdit",
+            "enabled": True,
+        },
+        resolution={
+            "label": "Data Resolution",
+            "value": [1.0, 1.0, 1.0],
+            "widget_type": "TupleEdit",
+            "tooltip": "Voxel size in um of the training data.\n"
+            "Is initialized correctly from the chosen data if possible.",
+            "enabled": False,
+        },
+    )
+    def factory_unet_training_data(
+        self,
+        from_disk: str,
+        dataset: Path | None,
+        image: Image | None,
+        segmentation: Labels | None,
+        channels,
+        resolution,
+    ) -> None:
+        pass
+
+    @magic_factory(
+        call_button=False,
+        dimensionality={
+            "label": "Dimensionality",
+            "widget_type": "RadioButtons",
+            "orientation": "horizontal",
+            "value": "3D",
+            "choices": ["3D", "2D"],
+            "tooltip": "Train a 3D unet or a 2D unet",
+            "enabled": False,
+            "visible": False,  # output channels not supported, so it is always known
+        },
         pretrained={
             "label": "Pretrained model",
             "tooltip": "Optionally select an existing model to retrain.\n"
@@ -269,24 +297,6 @@ class Training_Tab:
             "Leave empty to create a new model.",
             "choices": [None],
             "value": None,
-        },
-        model_name={
-            "label": "Model name",
-            "value": "",
-            "tooltip": "How your new model should be called.\n"
-            "Can't be the name of an existing model.",
-        },
-        description={
-            "label": "Description",
-            "value": "A model trained by the user.",
-            "tooltip": "Model description will be saved alongside the model.",
-        },
-        channels={
-            "label": "In and Out Channels",
-            "value": (1, 1),
-            "tooltip": "Number of input and output channels",
-            "widget_type": "TupleEdit",
-            "enabled": True,
         },
         feature_maps={
             "label": "Feature dimensions",
@@ -303,14 +313,6 @@ class Training_Tab:
             "widget_type": "TupleEdit",
             "tooltip": "",
         },
-        resolution={
-            "label": "Data Resolution",
-            "value": [1.0, 1.0, 1.0],
-            "widget_type": "TupleEdit",
-            "tooltip": "Voxel size in um of the training data.\n"
-            "Is initialized correctly from the chosen data if possible.",
-            "enabled": False,
-        },
         max_num_iters={
             "label": "Max iterations",
             "value": 100,
@@ -319,15 +321,35 @@ class Training_Tab:
             "tooltip": "Maximum number of iterations after which the training\n"
             "will be stopped. Stops earlier if the accuracy converges.",
         },
-        dimensionality={
-            "label": "Dimensionality",
+        device={
+            "label": "Device",
             "widget_type": "RadioButtons",
             "orientation": "horizontal",
-            "value": "3D",
-            "choices": ["3D", "2D"],
-            "tooltip": "Train a 3D unet or a 2D unet",
-            "enabled": False,
-            "visible": False,  # output channels not supported, so it is always known
+        },
+    )
+    def factory_unet_model(
+        self,
+        dimensionality,
+        pretrained: str | None,
+        feature_maps,
+        patch_size,
+        max_num_iters: int,
+        device,
+    ) -> None:
+        pass
+
+    @magic_factory(
+        call_button=False,
+        model_name={
+            "label": "Model name",
+            "value": "",
+            "tooltip": "How your new model should be called.\n"
+            "Can't be the name of an existing model.",
+        },
+        description={
+            "label": "Description",
+            "value": "A model trained by the user.",
+            "tooltip": "Model description will be saved alongside the model.",
         },
         modality={
             "label": "Microscopy modality",
@@ -355,7 +377,6 @@ class Training_Tab:
             "label": "Authors",
             "widget_type": "TextEdit",
             "tooltip": "One author per line, either 'Name' or 'Name <email>'.",
-            "visible": False,
         },
         additional_citations={
             "label": "Additional citations",
@@ -363,41 +384,79 @@ class Training_Tab:
             "tooltip": "One citation per line: '<DOI or URL> [free text]'.\n"
             "Example: 10.1234/abc.def Smith, J. et al. Some result.\n"
             f"The PanSeg citation ({PANSEG_CITATION.doi}) is always included.",
-            "visible": False,
         },
         license={
             "label": "License",
             "widget_type": "ComboBox",
             "choices": LICENSE_CHOICES,
             "value": NONE_LICENSE,
-            "visible": False,
         },
         documentation={
             "label": "Documentation",
             "widget_type": "TextEdit",
             "tooltip": "Markdown documentation for the model.\n"
             "Saved as README.md next to the model.",
-            "visible": False,
         },
-        device={
-            "label": "Device",
-            "widget_type": "RadioButtons",
-            "orientation": "horizontal",
-        },
+    )
+    def factory_unet_metadata(
+        self,
+        model_name: str,
+        description: str,
+        modality: str | None,
+        custom_modality: str,
+        output_type: str | None,
+        custom_output_type: str,
+        authors: str,
+        additional_citations: str,
+        license: str,
+        documentation: str,
+    ) -> None:
+        pass
+
+    @magic_factory(
+        call_button="Start Training",
         pbar={"label": "Training in progress", "max": 0, "min": 0, "visible": False},
     )
-    def factory_unet_training(
+    def factory_unet_training(self, pbar: ProgressBar | None) -> None:
+        """Train a boundary prediction unet from the current section values."""
+        self._run_training(
+            from_disk=self.widget_unet_training_data.from_disk.value,
+            dataset=self.widget_unet_training_data.dataset.value,
+            image=self.widget_unet_training_data.image.value,
+            segmentation=self.widget_unet_training_data.segmentation.value,
+            channels=self.widget_unet_training_data.channels.value,
+            resolution=self.widget_unet_training_data.resolution.value,
+            dimensionality=self.widget_unet_model.dimensionality.value,
+            pretrained=self.widget_unet_model.pretrained.value,
+            feature_maps=self.widget_unet_model.feature_maps.value,
+            patch_size=self.widget_unet_model.patch_size.value,
+            max_num_iters=self.widget_unet_model.max_num_iters.value,
+            device=self.widget_unet_model.device.value,
+            model_name=self.widget_unet_metadata.model_name.value,
+            description=self.widget_unet_metadata.description.value,
+            modality=self.widget_unet_metadata.modality.value,
+            custom_modality=self.widget_unet_metadata.custom_modality.value,
+            output_type=self.widget_unet_metadata.output_type.value,
+            custom_output_type=self.widget_unet_metadata.custom_output_type.value,
+            authors=self.widget_unet_metadata.authors.value,
+            additional_citations=self.widget_unet_metadata.additional_citations.value,
+            license=self.widget_unet_metadata.license.value,
+            documentation=self.widget_unet_metadata.documentation.value,
+            pbar=pbar,
+        )
+
+    def _run_training(
         self,
         # data
         from_disk: str,
-        dataset: Optional[Path],
-        image: Optional[Image],
-        segmentation: Optional[Labels],
+        dataset: Path | None,
+        image: Image | None,
+        segmentation: Labels | None,
         channels,
         resolution,
         dimensionality,
         # model
-        pretrained: Optional[str],
+        pretrained: str | None,
         feature_maps,
         patch_size,
         max_num_iters: int,
@@ -405,16 +464,16 @@ class Training_Tab:
         # metadata
         model_name: str,
         description: str,
-        modality: Optional[str],
+        modality: str | None,
         custom_modality: str,
-        output_type: Optional[str],
+        output_type: str | None,
         custom_output_type: str,
         # fair metadata
-        authors: str,
-        additional_citations: str,
-        license: str,
-        documentation: str,
-        pbar: Optional[ProgressBar],
+        authors: str = "",
+        additional_citations: str = "",
+        license: str = NONE_LICENSE,
+        documentation: str = "",
+        pbar: ProgressBar | None = None,
     ) -> None:
         """Train a boundary prediction unet"""
         if from_disk == "Disk":
@@ -490,7 +549,7 @@ class Training_Tab:
         logger.info(f"Model architecture: {layer_order}")
 
         widgets_to_reset = [
-            self.widget_unet_training.pretrained,
+            self.widget_unet_model.pretrained,
         ]
         if self.prediction_tab:
             widgets_to_reset.extend(
@@ -537,14 +596,16 @@ class Training_Tab:
         if not self.train_data_open:
             return
         if from_disk == "Disk":
-            self.widget_unet_training.image.hide()
-            self.widget_unet_training.segmentation.hide()
-            self.widget_unet_training.dataset.show()
+            self.widget_unet_training_data.image.hide()
+            self.widget_unet_training_data.segmentation.hide()
+            self.widget_unet_training_data.dataset.show()
+            self._on_dataset_change(self.widget_unet_training_data.dataset.value)
         else:
-            self.widget_unet_training.dataset.hide()
-            self.widget_unet_training.image.show()
-            self.widget_unet_training.segmentation.show()
-        self.update_additional_inputs(self.widget_unet_training.channels.value)
+            self.widget_unet_training_data.dataset.hide()
+            self.widget_unet_training_data.image.show()
+            self.widget_unet_training_data.segmentation.show()
+            self.widget_unet_training_data.channels[0].enabled = True
+            self.update_additional_inputs(self.widget_unet_training_data.channels.value)
 
     def update_layer_selection(self, event):
         """Updates layer drop-down menus"""
@@ -554,18 +615,18 @@ class Training_Tab:
         raws = get_layers(SemanticType.RAW)
         segmentations = get_layers(SemanticType.SEGMENTATION)
 
-        self.widget_unet_training.image.choices = raws
-        self.widget_unet_training.segmentation.choices = segmentations
+        self.widget_unet_training_data.image.choices = raws
+        self.widget_unet_training_data.segmentation.choices = segmentations
 
         if raws and segmentations:
-            self.widget_unet_training.from_disk.value = "Current Data"
+            self.widget_unet_training_data.from_disk.value = "Current Data"
 
     def _on_dimensionality_change(self, dimensionality: Literal["3D", "2D"]):
         """Update patch size according to chosen dimensionality."""
         logger.debug(f"_on_dimensionality_change called with {dimensionality}")
 
         # Patch size:
-        z_patch = self.widget_unet_training.patch_size[0]
+        z_patch = self.widget_unet_model.patch_size[0]
         if dimensionality == "2D":
             if z_patch.value != 1:  # guard multiple executions
                 self.previous_z_patch_size = z_patch.value
@@ -574,7 +635,8 @@ class Training_Tab:
         else:
             z_patch.value = self.previous_z_patch_size
             z_patch.enabled = True
-        self.update_channels()
+        if self.widget_unet_training_data.from_disk.value == "Disk":
+            self.update_channels()
 
     def update_channels(self):
         """Updates the number of input and output channels
@@ -589,17 +651,17 @@ class Training_Tab:
         self._automatic_channel_change = True
         try:
             logger.debug("update_channels called")
-            dimensionality = self.widget_unet_training.dimensionality.value
-            ch = self.widget_unet_training.channels
-            self.widget_unet_training.channels[0].enabled = False
-            self.widget_unet_training.channels[1].enabled = False
+            dimensionality = self.widget_unet_model.dimensionality.value
+            ch = self.widget_unet_training_data.channels
+            self.widget_unet_training_data.channels[0].enabled = False
+            self.widget_unet_training_data.channels[1].enabled = False
 
             if self.in_shape is None or self.out_shape is None:
                 return
             if len(self.in_shape) == 2:
                 if len(self.out_shape) == 2:
                     ch.value = (1, 1)
-                    self.widget_unet_training.channels[0].enabled = True
+                    self.widget_unet_training_data.channels[0].enabled = True
                 elif len(self.out_shape) == 3:
                     ch.value = (1, self.out_shape[0])
                     raise ValueError("No channels in output supported!")
@@ -616,7 +678,7 @@ class Training_Tab:
                 elif len(self.out_shape) == 3:
                     if dimensionality == "3D":
                         ch.value = (1, 1)
-                        self.widget_unet_training.channels[0].enabled = True
+                        self.widget_unet_training_data.channels[0].enabled = True
                     elif dimensionality == "2D":
                         ch.value = (self.in_shape[0], self.out_shape[0])
                         raise ValueError("No channels in output supported!")
@@ -643,7 +705,8 @@ class Training_Tab:
             logger.debug(f"Determined channels: {ch.value}")
         except ValueError as e:
             log(f"Error: {e}", thread="training", level="ERROR")
-        self._automatic_channel_change = False
+        finally:
+            self._automatic_channel_change = False
 
     def update_additional_inputs(self, channels: tuple[int, int]):
         logger.debug(
@@ -661,7 +724,7 @@ class Training_Tab:
             self.additional_inputs.show()
 
         for i in range(channels[0] - 1):
-            if self.widget_unet_training.from_disk.value == "Disk":
+            if self.widget_unet_training_data.from_disk.value == "Disk":
                 self.additional_inputs.hide()
                 self.additional_inputs.append(
                     FileEdit(mode="d", tooltip=f"Additional input channel {i + 1}")
@@ -669,31 +732,33 @@ class Training_Tab:
             else:
                 self.additional_inputs.append(
                     widgets.create_widget(
-                        annotation=Optional[Image],
+                        annotation=Image | None,
                     )
                 )
 
-    def _on_custom_modality_change(self, modality: str):
+    def _on_custom_modality_change(self, modality: str | None):
         logger.debug(f"_on_custom_modality_change called: {modality}")
         if not self.meta_data_open:
             return
         if modality == self.CUSTOM:
-            self.widget_unet_training.custom_modality.show()
+            self.widget_unet_metadata.custom_modality.show()
         else:
-            self.widget_unet_training.custom_modality.hide()
+            self.widget_unet_metadata.custom_modality.hide()
 
-    def _on_custom_output_type_change(self, output_type: str):
+    def _on_custom_output_type_change(self, output_type: str | None):
         logger.debug(f"_on_custom_output_type_change called: {output_type}")
         if not self.meta_data_open:
             return
         if output_type == self.CUSTOM:
-            self.widget_unet_training.custom_output_type.show()
+            self.widget_unet_metadata.custom_output_type.show()
         else:
-            self.widget_unet_training.custom_output_type.hide()
+            self.widget_unet_metadata.custom_output_type.hide()
 
-    def _on_dataset_change(self, dataset_dir: Path):
+    def _on_dataset_change(self, dataset_dir: Path | None):
         """Updates resolution, dimensionality and channels"""
-        if not dataset_dir.exists() or not dataset_dir.is_dir():
+        if dataset_dir is None or not dataset_dir.exists() or not dataset_dir.is_dir():
+            self.in_shape, self.out_shape = None, None
+            self.update_dimensionality()
             return
         if not all((dataset_dir / d).exists() for d in ["train", "val"]):
             return
@@ -709,11 +774,11 @@ class Training_Tab:
         voxel_size = read_h5_voxel_size(h5s[0], "raw").voxels_size
         if voxel_size is None:
             voxel_size = (1.0, 1.0, 1.0)
-            self.widget_unet_training.resolution.enabled = True
+            self.widget_unet_training_data.resolution.enabled = True
         else:
-            self.widget_unet_training.resolution.enabled = False
+            self.widget_unet_training_data.resolution.enabled = False
 
-        self.widget_unet_training.resolution.value = voxel_size
+        self.widget_unet_training_data.resolution.value = voxel_size
         logger.debug(f"Resolution of training data: {voxel_size}")
 
         # get channels
@@ -724,17 +789,20 @@ class Training_Tab:
         )
         self.update_dimensionality()
 
-    def _on_image_change(self, image: Image):
+    def _on_image_change(self, image: Image | None):
         """Update resolution, dimensionality and input channels on image change"""
-        pl_image = PanSegImage.from_napari_layer(image)
-        if pl_image.voxel_size.voxels_size is None:
-            log(
-                "Voxels size unknown! Set voxel size in input tab!",
-                thread="training",
-                level="ERROR",
-            )
+        self.in_shape = None
+        if image is None:
             return
-        self.widget_unet_training.resolution.value = pl_image.voxel_size
+        pl_image = PanSegImage.from_napari_layer(image)
+        voxel_size = pl_image.voxel_size.voxels_size
+        if voxel_size is None:
+            voxel_size = (1.0, 1.0, 1.0)
+            self.widget_unet_training_data.resolution.enabled = True
+        else:
+            self.widget_unet_training_data.resolution.enabled = False
+        self.widget_unet_training_data.resolution.value = voxel_size
+
         ch_dim = pl_image.channel_axis
         if ch_dim and pl_image.image_layout == ImageLayout.ZCYX:
             raise ValueError("Only CZYX image layout supported for 4D training.")
@@ -743,6 +811,9 @@ class Training_Tab:
 
     def _on_segmentation_change(self, seg: Labels):
         """Update resolution, dimensionality and output channels on image change"""
+        self.out_shape = None
+        if seg is None:
+            return
         pl_image = PanSegImage.from_napari_layer(seg)
         ch_dim = pl_image.channel_axis
         if ch_dim:
@@ -761,7 +832,7 @@ class Training_Tab:
         logger.debug(
             f"update_dimensionality called, in/out: {self.in_shape}, {self.out_shape}"
         )
-        dimensionality = self.widget_unet_training.dimensionality
+        dimensionality = self.widget_unet_model.dimensionality
 
         if self.in_shape is None or self.out_shape is None:
             return
@@ -807,53 +878,53 @@ class Training_Tab:
 
         if model_name is None:
             self.description = "No description available for this model."
-            self.widget_unet_training.feature_maps.enabled = True
+            self.widget_unet_model.feature_maps.enabled = True
         else:
-            self.widget_unet_training.feature_maps.enabled = False
+            self.widget_unet_model.feature_maps.enabled = False
             model, model_config, pre_model_path = model_zoo.get_model_by_name(
                 model_name
             )
             logger.info(f"Selected model config: {model_config}")
             if isinstance(model_config["f_maps"], list):
-                self.widget_unet_training.feature_maps.value = model_config["f_maps"]
+                self.widget_unet_model.feature_maps.value = model_config["f_maps"]
             else:
-                self.widget_unet_training.feature_maps.value = [model_config["f_maps"]]
+                self.widget_unet_model.feature_maps.value = [model_config["f_maps"]]
 
             self.description = model_zoo.get_model_description(model_name)
 
             model_channels = (model_config["in_channels"], model_config["out_channels"])
-            if model_channels != self.widget_unet_training.channels.value:
+            if model_channels != self.widget_unet_training_data.channels.value:
                 log(
                     "Model incompatible chosen data!\nModel channels: "
                     f"{model_channels}\nData channels: "
-                    f"{self.widget_unet_training.channels.value}",
+                    f"{self.widget_unet_training_data.channels.value}",
                     thread="training",
                     level="ERROR",
                 )
             if (
                 isinstance(model, UNet3D)
-                and self.widget_unet_training.dimensionality.value != "3D"
+                and self.widget_unet_model.dimensionality.value != "3D"
             ):
                 log(
                     "Model incompatible with chosen data!\n"
                     "Model is a 3D model, but data is "
-                    f"{self.widget_unet_training.dimensionality.value}",
+                    f"{self.widget_unet_model.dimensionality.value}",
                     thread="training",
                     level="ERROR",
                 )
             elif (
                 isinstance(model, UNet2D)
-                and self.widget_unet_training.dimensionality.value != "2D"
+                and self.widget_unet_model.dimensionality.value != "2D"
             ):
                 log(
                     "Model incompatible with chosen data!\n"
                     "Model is a 2D model, but data is "
-                    f"{self.widget_unet_training.dimensionality.value}",
+                    f"{self.widget_unet_model.dimensionality.value}",
                     thread="training",
                     level="ERROR",
                 )
 
-        self.widget_unet_training.pretrained.tooltip = (
+        self.widget_unet_model.pretrained.tooltip = (
             "Select an existing model to retrain. Current model description:"
             f"\n\n{self.description}"
         )

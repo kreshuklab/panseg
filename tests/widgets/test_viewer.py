@@ -30,8 +30,8 @@ def all_fields(panseg_viewer):
         pv.postprocessing_tab.widget_fix_segmentation_by_nuclei.segmentation_nuclei: "postprocessing_tab",  # segm
         pv.postprocessing_tab.widget_fix_segmentation_by_nuclei.boundary_pmaps: "postprocessing_tab",  # pred
         pv.output_tab.widget_export_image.image: "output_tab",  # all
-        pv.training_tab.widget_unet_training.image: "training_tab",  # raw
-        pv.training_tab.widget_unet_training.segmentation: "training_tab",  # segm
+        pv.training_tab.widget_unet_training_data.image: "training_tab",  # raw
+        pv.training_tab.widget_unet_training_data.segmentation: "training_tab",  # segm
     }
 
 
@@ -46,7 +46,7 @@ def all_raw_fields(panseg_viewer):
         pv.segmentation_tab.widget_layer_select.layer: "segmentation_tab",  # raw
         pv.segmentation_tab.widget_layer_select.nuclei: "segmentation_tab",  # all
         pv.output_tab.widget_export_image.image: "output_tab",  # all
-        pv.training_tab.widget_unet_training.image: "training_tab",  # raw
+        pv.training_tab.widget_unet_training_data.image: "training_tab",  # raw
     }
 
 
@@ -78,7 +78,7 @@ def all_segm_fields(panseg_viewer):
         pv.postprocessing_tab.widget_fix_segmentation_by_nuclei.segmentation_cells: "postprocessing_tab",  # segm
         pv.postprocessing_tab.widget_fix_segmentation_by_nuclei.segmentation_nuclei: "postprocessing_tab",  # segm
         pv.output_tab.widget_export_image.image: "output_tab",  # all
-        pv.training_tab.widget_unet_training.segmentation: "training_tab",  # segm
+        pv.training_tab.widget_unet_training_data.segmentation: "training_tab",  # segm
     }
 
 

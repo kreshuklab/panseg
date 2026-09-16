@@ -18,8 +18,9 @@ def training_tab():
 @pytest.fixture
 def shown_training_tab(training_tab, qtbot):
     """A training tab whose container is shown, so visibility can be asserted."""
-    qtbot.addWidget(training_tab.widget_unet_training.native)
-    training_tab.widget_unet_training.show()
+    container = training_tab.get_container()
+    qtbot.addWidget(container.native)
+    container.show()
     return training_tab
 
 
@@ -43,15 +44,19 @@ def invoke_training(tab, **overrides):
         custom_modality="",
         output_type="boundaries",
         custom_output_type="",
+        authors=tab.widget_unet_metadata.authors.value,
+        additional_citations=tab.widget_unet_metadata.additional_citations.value,
+        license=tab.widget_unet_metadata.license.value,
+        documentation=tab.widget_unet_metadata.documentation.value,
         pbar=None,
     )
     kwargs.update(overrides)
-    tab.widget_unet_training(**kwargs)
+    tab._run_training(**kwargs)
 
 
 def test_get_container(training_tab):
     container = training_tab.get_container()
-    assert len(container) == 3
+    assert len(container) == 12
 
 
 def test_unet_training_run(training_tab, mocker, tmp_path):
@@ -64,7 +69,7 @@ def test_unet_training_run(training_tab, mocker, tmp_path):
         "panseg.viewer_napari.widgets.training.PATH_PANSEG_MODELS", new=tmp_path
     )
 
-    training_tab.widget_unet_training(
+    training_tab._run_training(
         from_disk="Disk",
         dataset="dataset/data",
         image=None,
@@ -97,7 +102,7 @@ def test_unet_training_no_dataset(training_tab, mocker):
     )
     m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
 
-    training_tab.widget_unet_training(
+    training_tab._run_training(
         from_disk="Disk",
         dataset=None,
         image=None,
@@ -135,7 +140,7 @@ def test_unet_training_no_image(
     )
     m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
 
-    training_tab.widget_unet_training(
+    training_tab._run_training(
         from_disk="Current Data",
         dataset=None,
         image=None,
@@ -162,7 +167,7 @@ def test_unet_training_no_image(
     m_get_models.assert_not_called()
     m_schedule.assert_not_called()
 
-    training_tab.widget_unet_training(
+    training_tab._run_training(
         from_disk="Current Data",
         dataset=None,
         image=napari_raw,
@@ -206,7 +211,7 @@ def test_unet_training_channels(
     for m in m_additional_inputs:
         m.value = napari_raw
     training_tab.additional_inputs = m_additional_inputs
-    training_tab.widget_unet_training(
+    training_tab._run_training(
         from_disk="Current Data",
         dataset=None,
         image=napari_raw,
@@ -240,7 +245,7 @@ def test_unet_training_none(training_tab, mocker):
     )
     m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
 
-    training_tab.widget_unet_training(
+    training_tab._run_training(
         from_disk="Disk",
         dataset="dataset/data",
         image=None,
@@ -267,7 +272,7 @@ def test_unet_training_none(training_tab, mocker):
     m_schedule.assert_not_called()
 
     m_log.reset_mock()
-    training_tab.widget_unet_training(
+    training_tab._run_training(
         from_disk="Disk",
         dataset="dataset/data",
         image=None,
@@ -301,7 +306,7 @@ def test_unet_training_custom(training_tab, mocker):
     )
     m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
 
-    training_tab.widget_unet_training(
+    training_tab._run_training(
         from_disk="Disk",
         dataset="dataset/data",
         image=None,
@@ -328,7 +333,7 @@ def test_unet_training_custom(training_tab, mocker):
     m_schedule.assert_not_called()
 
     m_log.reset_mock()
-    training_tab.widget_unet_training(
+    training_tab._run_training(
         from_disk="Disk",
         dataset="dataset/data",
         image=None,
@@ -362,7 +367,7 @@ def test_unet_training_no_name(training_tab, mocker):
     )
     m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
 
-    training_tab.widget_unet_training(
+    training_tab._run_training(
         from_disk="Disk",
         dataset="dataset/data",
         image=None,
@@ -399,7 +404,7 @@ def test_unet_training_feature_maps(training_tab, mocker, tmp_path):
         "panseg.viewer_napari.widgets.training.PATH_PANSEG_MODELS", new=tmp_path
     )
 
-    training_tab.widget_unet_training(
+    training_tab._run_training(
         from_disk="Disk",
         dataset="dataset/data",
         image=None,
@@ -426,7 +431,7 @@ def test_unet_training_feature_maps(training_tab, mocker, tmp_path):
     m_schedule.assert_called_once()
     assert isinstance(m_schedule.call_args[1]["task_kwargs"]["feature_maps"], int)
 
-    training_tab.widget_unet_training(
+    training_tab._run_training(
         from_disk="Disk",
         dataset="dataset/data",
         image=None,
@@ -464,7 +469,7 @@ def test_unet_training_pretrained(training_tab, mocker, tmp_path):
         "panseg.viewer_napari.widgets.training.PATH_PANSEG_MODELS", new=tmp_path
     )
 
-    training_tab.widget_unet_training(
+    training_tab._run_training(
         from_disk="Disk",
         dataset="dataset/data",
         image=None,
@@ -495,22 +500,26 @@ def test_unet_training_pretrained(training_tab, mocker, tmp_path):
 
 
 def test_on_from_disk_change(training_tab, mocker):
-    training_tab.widget_unet_training.from_disk.value = "Disk"
-    m_show_image = mocker.patch.object(training_tab.widget_unet_training.image, "show")
+    training_tab.widget_unet_training_data.from_disk.value = "Disk"
+    m_show_image = mocker.patch.object(
+        training_tab.widget_unet_training_data.image, "show"
+    )
     m_show_seg = mocker.patch.object(
-        training_tab.widget_unet_training.segmentation, "show"
+        training_tab.widget_unet_training_data.segmentation, "show"
     )
     m_show_dataset = mocker.patch.object(
-        training_tab.widget_unet_training.dataset, "show"
+        training_tab.widget_unet_training_data.dataset, "show"
     )
-    m_hide_image = mocker.patch.object(training_tab.widget_unet_training.image, "hide")
+    m_hide_image = mocker.patch.object(
+        training_tab.widget_unet_training_data.image, "hide"
+    )
     m_hide_seg = mocker.patch.object(
-        training_tab.widget_unet_training.segmentation, "hide"
+        training_tab.widget_unet_training_data.segmentation, "hide"
     )
     m_hide_dataset = mocker.patch.object(
-        training_tab.widget_unet_training.dataset, "hide"
+        training_tab.widget_unet_training_data.dataset, "hide"
     )
-    training_tab.widget_unet_training.from_disk.value = "Current Data"
+    training_tab.widget_unet_training_data.from_disk.value = "Current Data"
 
     m_show_image.assert_called_once()
     m_show_seg.assert_called_once()
@@ -522,14 +531,14 @@ def test_on_from_disk_change(training_tab, mocker):
 
 
 def test_on_dimensionality_change(training_tab):
-    training_tab.widget_unet_training.patch_size.value = [9, 8, 7]
-    training_tab.widget_unet_training.dimensionality.value = "2D"
+    training_tab.widget_unet_model.patch_size.value = [9, 8, 7]
+    training_tab.widget_unet_model.dimensionality.value = "2D"
     assert training_tab.previous_z_patch_size == 9
-    assert training_tab.widget_unet_training.patch_size.value == (1, 8, 7)
+    assert training_tab.widget_unet_model.patch_size.value == (1, 8, 7)
 
-    training_tab.widget_unet_training.dimensionality.value = "3D"
+    training_tab.widget_unet_model.dimensionality.value = "3D"
     assert (
-        training_tab.widget_unet_training.patch_size[0].value
+        training_tab.widget_unet_model.patch_size[0].value
         == training_tab.previous_z_patch_size
     )
 
@@ -537,17 +546,17 @@ def test_on_dimensionality_change(training_tab):
 def test_on_custom_modality_change(training_tab, mocker):
     training_tab.toggle_visibility_metadata(True)
     m_show = mocker.patch.object(
-        training_tab.widget_unet_training.custom_modality, "show"
+        training_tab.widget_unet_metadata.custom_modality, "show"
     )
     m_hide = mocker.patch.object(
-        training_tab.widget_unet_training.custom_modality, "hide"
+        training_tab.widget_unet_metadata.custom_modality, "hide"
     )
 
-    training_tab.widget_unet_training.modality.value = training_tab.CUSTOM
+    training_tab.widget_unet_metadata.modality.value = training_tab.CUSTOM
     m_show.assert_called_once()
     m_hide.assert_not_called()
 
-    training_tab.widget_unet_training.modality.value = "confocal"
+    training_tab.widget_unet_metadata.modality.value = "confocal"
     m_hide.assert_called_once()
     m_show.assert_called_once()
 
@@ -555,17 +564,17 @@ def test_on_custom_modality_change(training_tab, mocker):
 def test_on_custom_output_type_change(training_tab, mocker):
     training_tab.toggle_visibility_metadata(True)
     m_show = mocker.patch.object(
-        training_tab.widget_unet_training.custom_output_type, "show"
+        training_tab.widget_unet_metadata.custom_output_type, "show"
     )
     m_hide = mocker.patch.object(
-        training_tab.widget_unet_training.custom_output_type, "hide"
+        training_tab.widget_unet_metadata.custom_output_type, "hide"
     )
 
-    training_tab.widget_unet_training.output_type.value = training_tab.CUSTOM
+    training_tab.widget_unet_metadata.output_type.value = training_tab.CUSTOM
     m_show.assert_called_once()
     m_hide.assert_not_called()
 
-    training_tab.widget_unet_training.output_type.value = "boundaries"
+    training_tab.widget_unet_metadata.output_type.value = "boundaries"
     m_hide.assert_called_once()
     m_show.assert_called_once()
 
@@ -579,15 +588,17 @@ def test_on_dataset_change(training_tab, mocker):
     test_data_dir = Path(__file__).parent.parent / "resources" / "data"
     assert test_data_dir.exists(), f"Test data directory not found: {test_data_dir}"
 
-    training_tab.widget_unet_training.dataset.value = test_data_dir / "Noneexistent"
+    training_tab.widget_unet_training_data.dataset.value = (
+        test_data_dir / "Noneexistent"
+    )
     m_finder.assert_not_called()
 
-    training_tab.widget_unet_training.dataset.value = test_data_dir.parent
+    training_tab.widget_unet_training_data.dataset.value = test_data_dir.parent
     m_finder.assert_not_called()
 
-    training_tab.widget_unet_training.dataset.value = test_data_dir
+    training_tab.widget_unet_training_data.dataset.value = test_data_dir
     m_finder.assert_called_once()
-    assert training_tab.widget_unet_training.resolution.value == (0.28, 0.13, 0.13)
+    assert training_tab.widget_unet_training_data.resolution.value == (0.28, 0.13, 0.13)
 
 
 def test_on_pretrained_changed(training_tab, mocker):
@@ -599,12 +610,12 @@ def test_on_pretrained_changed(training_tab, mocker):
         "path",
     )
 
-    training_tab.widget_unet_training.pretrained.value = None
+    training_tab.widget_unet_model.pretrained.value = None
     m_zoo.get_model_by_name.assert_not_called()
     m_zoo.get_model_description.assert_not_called()
 
-    training_tab.widget_unet_training.pretrained.choices = ["my_model"]
-    training_tab.widget_unet_training.pretrained.value = "my_model"
+    training_tab.widget_unet_model.pretrained.choices = ["my_model"]
+    training_tab.widget_unet_model.pretrained.value = "my_model"
     m_zoo.get_model_by_name.assert_called_with("my_model")
     m_zoo.get_model_description.assert_called_with("my_model")
     m_log.assert_not_called()
@@ -619,12 +630,12 @@ def test_on_pretrained_changed_channels(training_tab, mocker):
         "path",
     )
 
-    training_tab.widget_unet_training.pretrained.value = None
+    training_tab.widget_unet_model.pretrained.value = None
     m_zoo.get_model_by_name.assert_not_called()
     m_zoo.get_model_description.assert_not_called()
 
-    training_tab.widget_unet_training.pretrained.choices = ["my_model"]
-    training_tab.widget_unet_training.pretrained.value = "my_model"
+    training_tab.widget_unet_model.pretrained.choices = ["my_model"]
+    training_tab.widget_unet_model.pretrained.value = "my_model"
     m_zoo.get_model_by_name.assert_called_with("my_model")
     m_zoo.get_model_description.assert_called_with("my_model")
     m_log.assert_called_with(
@@ -645,12 +656,12 @@ def test_on_pretrained_changed_wrong_2Dmodel(training_tab, mocker):
         "path",
     )
 
-    training_tab.widget_unet_training.pretrained.value = None
+    training_tab.widget_unet_model.pretrained.value = None
     m_zoo.get_model_by_name.assert_not_called()
     m_zoo.get_model_description.assert_not_called()
 
-    training_tab.widget_unet_training.pretrained.choices = ["my_model"]
-    training_tab.widget_unet_training.pretrained.value = "my_model"
+    training_tab.widget_unet_model.pretrained.choices = ["my_model"]
+    training_tab.widget_unet_model.pretrained.value = "my_model"
     m_zoo.get_model_by_name.assert_called_with("my_model")
     m_zoo.get_model_description.assert_called_with("my_model")
     m_log.assert_called_with(
@@ -668,14 +679,14 @@ def test_on_pretrained_changed_wrong_3Dmodel(training_tab, mocker):
         {"f_maps": [16], "in_channels": 1, "out_channels": 1},
         "path",
     )
-    training_tab.widget_unet_training.dimensionality.value = "2D"
+    training_tab.widget_unet_model.dimensionality.value = "2D"
 
-    training_tab.widget_unet_training.pretrained.value = None
+    training_tab.widget_unet_model.pretrained.value = None
     m_zoo.get_model_by_name.assert_not_called()
     m_zoo.get_model_description.assert_not_called()
 
-    training_tab.widget_unet_training.pretrained.choices = ["my_model"]
-    training_tab.widget_unet_training.pretrained.value = "my_model"
+    training_tab.widget_unet_model.pretrained.choices = ["my_model"]
+    training_tab.widget_unet_model.pretrained.value = "my_model"
     m_zoo.get_model_by_name.assert_called_with("my_model")
     m_zoo.get_model_description.assert_called_with("my_model")
     m_log.assert_called_with(
@@ -690,31 +701,31 @@ def test_update_dimensionality(training_tab):
     training_tab.in_shape = (1, 1)
     training_tab.out_shape = (1, 1)
     training_tab.update_dimensionality()
-    assert training_tab.widget_unet_training.dimensionality.value == "2D"
+    assert training_tab.widget_unet_model.dimensionality.value == "2D"
 
     # CYX, YX
     training_tab.in_shape = (1, 1, 1)
     training_tab.out_shape = (1, 1)
     training_tab.update_dimensionality()
-    assert training_tab.widget_unet_training.dimensionality.value == "2D"
+    assert training_tab.widget_unet_model.dimensionality.value == "2D"
 
     # ZYX, ZYX
     training_tab.in_shape = (1, 1, 1)
     training_tab.out_shape = (1, 1, 1)
     training_tab.update_dimensionality()
-    assert training_tab.widget_unet_training.dimensionality.value == "3D"
+    assert training_tab.widget_unet_model.dimensionality.value == "3D"
 
     # ZYX, CZYX
     training_tab.in_shape = (1, 1, 1)
     training_tab.out_shape = (1, 1, 1, 1)
     training_tab.update_dimensionality()
-    assert training_tab.widget_unet_training.dimensionality.value == "3D"
+    assert training_tab.widget_unet_model.dimensionality.value == "3D"
 
     # CZYX, ?
     training_tab.in_shape = (1, 1, 1, 1)
     training_tab.out_shape = (1, 1, 1)
     training_tab.update_dimensionality()
-    assert training_tab.widget_unet_training.dimensionality.value == "3D"
+    assert training_tab.widget_unet_model.dimensionality.value == "3D"
 
 
 def test_update_dimensionality_error(training_tab):
@@ -744,7 +755,7 @@ def test_update_dimensionality_error(training_tab):
 
 
 def test_update_channels(training_tab):
-    ch = training_tab.widget_unet_training.channels
+    ch = training_tab.widget_unet_training_data.channels
     # YX, YX
     training_tab.in_shape = (2, 2)
     training_tab.out_shape = (2, 2)
@@ -772,7 +783,7 @@ def test_update_channels(training_tab):
 
 def test_update_channels_error(training_tab, mocker):
     m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
-    ch = training_tab.widget_unet_training.channels
+    ch = training_tab.widget_unet_training_data.channels
 
     # YX, ZYX
     training_tab.in_shape = (2, 2)
@@ -792,7 +803,7 @@ def test_update_channels_error(training_tab, mocker):
     # ZYX, CYX
     training_tab.in_shape = (2, 2, 2)
     training_tab.out_shape = (2, 2, 2)
-    training_tab.widget_unet_training.dimensionality.value = "2D"
+    training_tab.widget_unet_model.dimensionality.value = "2D"
     m_log.assert_called_once()
     m_log.reset_mock()
     training_tab.update_channels()
@@ -844,18 +855,21 @@ def test_update_layer_selection(
     sentinel = mocker.sentinel
     sentinel.value = napari_raw
     sentinel.type = "inserted"
-    assert training_tab.widget_unet_training.image.value is None
-    assert training_tab.widget_unet_training.segmentation.value is None
+    assert training_tab.widget_unet_training_data.image.value is None
+    assert training_tab.widget_unet_training_data.segmentation.value is None
 
     training_tab.update_layer_selection(sentinel)
-    assert napari_raw in training_tab.widget_unet_training.image.choices
-    assert training_tab.widget_unet_training.segmentation.value is None
+    assert napari_raw in training_tab.widget_unet_training_data.image.choices
+    assert training_tab.widget_unet_training_data.segmentation.value is None
 
     viewer.add_layer(napari_segmentation)
     sentinel.value = napari_segmentation
     sentinel.type = "inserted"
     training_tab.update_layer_selection(sentinel)
-    assert napari_segmentation in training_tab.widget_unet_training.segmentation.choices
+    assert (
+        napari_segmentation
+        in training_tab.widget_unet_training_data.segmentation.choices
+    )
 
 
 def test_on_image_change(training_tab, mocker, napari_raw):
@@ -887,7 +901,7 @@ def test_device_choices_exclude_mps_when_unavailable(mocker):
 
 
 def test_metadata_fields_present(training_tab):
-    w = training_tab.widget_unet_training
+    w = training_tab.widget_unet_metadata
     assert w.license.value == NONE_LICENSE
 
 
@@ -897,14 +911,12 @@ def test_sections_initial_state(shown_training_tab):
     assert not tab.meta_data_open
     assert not tab.widget_show_train_data.visible
     assert tab.widget_show_metadata.visible
-    assert tab.widget_unet_training.from_disk.visible
-    assert tab.widget_unet_training.dataset.visible
-    assert tab.widget_unet_training.channels.visible
-    assert tab.widget_unet_training.resolution.visible
-    for widget in tab.model_widgets:
-        assert widget.visible
-    for widget in tab.meta_data_widgets:
-        assert not widget.visible
+    assert tab.widget_unet_training_data.from_disk.visible
+    assert tab.widget_unet_training_data.dataset.visible
+    assert tab.widget_unet_training_data.channels.visible
+    assert tab.widget_unet_training_data.resolution.visible
+    assert tab.widget_unet_training_data.visible
+    assert not tab.widget_unet_metadata.visible
 
 
 def test_open_metadata_collapses_train_data_and_model(shown_training_tab):
@@ -915,16 +927,8 @@ def test_open_metadata_collapses_train_data_and_model(shown_training_tab):
     assert not tab.train_data_open
     assert not tab.widget_show_metadata.visible
     assert tab.widget_show_train_data.visible
-    for widget in tab.train_data_widgets + tab.model_widgets:
-        assert not widget.visible
-    assert tab.widget_unet_training.model_name.visible
-    assert tab.widget_unet_training.description.visible
-    assert tab.widget_unet_training.modality.visible
-    assert tab.widget_unet_training.output_type.visible
-    assert tab.widget_unet_training.authors.visible
-    assert tab.widget_unet_training.additional_citations.visible
-    assert tab.widget_unet_training.license.visible
-    assert tab.widget_unet_training.documentation.visible
+    assert not tab.widget_unet_training_data.visible
+    assert tab.widget_unet_metadata.visible
 
 
 def test_open_train_data_collapses_metadata(shown_training_tab):
@@ -934,16 +938,14 @@ def test_open_train_data_collapses_metadata(shown_training_tab):
 
     assert tab.train_data_open
     assert not tab.meta_data_open
-    assert tab.widget_unet_training.from_disk.visible
-    assert tab.widget_unet_training.dataset.visible
-    assert tab.widget_unet_training.channels.visible
-    assert tab.widget_unet_training.resolution.visible
-    for widget in tab.model_widgets:
-        assert widget.visible
+    assert tab.widget_unet_training_data.visible
+    assert tab.widget_unet_training_data.from_disk.visible
+    assert tab.widget_unet_training_data.dataset.visible
+    assert tab.widget_unet_training_data.channels.visible
+    assert tab.widget_unet_training_data.resolution.visible
     assert not tab.widget_show_train_data.visible
     assert tab.widget_show_metadata.visible
-    for widget in tab.meta_data_widgets:
-        assert not widget.visible
+    assert not tab.widget_unet_metadata.visible
 
 
 def test_show_buttons_open_sections(shown_training_tab):
@@ -959,15 +961,15 @@ def test_show_buttons_open_sections(shown_training_tab):
 
 def test_custom_widgets_restored_on_section_open(shown_training_tab):
     tab = shown_training_tab
-    tab.widget_unet_training.output_type.value = tab.CUSTOM
-    tab.widget_unet_training.modality.value = tab.CUSTOM
+    tab.widget_unet_metadata.output_type.value = tab.CUSTOM
+    tab.widget_unet_metadata.modality.value = tab.CUSTOM
     # The meta data section is collapsed, so the custom widgets must not leak
-    assert not tab.widget_unet_training.custom_output_type.visible
-    assert not tab.widget_unet_training.custom_modality.visible
+    assert not tab.widget_unet_metadata.custom_output_type.visible
+    assert not tab.widget_unet_metadata.custom_modality.visible
 
     tab.toggle_visibility_metadata(True)
-    assert tab.widget_unet_training.custom_output_type.visible
-    assert tab.widget_unet_training.custom_modality.visible
+    assert tab.widget_unet_metadata.custom_output_type.visible
+    assert tab.widget_unet_metadata.custom_modality.visible
 
 
 @pytest.mark.parametrize(
@@ -980,7 +982,7 @@ def test_custom_widgets_restored_on_section_open(shown_training_tab):
 def test_unet_training_invalid_metadata(shown_training_tab, mocker, field, value):
     m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
     m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
-    getattr(shown_training_tab.widget_unet_training, field).value = value
+    getattr(shown_training_tab.widget_unet_metadata, field).value = value
 
     invoke_training(shown_training_tab)
 
@@ -995,7 +997,7 @@ def test_unet_training_none_license_maps_to_none(shown_training_tab, mocker, tmp
     mocker.patch(
         "panseg.viewer_napari.widgets.training.PATH_PANSEG_MODELS", new=tmp_path
     )
-    shown_training_tab.widget_unet_training.license.value = NONE_LICENSE
+    shown_training_tab.widget_unet_metadata.license.value = NONE_LICENSE
 
     invoke_training(shown_training_tab)
 
@@ -1008,14 +1010,14 @@ def test_unet_training_none_license_maps_to_none(shown_training_tab, mocker, tmp
 def test_unet_training_fair_metadata_in_task_kwargs(shown_training_tab, mocker):
     m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
     m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
-    shown_training_tab.widget_unet_training.authors.value = (
+    shown_training_tab.widget_unet_metadata.authors.value = (
         "Jane Doe <jane@example.com>\nJohn Smith"
     )
-    shown_training_tab.widget_unet_training.additional_citations.value = (
+    shown_training_tab.widget_unet_metadata.additional_citations.value = (
         "10.1234/x.y Smith, J. et al."
     )
-    shown_training_tab.widget_unet_training.license.value = "MIT"
-    shown_training_tab.widget_unet_training.documentation.value = "A very good model."
+    shown_training_tab.widget_unet_metadata.license.value = "MIT"
+    shown_training_tab.widget_unet_metadata.documentation.value = "A very good model."
 
     invoke_training(shown_training_tab)
 
