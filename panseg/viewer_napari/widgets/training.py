@@ -169,6 +169,12 @@ class Training_Tab:
         self.widget_info = Label(value=f"Model dir: {PATH_PANSEG_MODELS}")
         self._automatic_channel_change = False
 
+        # magicgui only unifies label widths on post-init widget insertions or
+        # label changes; sections without one are left with unaligned labels
+        self.widget_unet_training_data._unify_label_widths()
+        self.widget_unet_model._unify_label_widths()
+        self.widget_unet_metadata._unify_label_widths()
+
     def get_container(self):
         return Container(
             widgets=[

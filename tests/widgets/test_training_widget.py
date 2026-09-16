@@ -919,6 +919,26 @@ def test_sections_initial_state(shown_training_tab):
     assert not tab.widget_unet_metadata.visible
 
 
+def test_section_labels_aligned(shown_training_tab):
+    # magicgui aligns form inputs by giving each row's label the min width of
+    # the widest label in the section; it only does so on post-init widget
+    # insertions or label changes, so this guards against sections that never
+    # get one being left with flush/unaligned labels.
+    tab = shown_training_tab
+    for section in (
+        tab.widget_unet_training_data,
+        tab.widget_unet_model,
+        tab.widget_unet_metadata,
+    ):
+        widths = {
+            w._labeled_widget()._label_widget.min_width
+            for w in section
+            if w._labeled_widget() is not None
+        }
+        assert len(widths) == 1, f"unaligned labels in section: {sorted(widths)}"
+        assert 0 not in widths
+
+
 def test_open_metadata_collapses_train_data_and_model(shown_training_tab):
     tab = shown_training_tab
     tab.toggle_visibility_metadata(True)
