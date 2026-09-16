@@ -103,6 +103,7 @@ class Segmentation_Tab:
         self.widget_aio_ws.stacked._default_choices = self.STACKED
         self.widget_aio_ws.stacked.reset_choices()
         self.widget_aio_ws.stacked.value = False
+        self.widget_aio_ws._unify_label_widths()
 
         self.widget_show_prediction_aio = self.factory_show_button()
         self.widget_show_prediction_aio.name += "_prediction_aio"
