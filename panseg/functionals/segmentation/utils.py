@@ -35,9 +35,11 @@ def shift_affinities(affinities, offsets):
     return rolled_affs
 
 
-def compute_mc_costs(boundary_pmaps, rag, beta):
+def compute_mc_costs(boundary_pmaps, rag, superpixels, beta):
     # compute the edge costs
-    features = compute_boundary_mean_and_length(rag, boundary_pmaps)
+    features = compute_boundary_mean_and_length(
+        rag, segmentation=superpixels, input_=boundary_pmaps
+    )
     costs, sizes = features[:, 0], features[:, 1]
 
     # transform the edge costs from [0, 1] to  [-inf, inf], which is

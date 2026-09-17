@@ -33,25 +33,27 @@ requirements:
     - bioimageio.core ==0.10.2
     - bioimageio.spec ==0.5.9.1
     - h5py ==3.16.0
-    - imageio ==2.37.0
+    - imageio ==2.37.4
     - napari ==0.7.0
-    - pydantic ==2.13.3
-    - pyside6 ==6.11.0
-    - python-elf ==0.7.4
+    - nifty ==1.2.4
+    - pydantic ==2.13.5
+    - pyside6 ==6.11.2
+    - python-elf ==0.9.2
     - python-graphviz ==0.21
-    - pytorch ==2.10.0
+    - pytorch ==2.13.0
     - pyyaml ==6.0.3
     - qt-material ==2.14
     - qtpy ==2.4.3
-    - requests ==2.33.1
+    - requests ==2.34.2
     - scikit-image ==0.26.0
     - tensorboard ==2.20.0
+    - torchvision ==0.28.0
     - tifffile ==2026.3.3
     - vigra ==1.12.3
-    - trimesh ==4.11.5
-    - numpy ==2.4.3
+    - trimesh ==5.1.0
+    - numpy ==2.4.6
     - zarr ==3.1.6
-    - zmesh ==1.11.0
+    - zmesh ==1.15.0
 
 test:
   requires:

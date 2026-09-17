@@ -362,18 +362,16 @@ def multicut(
         segmentation (np.ndarray): Multicut output segmentation
     """
 
+    # elf requires label arrays with 32/64-bit integer dtypes
+    superpixels = superpixels.astype("uint32")
     rag = compute_rag(superpixels)
 
     # Prob -> edge costs
     boundary_pmaps = boundary_pmaps.astype("float32")
-    costs = compute_mc_costs(boundary_pmaps, rag, beta=beta)
-
-    # Creating graph
-    graph = nifty.graph.undirectedGraph(rag.numberOfNodes)
-    graph.insertEdges(rag.uvIds())
+    costs = compute_mc_costs(boundary_pmaps, rag, superpixels, beta=beta)
 
     # Solving Multicut
-    node_labels = multicut_kernighan_lin(graph, costs)
+    node_labels = multicut_kernighan_lin(rag, costs)
     segmentation = nifty.tools.take(node_labels, superpixels)
 
     # run size threshold
@@ -409,12 +407,15 @@ def lifted_multicut_from_nuclei_pmaps(
     if nuclei_pmaps.max() > 1 or nuclei_pmaps.min() < 0:
         raise ValueError("nuclei_pmaps should be between 0 and 1")
 
+    # elf requires label arrays with 32/64-bit integer dtypes
+    superpixels = superpixels.astype("uint32")
+
     # compute the region adjacency graph
     rag = compute_rag(superpixels)
 
     # compute multi cut edges costs
     boundary_pmaps = boundary_pmaps.astype("float32")
-    costs = compute_mc_costs(boundary_pmaps, rag, beta)
+    costs = compute_mc_costs(boundary_pmaps, rag, superpixels, beta)
 
     # assert nuclei pmaps are floats
     nuclei_pmaps = nuclei_pmaps.astype("float32")
@@ -435,7 +436,7 @@ def lifted_multicut_from_nuclei_pmaps(
     node_labels = lmc.lifted_multicut_kernighan_lin(
         rag, costs, lifted_uvs, lifted_costs
     )
-    segmentation = project_node_labels_to_pixels(rag, node_labels)
+    segmentation = project_node_labels_to_pixels(rag, superpixels, node_labels)
 
     # run size threshold
     if post_minsize > 0:
@@ -466,12 +467,15 @@ def lifted_multicut_from_nuclei_segmentation(
     Returns:
         segmentation (np.ndarray): Multicut output segmentation
     """
+    # elf requires label arrays with 32/64-bit integer dtypes
+    superpixels = superpixels.astype("uint32")
+
     # compute the region adjacency graph
     rag = compute_rag(superpixels)
 
     # compute multi cut edges costs
     boundary_pmaps = boundary_pmaps.astype("float32")
-    costs = compute_mc_costs(boundary_pmaps, rag, beta)
+    costs = compute_mc_costs(boundary_pmaps, rag, superpixels, beta)
     max_cost = np.abs(np.max(costs))
     lifted_uvs, lifted_costs = lifted_problem_from_segmentation(
         rag,
@@ -489,7 +493,7 @@ def lifted_multicut_from_nuclei_segmentation(
     node_labels = lmc.lifted_multicut_kernighan_lin(
         rag, costs, lifted_uvs, lifted_costs
     )
-    segmentation = project_node_labels_to_pixels(rag, node_labels)
+    segmentation = project_node_labels_to_pixels(rag, superpixels, node_labels)
 
     # run size threshold
     if post_minsize > 0:

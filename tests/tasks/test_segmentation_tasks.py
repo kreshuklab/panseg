@@ -201,9 +201,14 @@ def test_lmc_segmentation_seg(mocker, napari_prediction, napari_segmentation, h5
     )
 
     raw_data = load_h5(h5_file, "raw")
+    # raw intensities are outside [0, 1]; rescale them so they form a valid
+    # boundary probability map (the new elf backend rejects non-finite costs)
+    pmaps = (raw_data.astype("float32") - raw_data.min()) / (
+        raw_data.max() - raw_data.min()
+    )
     pred_image = PanSegImage.from_napari_layer(napari_prediction)
     seg_image = PanSegImage.from_napari_layer(napari_segmentation)
-    pred2_image = PanSegImage.derive_new(pred_image, raw_data, name="pred2")
+    pred2_image = PanSegImage.derive_new(pred_image, pmaps, name="pred2")
     seg2_image = PanSegImage.derive_new(seg_image, raw_data, name="seg2")
 
     result = lmc_segmentation_task(
