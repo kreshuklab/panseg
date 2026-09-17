@@ -50,7 +50,7 @@ def get_quantile_mask(
     return np.logical_and(lower_mask, upper_mask)
 
 
-@numba.njit(parallel=True)
+@numba.njit(parallel=True, cache=True)
 def numba_find_overlaps(
     cell_seg: np.ndarray, nuc_seg: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

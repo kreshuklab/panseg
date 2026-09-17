@@ -3,7 +3,7 @@ import numpy as np
 from numba.typed import List
 
 
-@numba.njit
+@numba.njit(cache=True)
 def _get_bboxes3D(segmentation, labels_idx):
     shape = segmentation.shape
 
@@ -36,7 +36,7 @@ def _get_bboxes3D(segmentation, labels_idx):
     return bboxes
 
 
-@numba.njit
+@numba.njit(cache=True)
 def _get_bboxes2D(segmentation, labels_idx):
     shape = segmentation.shape
 

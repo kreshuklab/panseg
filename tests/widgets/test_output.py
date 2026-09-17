@@ -3,7 +3,7 @@ import pytest
 from panseg.viewer_napari.widgets.output import Output_Tab
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def output_tab():
     return Output_Tab()
 

@@ -20,20 +20,25 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v7.0.1
 
-      # Cache the PanSeg model directory across runs. The key is the git blob
-      # hash of the official zoo config: the downloaded files are a pure
-      # function of the URLs declared there, so a PR that does not touch it
-      # reuses the cached models and makes no Zenodo request.
+      # Cache the downloaded models across runs. The key is a hash of the
+      # files that declare which models the tests download (the PanSeg zoo
+      # config and the BioImage.IO test model ids)
       - name: Compute model zoo cache key
         id: model-zoo-key
         run: |
-          echo "hash=$(git rev-parse HEAD:panseg/resources/models_zoo.yaml)" >> "$GITHUB_OUTPUT"
+          files="panseg/resources/models_zoo.yaml tests/core/test_zoo.py"
+          echo "hash=$(git rev-parse HEAD:$files | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Cache PanSeg models
         uses: actions/cache@v6.1.0
         with:
-          path: ~/.panseg_models
+          path: |
+            ~/.panseg_models
+            ~/.cache/bioimageio
+            ~/.cache/pooch
           key: panseg-models-${{ steps.model-zoo-key.outputs.hash }}
+          restore-keys: |
+            panseg-models-
 
       - name: Setup Qt headless display
         uses: pyvista/setup-headless-display-action@v4.3

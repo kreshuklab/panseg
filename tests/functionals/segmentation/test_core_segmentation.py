@@ -176,18 +176,6 @@ def _sphere_grid_pmap(
     return (inside & ~eroded).astype("float32"), centers
 
 
-def _ball_mask(
-    shape: tuple[int, ...], center: tuple[int, int, int], radius: int
-) -> np.ndarray:
-    g = np.arange(shape[0], dtype="float64")
-    d2 = (
-        ((g - center[0]) ** 2)[:, None, None]
-        + ((g - center[1]) ** 2)[None, :, None]
-        + ((g - center[2]) ** 2)[None, None, :]
-    )
-    return d2 <= radius * radius
-
-
 def test_dt_watershed_blockwise_quality_spheres(caplog):
     # 6x6x6 spheres with diameter ~13 and pitch 40 (240^3 volume): no object center or
     # surface lies on an auto-derived block boundary for n_threads=8 (block shape
@@ -206,10 +194,17 @@ def test_dt_watershed_blockwise_quality_spheres(caplog):
     assert result.max() <= 2.5 * n_objects_total
 
     # every object interior contains exactly one label
+    r = 5
+    g = np.arange(-r, r + 1, dtype="float64")
+    ball_local = (
+        (g * g)[:, None, None] + (g * g)[None, :, None] + (g * g)[None, None, :]
+    ) <= r * r
     for cz in centers:
         for cy in centers:
             for cx in centers:
-                ball = _ball_mask(pmap.shape, (cz, cy, cx), radius=5)
-                labels = np.unique(result[ball])
+                sub = result[
+                    cz - r : cz + r + 1, cy - r : cy + r + 1, cx - r : cx + r + 1
+                ]
+                labels = np.unique(sub[ball_local])
                 labels = labels[labels != 0]
                 assert labels.size == 1

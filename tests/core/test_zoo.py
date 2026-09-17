@@ -8,7 +8,7 @@ import torch
 import panseg.core.zoo as zoo_module
 from panseg import FILE_BEST_MODEL_PYTORCH, FILE_CONFIG_TRAIN_YAML
 from panseg.core.zoo import model_zoo
-from panseg.functionals.training.model import UNet2D
+from panseg.functionals.training.model import UNet2D, UNet3D
 from tests.conftest import IS_CUDA_AVAILABLE
 
 IN_GITHUB_ACTIONS = os.getenv("GITHUB_ACTIONS") == "true"
@@ -54,16 +54,39 @@ MODEL_IDS = [  # These two models has halo 44 on each side
 ]
 
 
+@pytest.fixture(scope="session")
+def biio_model(tmp_path_factory):
+    """Load each BioImage.IO model by id at most once per test session.
+
+    `get_model_by_id` returns the weights as an in-memory reader that can
+    only be consumed once, so the state dict is materialized to a file for
+    reuse across tests.
+    """
+    cache = {}
+    weights_dir = tmp_path_factory.mktemp("biio_models")
+
+    def _load(model_id: str):
+        if model_id not in cache:
+            model, _, model_path = model_zoo.get_model_by_id(model_id)
+            state = torch.load(model_path, map_location="cpu", weights_only=True)
+            state_path = weights_dir / f"{model_id}.pytorch"
+            torch.save(state, state_path)
+            cache[model_id] = (model, state_path)
+        return cache[model_id]
+
+    return _load
+
+
 class TestBioImageIOModelZoo:
     """Test the BioImage.IO model zoo"""
 
     model_zoo.refresh_bioimageio_zoo_urls()
 
     @pytest.mark.parametrize("model_id", MODEL_IDS)
-    def test_get_model_by_id(self, model_id):
+    def test_get_model_by_id(self, model_id, biio_model):
         """Try to load a model from the BioImage.IO model zoo by ID."""
-        model, _, model_path = model_zoo.get_model_by_id(model_id)
-        state = torch.load(model_path, map_location="cpu", weights_only=True)
+        model, state_path = biio_model(model_id)
+        state = torch.load(state_path, map_location="cpu", weights_only=True)
         if (
             "model_state_dict" in state
         ):  # Model weights format may vary between versions
@@ -71,11 +94,34 @@ class TestBioImageIOModelZoo:
         model.load_state_dict(state)
 
     @pytest.mark.parametrize("model_id", MODEL_IDS)
-    def test_halo_computation_for_bioimageio_model(self, model_id):
+    def test_halo_computation_for_bioimageio_model(self, model_id, biio_model):
         """Compute the halo for a BioImage.IO model."""
-        model, _, _ = model_zoo.get_model_by_id(model_id)
+        model, _ = biio_model(model_id)
         halo = model_zoo.compute_halo(model)
         assert halo == 44
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        # architecture kwargs of the efficient-chipmunk RDF
+        UNet3D(in_channels=1, out_channels=2, f_maps=16),
+        # architecture kwargs of the pioneering-rhino RDF
+        UNet2D(
+            in_channels=1,
+            out_channels=1,
+            final_sigmoid=True,
+            f_maps=64,
+            layer_order="gcr",
+            num_groups=8,
+            is_segmentation=True,
+        ),
+    ],
+    ids=["efficient-chipmunk", "pioneering-rhino"],
+)
+def test_halo_computation_local_models(model):
+    """Compute the halo for locally built models with the real models' RDF kwargs."""
+    assert model_zoo.compute_halo(model) == 44
 
 
 ZOO_MODEL_NAME = "confocal_2D_unet_ovules_ds2x"
