@@ -1,3 +1,4 @@
+import contextlib
 import logging
 
 import numpy as np
@@ -11,6 +12,40 @@ logger = logging.getLogger(__name__)
 # Voxel-budget multiplier applied to the probed maximum patch shape whenever a derived
 # patch shape fails the batch-size-1 OOM check (see `find_feasible_patch_and_halo_shapes`).
 FEASIBILITY_SHRINK = 0.75
+
+
+@contextlib.contextmanager
+def _quiet_oom_probing(device: str):
+    """Temporarily cap the CUDA caching allocator during GPU probing.
+
+    The search loops below probe the GPU by repeatedly triggering intentional
+    out-of-memory errors. Since torch 2.13, every failed ``cudaMalloc`` also
+    emits a C++ warning (``CUDACachingAllocator.cpp:3933``), which floods the
+    log. Capping the process at its current footprint plus the currently free
+    memory - the most it can physically grow by - makes oversized allocations
+    get rejected by the allocator's ``per_process_memory_fraction`` policy
+    before ``cudaMalloc`` is called, i.e. without the warning, while still
+    raising the same catchable OOM ``RuntimeError``. The previous fraction is
+    restored on exit.
+
+    On machines without a CUDA device this is a no-op.
+    """
+    if not torch.cuda.is_available():
+        yield
+        return
+    dev = torch.device(device)
+    index = dev.index if dev.index is not None else torch.cuda.current_device()
+    free, total = torch.cuda.mem_get_info(index)
+    reserved = torch.cuda.memory.memory_reserved(index)
+    # Staying strictly below the device total keeps the cap active (a fraction
+    # of 1.0 disables it).
+    allowed = min(reserved + free, total - 1)
+    previous = torch.cuda.memory.get_per_process_memory_fraction(index)
+    torch.cuda.memory.set_per_process_memory_fraction(allowed / total, index)
+    try:
+        yield
+    finally:
+        torch.cuda.memory.set_per_process_memory_fraction(previous, index)
 
 
 def _is_2d_model(model: nn.Module) -> bool:
@@ -118,69 +153,70 @@ def probe_max_patch_shape(
     if device == "cpu":
         return (1, 1024, 1024) if nn_dim == 2 else (256, 256, 256)
 
-    model = model.to(device)
-    model.eval()
+    with _quiet_oom_probing(device):
+        model = model.to(device)
+        model.eval()
 
-    if nn_dim == 3:  # use binary search for 3D
-        low, high = (2, 50)
-        best_n = low
+        if nn_dim == 3:  # use binary search for 3D
+            low, high = (2, 50)
+            best_n = low
 
-        with torch.no_grad():
-            while low <= high:
-                mid = (low + high) // 2
-                patch_shape = (16 * mid,) * nn_dim
-                x = None
-                try:
-                    x = torch.randn((1, in_channels) + patch_shape).to(device)
-                    _ = model(x)
-                    best_n = mid  # Update best_n if successful
-                    low = mid + 1  # Try larger patches
-                except RuntimeError as e:
-                    if "out of memory" in str(e):
-                        errs = str(e).split(".", maxsplit=1)
-                        logger.info(
-                            f"Encountered '{errs[0]}' at patch shape {patch_shape}, "
-                            "reducing it."
-                        )
-                        logger.debug(f"{errs[-1]}")
+            with torch.no_grad():
+                while low <= high:
+                    mid = (low + high) // 2
+                    patch_shape = (16 * mid,) * nn_dim
+                    x = None
+                    try:
+                        x = torch.randn((1, in_channels) + patch_shape).to(device)
+                        _ = model(x)
+                        best_n = mid  # Update best_n if successful
+                        low = mid + 1  # Try larger patches
+                    except RuntimeError as e:
+                        if "out of memory" in str(e):
+                            errs = str(e).split(".", maxsplit=1)
+                            logger.info(
+                                f"Encountered '{errs[0]}' at patch shape {patch_shape}, "
+                                "reducing it."
+                            )
+                            logger.debug(f"{errs[-1]}")
 
-                        high = mid - 1  # Try smaller patches
-                    else:
-                        del model
-                        raise
-                finally:
-                    del x
-                    torch.cuda.empty_cache()
+                            high = mid - 1  # Try smaller patches
+                        else:
+                            del model
+                            raise
+                    finally:
+                        del x
+                        torch.cuda.empty_cache()
 
-    else:  # use linear search for 2D
-        best_n = 200
+        else:  # use linear search for 2D
+            best_n = 200
 
-        with torch.no_grad():
-            while best_n > 16:
-                patch_shape = (16 * best_n,) * nn_dim
-                x = None
-                try:
-                    x = torch.randn((1, in_channels) + patch_shape).to(device)
-                    _ = model(x)
-                    break
-                except RuntimeError as e:
-                    if "out of memory" in str(e):
-                        best_n -= 20
-                    else:
-                        del model
-                        raise
-                finally:
-                    del x
-                    torch.cuda.empty_cache()
+            with torch.no_grad():
+                while best_n > 16:
+                    patch_shape = (16 * best_n,) * nn_dim
+                    x = None
+                    try:
+                        x = torch.randn((1, in_channels) + patch_shape).to(device)
+                        _ = model(x)
+                        break
+                    except RuntimeError as e:
+                        if "out of memory" in str(e):
+                            best_n -= 20
+                        else:
+                            del model
+                            raise
+                    finally:
+                        del x
+                        torch.cuda.empty_cache()
 
-    del model
-    torch.cuda.empty_cache()
+        del model
+        torch.cuda.empty_cache()
 
-    return (
-        (1, 16 * best_n, 16 * best_n)
-        if nn_dim == 2
-        else (16 * best_n, 16 * best_n, 16 * best_n)
-    )
+        return (
+            (1, 16 * best_n, 16 * best_n)
+            if nn_dim == 2
+            else (16 * best_n, 16 * best_n, 16 * best_n)
+        )
 
 
 def find_feasible_patch_and_halo_shapes(
@@ -287,43 +323,44 @@ def find_batch_size(
     if isinstance(model, UNet2D):
         actual_patch_shape = actual_patch_shape[1:]
 
-    model = model.to(device)
-    model.eval()
-    with torch.no_grad():
-        for batch_size in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]:
-            x = None
-            try:
-                x = torch.randn((batch_size, in_channels) + actual_patch_shape).to(
-                    device
-                )
-                _ = model(x)
-            except RuntimeError as e:
-                if "out of memory" in str(e):
-                    errs = str(e).split(".", maxsplit=1)
-                    logger.info(
-                        f"Encountered '{errs[0]}' at batch size {batch_size}, halving it."
+    with _quiet_oom_probing(device):
+        model = model.to(device)
+        model.eval()
+        with torch.no_grad():
+            for batch_size in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]:
+                x = None
+                try:
+                    x = torch.randn((batch_size, in_channels) + actual_patch_shape).to(
+                        device
                     )
-                    logger.debug(f"{errs[-1]}")
-                    batch_size //= 2
-                    break
-                else:
-                    logger.warning(
-                        f"Encountered '{e}' at batch size {batch_size}, "
-                        "unexpected but continuing with halved batch size."
-                    )
-                    batch_size //= 2
-                    break
-            finally:
-                del x
-                torch.cuda.empty_cache()
-    del model
-    torch.cuda.empty_cache()
-    if batch_size == 0:
-        raise RuntimeError(
-            f"Could not determine a feasible batch size for patch size "
-            f"{patch_shape} and halo {patch_halo}. Please reduce the patch size."
-        )
-    return batch_size
+                    _ = model(x)
+                except RuntimeError as e:
+                    if "out of memory" in str(e):
+                        errs = str(e).split(".", maxsplit=1)
+                        logger.info(
+                            f"Encountered '{errs[0]}' at batch size {batch_size}, halving it."
+                        )
+                        logger.debug(f"{errs[-1]}")
+                        batch_size //= 2
+                        break
+                    else:
+                        logger.warning(
+                            f"Encountered '{e}' at batch size {batch_size}, "
+                            "unexpected but continuing with halved batch size."
+                        )
+                        batch_size //= 2
+                        break
+                finally:
+                    del x
+                    torch.cuda.empty_cache()
+        del model
+        torch.cuda.empty_cache()
+        if batch_size == 0:
+            raise RuntimeError(
+                f"Could not determine a feasible batch size for patch size "
+                f"{patch_shape} and halo {patch_halo}. Please reduce the patch size."
+            )
+        return batch_size
 
 
 def will_CUDA_OOM(
@@ -358,27 +395,30 @@ def will_CUDA_OOM(
     if isinstance(model, UNet2D):
         actual_patch_shape = actual_patch_shape[1:]
 
-    model = model.to(device)
-    model.eval()
+    with _quiet_oom_probing(device):
+        model = model.to(device)
+        model.eval()
 
-    OOM_error = False
-    x = None
-    try:
-        with torch.no_grad():
-            x = torch.randn((batch_size, in_channels) + actual_patch_shape).to(device)
-            _ = model(x)
-    except RuntimeError as e:
-        if "out of memory" in str(e):
-            OOM_error = True
-            logger.info(
-                f"Using patch shape {patch_shape}, halo {patch_halo}, "
-                f"and batch size {batch_size} will cause OOM."
-            )
-        else:
-            raise  # Re-raise if it's not an OOM error
-    finally:
-        del x
-        del model
-        torch.cuda.empty_cache()
+        OOM_error = False
+        x = None
+        try:
+            with torch.no_grad():
+                x = torch.randn((batch_size, in_channels) + actual_patch_shape).to(
+                    device
+                )
+                _ = model(x)
+        except RuntimeError as e:
+            if "out of memory" in str(e):
+                OOM_error = True
+                logger.info(
+                    f"Using patch shape {patch_shape}, halo {patch_halo}, "
+                    f"and batch size {batch_size} will cause OOM."
+                )
+            else:
+                raise  # Re-raise if it's not an OOM error
+        finally:
+            del x
+            del model
+            torch.cuda.empty_cache()
 
-    return OOM_error
+        return OOM_error

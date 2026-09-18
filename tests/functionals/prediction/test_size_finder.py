@@ -367,3 +367,57 @@ def test_find_batch_size_2d_model_slices_first_dim(fake_cuda):
 
     assert find_batch_size(model, 1, (1, 16, 16), (0, 0, 0), "cuda:0") == 64
     assert all(len(shape) == 4 for shape in model.seen_input_shapes)
+
+
+def _patch_cuda_memory(monkeypatch, previous_fraction=1.0):
+    """Fake the torch CUDA memory APIs `_quiet_oom_probing` uses and record every
+    fraction that gets set, so the tests run deterministically without a GPU."""
+    set_calls = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda device: (8, 16))
+    monkeypatch.setattr(torch.cuda.memory, "memory_reserved", lambda device: 2)
+    monkeypatch.setattr(
+        torch.cuda.memory,
+        "get_per_process_memory_fraction",
+        lambda device: previous_fraction,
+    )
+    monkeypatch.setattr(
+        torch.cuda.memory,
+        "set_per_process_memory_fraction",
+        lambda fraction, device: set_calls.append(fraction),
+    )
+    return set_calls
+
+
+def test_quiet_oom_probing_caps_allocator_and_restores(monkeypatch):
+    set_calls = _patch_cuda_memory(monkeypatch)
+
+    with size_finder._quiet_oom_probing("cuda:0"):
+        pass
+
+    # cap at footprint (2) + free (8) of 16 total, then restore the previous 1.0
+    assert set_calls == [10 / 16, 1.0]
+
+
+def test_quiet_oom_probing_restores_fraction_on_error(monkeypatch):
+    set_calls = _patch_cuda_memory(monkeypatch, previous_fraction=0.7)
+
+    with (
+        pytest.raises(RuntimeError, match="boom"),
+        size_finder._quiet_oom_probing("cuda:0"),
+    ):
+        raise RuntimeError("boom")
+
+    assert set_calls == [10 / 16, 0.7]
+
+
+def test_quiet_oom_probing_noop_without_cuda(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(
+        torch.cuda.memory,
+        "set_per_process_memory_fraction",
+        lambda *args, **kwargs: pytest.fail("allocator touched without CUDA"),
+    )
+
+    with size_finder._quiet_oom_probing("cuda:0"):
+        pass
