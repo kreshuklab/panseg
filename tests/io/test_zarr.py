@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import pytest
 import zarr
@@ -167,7 +169,11 @@ def test_list_zarr_keys_nested(tmp_path):
     deeper = sub.create_group("deeper")
     _fill(deeper, "bottom", 9.0, dtype="uint8")
     path = tmp_path / "out.zarr"
-    assert sorted(list_zarr_keys(path)) == ["sub/deeper/bottom", "sub/inner", "top"]
+    assert sorted(list_zarr_keys(path)) == [
+        os.sep.join(["sub", "deeper", "bottom"]),
+        os.sep.join(["sub", "inner"]),
+        "top",
+    ]
     assert load_zarr(path, key="sub/inner")[0, 0, 0] == 5
     assert load_zarr(path, key="sub/deeper/bottom")[0, 0, 0] == 9
     # three datasets, none a PanSeg key -> ambiguous
