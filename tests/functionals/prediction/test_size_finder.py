@@ -275,6 +275,37 @@ def test_probe_max_patch_shape_3d_reraises_non_oom_errors(fake_cuda):
         probe_max_patch_shape(model, 1, "cuda:0")
 
 
+def test_probe_max_patch_shape_3d_treats_mps_buffer_size_error_as_oom(fake_cuda):
+    # Apple MPS rejects single allocations above its 4 GiB buffer cap with
+    # "Invalid buffer size" instead of an "out of memory" message.
+    model = FakeUNet3D(failure="Invalid buffer size: 4.29 GiB")
+
+    assert probe_max_patch_shape(model, 1, "mps") == (32, 32, 32)
+
+
+def test_probe_max_patch_shape_3d_reraises_buffer_size_error_on_cuda(fake_cuda):
+    model = FakeUNet3D(failure="Invalid buffer size: 4.29 GiB")
+
+    with pytest.raises(RuntimeError, match="Invalid buffer size"):
+        probe_max_patch_shape(model, 1, "cuda:0")
+
+
+@pytest.mark.parametrize(
+    ("message", "device", "expected"),
+    [
+        ("CUDA out of memory. Tried to allocate 2.00 GiB.", "cuda:0", True),
+        ("The device has run out of memory.", "mps", True),
+        ("Invalid buffer size: 4.29 GiB", "mps", True),
+        ("Invalid buffer size: 4.29 GiB", "mps:0", True),
+        ("Invalid buffer size: 4.29 GiB", "cuda:0", False),
+        ("MPS backend error: illegal instruction", "mps", False),
+        ("boom", "mps", False),
+    ],
+)
+def test_is_oom_error(message, device, expected):
+    assert size_finder._is_oom_error(RuntimeError(message), device) is expected
+
+
 def test_probe_max_patch_shape_2d_returns_max_on_first_fit(fake_cuda):
     assert probe_max_patch_shape(FakeUNet2D(), 1, "cuda:0") == (1, 3200, 3200)
 

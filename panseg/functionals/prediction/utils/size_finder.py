@@ -54,6 +54,20 @@ def _is_2d_model(model: nn.Module) -> bool:
     return isinstance(model, UNet2D)
 
 
+def _is_oom_error(error: RuntimeError, device: str) -> bool:
+    """Classify a device probe failure as an out-of-memory error.
+
+    CUDA reports "CUDA out of memory", but Apple MPS reports memory failures
+    with different wording: "The device has run out of memory" for general
+    exhaustion, and "Invalid buffer size: N GiB" when a single allocation
+    exceeds the 4 GiB Metal buffer cap.
+    """
+    message = str(error).lower()
+    if "out of memory" in message:
+        return True
+    return "mps" in device and "invalid buffer size" in message
+
+
 def derive_patch_and_halo_shapes(
     full_volume_shape: tuple[int, int, int],
     max_patch_shape: tuple[int, int, int],
@@ -172,7 +186,7 @@ def probe_max_patch_shape(
                         best_n = mid  # Update best_n if successful
                         low = mid + 1  # Try larger patches
                     except RuntimeError as e:
-                        if "out of memory" in str(e):
+                        if _is_oom_error(e, device):
                             errs = str(e).split(".", maxsplit=1)
                             logger.info(
                                 f"Encountered '{errs[0]}' at patch shape {patch_shape}, "
@@ -200,7 +214,7 @@ def probe_max_patch_shape(
                         _ = model(x)
                         break
                     except RuntimeError as e:
-                        if "out of memory" in str(e):
+                        if _is_oom_error(e, device):
                             best_n -= 20
                         else:
                             del model
@@ -335,7 +349,7 @@ def find_batch_size(
                     )
                     _ = model(x)
                 except RuntimeError as e:
-                    if "out of memory" in str(e):
+                    if _is_oom_error(e, device):
                         errs = str(e).split(".", maxsplit=1)
                         logger.info(
                             f"Encountered '{errs[0]}' at batch size {batch_size}, halving it."
@@ -408,7 +422,7 @@ def will_CUDA_OOM(
                 )
                 _ = model(x)
         except RuntimeError as e:
-            if "out of memory" in str(e):
+            if _is_oom_error(e, device):
                 OOM_error = True
                 logger.info(
                     f"Using patch shape {patch_shape}, halo {patch_halo}, "
