@@ -49,7 +49,7 @@ jobs:
       - name: Set Up Miniforge
         uses: conda-incubator/setup-miniconda@v4.0.0
         with:
-          python-version: 3.11
+          python-version: 3.12
           miniforge-version: latest
           mamba-version: "*"
           channels: local,conda-forge
