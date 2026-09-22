@@ -1,4 +1,4 @@
-{% set python_min = "3.11" %}
+{% set python_min = "3.12" %}
 package:
   name: panseg
   version: "2.1.1a1"
@@ -28,7 +28,7 @@ requirements:
     - setuptools
 
   run:
-    - python >={{ python_min }}
+    - python >={{ python_min }},<3.14
     - pip
     - bioimageio.core ==0.10.2
     - bioimageio.spec ==0.5.9.1
@@ -51,7 +51,7 @@ requirements:
     - tifffile ==2026.3.3
     - vigra ==1.12.3
     - trimesh ==5.1.0
-    - numpy ==2.4.6
+    - numpy ==2.5.3
     - zarr ==3.1.6
     - zmesh ==1.15.0
 

@@ -2,7 +2,7 @@ name: panseg
 channels:
   - conda-forge
 dependencies:
-  - python[version='>=3.11']
+  - python[version='>=3.12,<3.14']
   - pip
   - bioimageio.core==0.10.2
   - bioimageio.spec==0.5.9.1
@@ -25,7 +25,7 @@ dependencies:
   - tifffile==2026.3.3
   - vigra==1.12.3
   - trimesh==5.1.0
-  - numpy==2.4.6
+  - numpy==2.5.3
   - zarr==3.1.6
   - zmesh==1.15.0
   - pip:
