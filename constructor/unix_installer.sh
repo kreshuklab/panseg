@@ -7,4 +7,3 @@ echo ""
 cd "${PREFIX}"
 tar xf build.gz
 conda install -y -c "${PREFIX}/conda_bld" -c conda-forge panseg
-pip install 'zmesh==1.11.0'
