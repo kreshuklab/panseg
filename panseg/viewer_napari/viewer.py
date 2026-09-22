@@ -6,6 +6,7 @@ from qtpy import QtWidgets
 
 from panseg.__version__ import __version__
 from panseg.utils import check_version
+from panseg.viewer_napari.notifications import configure_napari_notifications
 from panseg.viewer_napari.updater import update
 from panseg.viewer_napari.widgets.input import Input_Tab
 from panseg.viewer_napari.widgets.output import Output_Tab
@@ -192,6 +193,7 @@ class Panseg_viewer:
             viewer.window._qt_window.close(True, True)
 
     def start_viewer(self):
+        configure_napari_notifications()
         self.init_tabs()
         self.add_containers_to_dock()
         self.setup_layer_updates()
