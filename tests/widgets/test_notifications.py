@@ -3,6 +3,7 @@
 import pytest
 from napari._qt.dialogs.qt_notification import NapariQtNotification
 from napari.utils.notifications import Notification, NotificationSeverity
+from qtpy.QtWidgets import QWidget
 
 from panseg.viewer_napari.notifications import (
     WARNING_ERROR_DISMISS_AFTER,
@@ -93,11 +94,62 @@ def test_info_notification_expands_with_default_timer(show_notification, qtbot):
 
 
 def test_configure_is_idempotent(show_notification, qtbot):
-    before = NapariQtNotification.__dict__["from_notification"]
+    before = (
+        NapariQtNotification.__dict__["from_notification"],
+        NapariQtNotification.__dict__["close"],
+    )
     configure_napari_notifications()
-    assert NapariQtNotification.__dict__["from_notification"] is before
+    assert (
+        NapariQtNotification.__dict__["from_notification"],
+        NapariQtNotification.__dict__["close"],
+    ) == before
 
     dialog = show_notification(NotificationSeverity.WARNING)
     qtbot.wait(50)
 
     assert dialog.property("expanded")
+
+
+class _active_parent(QWidget):
+    """Parent that always reports an active window.
+
+    Napari only starts the dismiss timer (and only stops the timers of
+    older dialogs) when the parent window is active, which is a race in
+    offscreen tests.
+    """
+
+    def isActiveWindow(self):
+        return True
+
+
+def test_older_notification_auto_hides_after_newest_closes(qapp, qtbot):
+    parent = _active_parent()
+    parent.show()
+
+    first = NapariQtNotification.from_notification(
+        Notification(MULTILINE, severity="warning"), parent
+    )
+    first.show()
+    second = NapariQtNotification.from_notification(
+        Notification(MULTILINE, severity="warning"), parent
+    )
+    second.show()
+    qtbot.wait(50)
+
+    # Showing the newest dialog stops the older dialog's dismiss timer;
+    # napari is supposed to restart it when the newest dialog closes.
+    assert not first.timer.isActive()
+    assert second.timer.isActive()
+
+    for dialog in (first, second):
+        dialog.timer.stop()
+        dialog.timer.setInterval(200)
+    second.timer.start()
+
+    qtbot.waitUntil(lambda: not _is_visible(second), timeout=5000)
+    # The older dialog's timer must have been resumed...
+    assert first.timer.isActive()
+    # ...so the older dialog auto-hides as well.
+    qtbot.waitUntil(lambda: not _is_visible(first), timeout=5000)
+
+    parent.close()
