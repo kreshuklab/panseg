@@ -153,19 +153,19 @@ class Panseg_viewer:
             + "\n\n"
             + v_features
         )
-        self.viewer.text_overlay.text = text
-        self.viewer.text_overlay.visible = True
-        # self.viewer.text_overlay.order = 1000000
-        self.viewer.welcome_screen.visible = False
+        self.viewer.canvas.overlays.text.text = text
+        self.viewer.canvas.overlays.text.visible = True
+        # self.viewer.canvas.overlays.text.order = 1000000
+        self.viewer.window._qt_window._qt_viewer.show_welcome_screen = False
 
-        self.viewer.text_overlay.position = CanvasPosition.TOP_CENTER
+        self.viewer.canvas.overlays.text.position = CanvasPosition.TOP_CENTER
 
     def _on_layerlist_change(self):
         """Hide the welcome screen when layers get created."""
         if len(self.viewer.layers) > 0:
-            self.viewer.text_overlay.visible = False
+            self.viewer.canvas.overlays.text.visible = False
         else:
-            self.viewer.text_overlay.visible = True
+            self.viewer.canvas.overlays.text.visible = True
 
     def setup_logo(self):
         """Set the icon of the window title bar."""
@@ -181,7 +181,7 @@ class Panseg_viewer:
         self.viewer.window.file_menu.menuAction().setVisible(False)
         self.viewer.window.layers_menu.menuAction().setVisible(False)
 
-        self.viewer.scale_bar.gridded = True
+        self.viewer.canvas.overlays.scale_bar.gridded = True
 
         # By hiding the menu, also closing shortcuts are removed
         @self.viewer.bind_key("Ctrl+w")

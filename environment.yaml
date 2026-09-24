@@ -8,7 +8,7 @@ dependencies:
   - bioimageio.spec==0.5.9.1
   - h5py==3.16.0
   - imageio==2.37.4
-  - napari==0.7.0
+  - napari==0.9.1
   - nifty==1.2.4
   - pydantic==2.13.5
   - pyside6==6.11.2

@@ -13,7 +13,7 @@ dependencies:
   - mkdocs-git-revision-date-localized-plugin==1.2.9
   - mkdocs-material==9.7.7
   - mkdocstrings-python
-  - napari==0.7.0
+  - napari==0.9.1
   - nifty==1.2.4
   - numpy==2.5.3
   - pip
