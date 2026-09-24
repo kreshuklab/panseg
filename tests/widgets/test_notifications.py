@@ -3,7 +3,9 @@
 import pytest
 from napari._qt.dialogs.qt_notification import NapariQtNotification
 from napari.utils.notifications import Notification, NotificationSeverity
-from qtpy.QtWidgets import QWidget
+from qtpy.QtCore import QPoint
+from qtpy.QtGui import QCursor
+from qtpy.QtWidgets import QApplication, QWidget
 
 from panseg.viewer_napari.notifications import (
     WARNING_ERROR_DISMISS_AFTER,
@@ -20,6 +22,27 @@ def _is_visible(dialog):
         # The C++ object was deleted once the dialog closed
         # (WA_DeleteOnClose); a deleted dialog is not visible.
         return False
+
+
+def _park_pointer_away(dialog):
+    """Move the pointer off the dialog.
+
+    On a headless X server the pointer rests at the screen center, which the
+    expanded error dialog (taller than the others due to its action buttons)
+    straddles. The hover stops the dismiss timer (napari's enterEvent) and no
+    leaveEvent ever arrives on a headless display, so the timer would stay
+    stopped and the dialog would never auto-hide.
+    """
+    screen = QApplication.primaryScreen().geometry()
+    for point in (
+        QPoint(0, 0),
+        QPoint(screen.width() - 1, 0),
+        QPoint(0, screen.height() - 1),
+        QPoint(screen.width() - 1, screen.height() - 1),
+    ):
+        if not dialog.geometry().contains(point):
+            QCursor().setPos(point)
+            return
 
 
 @pytest.fixture(autouse=True)
@@ -41,6 +64,7 @@ def show_notification(qapp):
         dialog = NapariQtNotification.from_notification(notification)
         # No parent, so the dismiss timer starts regardless of window focus.
         dialog.show()
+        _park_pointer_away(dialog)
         created.append(dialog)
         return dialog
 
@@ -130,10 +154,12 @@ def test_older_notification_auto_hides_after_newest_closes(qapp, qtbot):
         Notification(MULTILINE, severity="warning"), parent
     )
     first.show()
+    _park_pointer_away(first)
     second = NapariQtNotification.from_notification(
         Notification(MULTILINE, severity="warning"), parent
     )
     second.show()
+    _park_pointer_away(second)
     qtbot.wait(50)
 
     # Showing the newest dialog stops the older dialog's dismiss timer;
