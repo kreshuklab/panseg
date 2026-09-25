@@ -57,7 +57,7 @@ The installer comes complete with its own python installation. During the instal
     see [installing mamba](contributing.md#install-mamba))
 
     ```bash
-    conda create --name panseg panseg python=3.11
+    conda create --name panseg panseg python=3.13
     conda activate panseg
     panseg --napari
     ```
