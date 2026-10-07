@@ -136,29 +136,6 @@ def image_gaussian_smoothing(image: np.ndarray, sigma: float) -> np.ndarray:
     return gaussianSmoothing(image, sigma_array)
 
 
-def image_crop(image: np.ndarray, crop_str: str) -> np.ndarray:
-    """
-    Crop an image from a crop string like [:, 10:30:, 10:20]
-
-    Args:
-        image (np.ndarray): Input image to crop
-        crop_str (str): Crop string
-
-    Returns:
-        cropped_image (np.ndarray): Cropped image as numpy array
-    """
-    crop_str = crop_str.replace("[", "").replace("]", "")
-    slices = tuple(
-        (
-            slice(*(int(i) if i else None for i in part.strip().split(":")))
-            if ":" in part
-            else int(part.strip())
-        )
-        for part in crop_str.split(",")
-    )
-    return image[slices]
-
-
 ImageLayout = Literal["ZYX", "YX", "CZYX", "CYX"]
 
 

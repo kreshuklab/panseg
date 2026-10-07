@@ -117,6 +117,23 @@ def read_zarr_shape(path: Path, key: str | None = None) -> tuple[int, ...]:
     return data.shape
 
 
+def read_zarr_axis_order(path: Path, key: str | None = None) -> str | None:
+    """Read the axis_order attribute of a dataset written by PanSeg, e.g. "TZYX".
+
+    Args:
+        path (Path): The path to the Zarr file.
+        key (str | None, optional): The internal key of the desired dataset. Defaults to None.
+
+    Returns:
+        str | None: The axis order string, or None when the attribute is
+        absent (older files).
+    """
+    _validate_zarr_file(path)
+    data = _get_zarr_dataset(path, key)
+    axis_order = data.attrs.get("axis_order", None)
+    return str(axis_order) if axis_order is not None else None
+
+
 def read_zarr_voxel_size(path: Path, key: str | None) -> VoxelSize:
     """Read the voxel size of a dataset in a Zarr file.
 
@@ -139,12 +156,39 @@ def read_zarr_voxel_size(path: Path, key: str | None) -> VoxelSize:
     return VoxelSize()
 
 
+def read_zarr_time_spacing(
+    path: Path, key: str | None = None
+) -> tuple[float | None, str]:
+    """Read the time spacing attrs of a dataset written by PanSeg.
+
+    The attrs are written when the exported axis order carries a time axis
+    and the spacing is known. Returns (None, "s") when the attrs are absent
+    (older files, unknown spacing, or no time axis).
+
+    Args:
+        path (Path): The path to the Zarr file.
+        key (str | None, optional): The internal key of the desired dataset. Defaults to None.
+
+    Returns:
+        tuple: (time spacing value or None, unit string)
+    """
+    _validate_zarr_file(path)
+    data = _get_zarr_dataset(path, key)
+    t_spacing = data.attrs.get("t_spacing", None)
+    if t_spacing is None:
+        return None, "s"
+    return float(t_spacing), str(data.attrs.get("t_spacing_unit", "s"))
+
+
 def create_zarr(
     path: Path,
     stack: np.ndarray,
     key: str,
     voxel_size: VoxelSize,
     mode: str = "a",
+    axis_order: str | None = None,
+    t_spacing: float | None = None,
+    t_spacing_unit: str = "s",
 ) -> None:
     """
     Create a Zarr array from a NumPy array.
@@ -155,6 +199,14 @@ def create_zarr(
         key (str): The internal key of the desired dataset.
         voxel_size (VoxelSize): The voxel size of the dataset.
         mode (str): The mode to open the Zarr file ['w', 'a'].
+        axis_order (str | None): Layout string of the stack (e.g. "TZYX"),
+            written as the dataset attr ``axis_order``. Written on every
+            PanSeg export; old readers ignore it.
+        t_spacing (float | None): Time spacing between timepoints in
+            seconds, written as the dataset attr ``t_spacing`` when the axis
+            order carries a time axis. None (unknown) writes no time attrs.
+        t_spacing_unit (str): Unit of the time spacing, written as the
+            dataset attr ``t_spacing_unit``.
     """
     if not key:
         raise ValueError("Key cannot be None or empty.")
@@ -171,6 +223,11 @@ def create_zarr(
         zarr_file.create_dataset(key, data=stack, compression="gzip", overwrite=True)
 
     zarr_file[key].attrs["element_size_um"] = voxel_size.voxels_size
+    if axis_order is not None:
+        zarr_file[key].attrs["axis_order"] = axis_order
+        if "T" in axis_order and t_spacing is not None:
+            zarr_file[key].attrs["t_spacing"] = t_spacing
+            zarr_file[key].attrs["t_spacing_unit"] = t_spacing_unit
 
 
 def list_zarr_keys(path: Path) -> list[str]:

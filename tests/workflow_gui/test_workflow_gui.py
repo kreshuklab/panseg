@@ -5,7 +5,9 @@ from unittest.mock import patch
 
 import pytest
 import yaml
+from magicgui.widgets import ComboBox, Container, FloatSpinBox  # pyright: ignore
 
+from panseg.core.image import TIME_UNIT_CHOICES
 from panseg.workflow_gui.editor import Workflow_gui
 
 
@@ -52,6 +54,10 @@ def test_loading_dialog(gui, workflow_yaml):
         (
             "workflow_yaml",
             "workflow_yaml",
+        ),
+        (
+            "workflow_t_spacing_yaml",
+            "workflow_t_spacing_yaml",
         ),
     ],
     indirect=["gui"],
@@ -140,3 +146,131 @@ def test_toggle_theme(gui):
     gui.toggle_theme()
     gui.toggle_theme()
     gui.toggle_theme()
+
+
+def _collect_widgets(widget, found):
+    found.append(widget)
+    if isinstance(widget, Container):
+        for child in widget:
+            _collect_widgets(child, found)
+    return found
+
+
+def _t_spacing_node(parsed):
+    nodes = [t for t in parsed["list_tasks"] if t["func"] == "set_t_spacing_task"]
+    assert len(nodes) == 1
+    return nodes[0]
+
+
+def _t_spacing_spin_box(gui):
+    spin_boxes = [
+        w for w in _collect_widgets(gui.content, []) if isinstance(w, FloatSpinBox)
+    ]
+    t_spacing_boxes = [w for w in spin_boxes if w.label == "set t spacing"]
+    assert len(t_spacing_boxes) == 1
+    return t_spacing_boxes[0]
+
+
+@pytest.mark.parametrize("gui", ["workflow_t_spacing_yaml"], indirect=["gui"])
+def test_set_t_spacing_entry_renders_spin_box(gui, workflow_t_spacing_yaml):
+    with open(workflow_t_spacing_yaml, "r") as f:
+        parsed = yaml.safe_load(f)
+
+    spin_box = _t_spacing_spin_box(gui)
+    assert spin_box.value == _t_spacing_node(parsed)["parameters"]["t_spacing"]
+
+
+@pytest.mark.parametrize("gui", ["workflow_t_spacing_yaml"], indirect=["gui"])
+def test_set_t_spacing_entry_saves_parameter(gui, tmp_path):
+    out_file = tmp_path / "test_workflow_t_spacing_out.yaml"
+
+    _t_spacing_spin_box(gui).value = 12.5
+
+    gui.save_b.native.click()
+    gui.save.path.value = str(out_file)
+    gui.save.call_button.native.click()
+
+    with open(out_file, "r") as f:
+        parsed_out = yaml.safe_load(f)
+
+    assert _t_spacing_node(parsed_out)["parameters"]["t_spacing"] == 12.5
+
+
+def _t_spacing_unit_combo(gui):
+    combos = [w for w in _collect_widgets(gui.content, []) if isinstance(w, ComboBox)]
+    unit_combos = [w for w in combos if w.label == "Unit"]
+    assert len(unit_combos) == 1
+    return unit_combos[0]
+
+
+@pytest.mark.parametrize("gui", ["workflow_t_spacing_yaml"], indirect=["gui"])
+def test_set_t_spacing_entry_renders_unit_combo(gui, workflow_t_spacing_yaml):
+    with open(workflow_t_spacing_yaml, "r") as f:
+        parsed = yaml.safe_load(f)
+
+    combo = _t_spacing_unit_combo(gui)
+    assert combo.value == _t_spacing_node(parsed)["parameters"]["t_unit"]
+    assert list(combo.choices) == list(TIME_UNIT_CHOICES)
+
+
+def _t_spacing_row(gui):
+    """The container that directly groups the spin box and the unit combo."""
+    spin_box = _t_spacing_spin_box(gui)
+    combo = _t_spacing_unit_combo(gui)
+
+    def walk(container):
+        children = list(container)
+        if spin_box in children and combo in children:
+            return container
+        for child in children:
+            if isinstance(child, Container):
+                found = walk(child)
+                if found is not None:
+                    return found
+        return None
+
+    return walk(gui.content)
+
+
+@pytest.mark.parametrize("gui", ["workflow_t_spacing_yaml"], indirect=["gui"])
+def test_set_t_spacing_number_and_unit_in_horizontal_row(gui):
+    """The number and its unit are grouped in one horizontal container."""
+    row = _t_spacing_row(gui)
+    assert row is not None
+    assert row.layout == "horizontal"
+
+
+def test_set_t_spacing_entry_unit_defaults_for_old_yaml(
+    qtbot, workflow_t_spacing_yaml, tmp_path
+):
+    """Workflow files written before the unit parameter exist carry no
+    t_unit: the entry defaults to seconds."""
+    with open(workflow_t_spacing_yaml, "r") as f:
+        config = yaml.safe_load(f)
+    _t_spacing_node(config)["parameters"].pop("t_unit", None)
+
+    old_file = tmp_path / "old_workflow.yaml"
+    with open(old_file, "w") as f:
+        yaml.safe_dump(config, f)
+
+    gui = Workflow_gui(config_path=old_file, run=False)
+    qtbot.addWidget(gui.main_window.native)
+
+    combo = _t_spacing_unit_combo(gui)
+    assert combo.value == "s"
+
+
+@pytest.mark.parametrize("gui", ["workflow_t_spacing_yaml"], indirect=["gui"])
+def test_set_t_spacing_entry_saves_unit(gui, tmp_path):
+    out_file = tmp_path / "test_workflow_t_spacing_out.yaml"
+
+    _t_spacing_unit_combo(gui).value = "min"
+
+    gui.save_b.native.click()
+    gui.save.path.value = str(out_file)
+    gui.save.call_button.native.click()
+
+    with open(out_file, "r") as f:
+        parsed_out = yaml.safe_load(f)
+
+    assert _t_spacing_node(parsed_out)["parameters"]["t_unit"] == "min"

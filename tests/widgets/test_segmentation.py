@@ -1,5 +1,6 @@
 import pytest
 
+from panseg.core.image import ImageLayout
 from panseg.tasks.segmentation_tasks import (
     clustering_segmentation_task,
     lmc_segmentation_task,
@@ -325,6 +326,68 @@ def test_on_mode_changed(segmentation_tab, mocker):
 def test_on_show_advanced_changed(segmentation_tab):
     segmentation_tab.widget_dt_ws.show_advanced.value = True
     segmentation_tab.widget_dt_ws.show_advanced.value = False
+
+
+def test_on_prediction_change_zyx_shows_stacked(segmentation_tab, napari_prediction):
+    segmentation_tab._on_prediction_change(napari_prediction)
+
+    assert segmentation_tab.widget_dt_ws.stacked.native.isHidden() is False
+
+
+def test_on_prediction_change_tzyx_shows_stacked_no_log(
+    segmentation_tab, mocker, napari_timeseries_prediction
+):
+    mocked_log = mocker.patch("panseg.viewer_napari.widgets.segmentation.log")
+    segmentation_tab._on_prediction_change(napari_timeseries_prediction)
+
+    # TZYX behaves as 3D: the stacked mode is shown
+    assert segmentation_tab.widget_dt_ws.stacked.native.isHidden() is False
+    mocked_log.assert_not_called()
+
+
+def test_on_prediction_change_tyx_hides_stacked_no_log(
+    segmentation_tab, mocker, napari_prediction_tyx
+):
+    mocked_log = mocker.patch("panseg.viewer_napari.widgets.segmentation.log")
+    segmentation_tab._on_prediction_change(napari_prediction_tyx)
+
+    # TYX behaves as 2D: the stacked mode is hidden
+    assert segmentation_tab.widget_dt_ws.stacked.native.isHidden() is True
+    assert segmentation_tab.widget_dt_ws.stacked.value is False
+    # no "Unsupported image layout" log for T layouts
+    mocked_log.assert_not_called()
+
+
+def test_on_prediction_change_multichannel_logs(
+    segmentation_tab, mocker, napari_prediction_czyx
+):
+    mocked_log = mocker.patch("panseg.viewer_napari.widgets.segmentation.log")
+    segmentation_tab._on_prediction_change(napari_prediction_czyx)
+
+    # the branching is by spatial dimensionality, unchanged for multichannel
+    assert segmentation_tab.widget_dt_ws.stacked.native.isHidden() is False
+    # the log remains for genuinely unsupported layouts
+    mocked_log.assert_called_with(
+        f"Unsupported image layout: {ImageLayout.CZYX}",
+        thread="DT Watershed",
+        level="error",
+    )
+
+
+def test_on_prediction_change_tczyx_shows_stacked_and_logs(
+    segmentation_tab, mocker, napari_prediction_tczyx
+):
+    mocked_log = mocker.patch("panseg.viewer_napari.widgets.segmentation.log")
+    segmentation_tab._on_prediction_change(napari_prediction_tczyx)
+
+    # a multichannel T layout branches as 3D (spatial dimensionality) but is
+    # still genuinely unsupported: the log remains for multichannel only
+    assert segmentation_tab.widget_dt_ws.stacked.native.isHidden() is False
+    mocked_log.assert_called_with(
+        f"Unsupported image layout: {ImageLayout.TCZYX}",
+        thread="DT Watershed",
+        level="error",
+    )
 
 
 def test_update_layer_selection(

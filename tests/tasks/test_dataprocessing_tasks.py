@@ -74,6 +74,26 @@ def test_image_croppig(napari_raw):
     dpt.image_cropping_task(image=ps_image)
 
 
+def test_image_cropping_multichannel_rejected(napari_raw_czyx):
+    ps_image = PanSegImage.from_napari_layer(napari_raw_czyx)
+    rectangle = np.array([[0, 0, 0], [0, 0, 8], [0, 8, 8], [0, 8, 0]])
+
+    out = dpt.image_cropping_task(image=ps_image, rectangle=rectangle, crop_z=(0, 5))
+
+    assert isinstance(out, Task_message)
+    assert "multichannel" in out.message
+
+
+def test_image_cropping_multichannel_timeseries_rejected(napari_raw_tczyx):
+    ps_image = PanSegImage.from_napari_layer(napari_raw_tczyx)
+    rectangle = np.array([[0, 0, 0], [0, 0, 8], [0, 8, 8], [0, 8, 0]])
+
+    out = dpt.image_cropping_task(image=ps_image, rectangle=rectangle, crop_z=(0, 5))
+
+    assert isinstance(out, Task_message)
+    assert "multichannel" in out.message
+
+
 def test_set_voxel_size_task(napari_raw):
     ps_image = PanSegImage.from_napari_layer(napari_raw)
     out = dpt.set_voxel_size_task(image=ps_image, voxel_size=(0.1, 0.2, 0.3))

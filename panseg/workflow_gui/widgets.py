@@ -23,6 +23,8 @@ from magicgui.widgets import (
 from qt_material import apply_stylesheet
 from qtpy import QtCore, QtGui
 
+from panseg.core.image import TIME_UNIT_CHOICES
+
 logger = logging.getLogger(__name__)
 
 
@@ -470,6 +472,30 @@ class Task_node:
                 "parameters": {
                     "voxel_size": [x.value, y.value, z.value],
                 }
+            }
+
+            return Container(widgets=[w])
+
+        elif self.func == "set_t_spacing_task":
+            spacing = FloatSpinBox(
+                label=label,
+                value=self.parameters["t_spacing"],
+            )
+            # Older workflow files predate the unit parameter: the task
+            # default is seconds.
+            unit = ComboBox(
+                label="Unit",
+                value=self.parameters.get("t_unit", "s"),
+                choices=list(TIME_UNIT_CHOICES),
+            )
+            w = Container(
+                label=label,
+                layout="horizontal",
+                labels=False,
+                widgets=(spacing, unit),
+            )
+            self.changing_fields[self.id] = lambda: {
+                "parameters": {"t_spacing": spacing.value, "t_unit": unit.value}
             }
 
             return Container(widgets=[w])

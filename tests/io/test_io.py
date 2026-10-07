@@ -1,10 +1,20 @@
+from pathlib import Path
+
+import h5py
 import numpy as np
 import pytest
+import zarr
 
-from panseg.io.io import shape_to_stack_layout, smart_load
+from panseg.io.h5 import create_h5
+from panseg.io.io import guess_stack_layout, shape_to_stack_layout, smart_load
 from panseg.io.mesh import create_mesh
+from panseg.io.tiff import create_tiff
 from panseg.io.voxelsize import VoxelSize
-from panseg.io.zarr import list_zarr_keys
+from panseg.io.zarr import create_zarr, list_zarr_keys
+
+OME_EXAMPLES = (
+    Path(__file__).resolve().parent.parent / "resources" / "ome_tiff_examples"
+)
 
 
 class TestIO:
@@ -179,3 +189,93 @@ def test_shape_to_stack_layout_czyx():
 
 def test_shape_to_stack_layout_none():
     assert shape_to_stack_layout(None) == ""
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (10, 20, 30, 40),
+        (16, 32, 64, 128),
+        (4, 5, 16, 16),
+    ],
+)
+def test_shape_to_stack_layout_4d_no_channel_returns_empty(shape):
+    assert shape_to_stack_layout(shape) == ""
+
+
+@pytest.mark.parametrize(
+    "file_name, axes",
+    [
+        ("time-series.ome.tif", "TYX"),
+        ("4D-series.ome.tif", "TZYX"),
+        ("multi-channel-4D-series.ome.tif", "TCZYX"),
+    ],
+)
+def test_guess_stack_layout_ome_tiff(file_name, axes):
+    assert guess_stack_layout(OME_EXAMPLES / file_name) == axes
+
+
+def test_guess_stack_layout_synthetic_ome_axes(make_ome_timeseries):
+    # a synthetic OME-TIFF is guessed from its reader axes, like the
+    # committed anchors (the widget prefill only copies this guess)
+    assert guess_stack_layout(make_ome_timeseries()) == "TZYX"
+
+
+def test_guess_stack_layout_non_ome_tiff_shape_heuristic(tmp_path):
+    path = tmp_path / "out.tiff"
+    create_tiff(path, np.empty((10, 20, 30), dtype="float32"), VoxelSize())
+    assert guess_stack_layout(path) == "ZYX"
+
+
+def test_guess_stack_layout_non_ome_tiff_4d_no_small_dim(tmp_path):
+    path = tmp_path / "out.tiff"
+    create_tiff(
+        path, np.empty((10, 12, 16, 24), dtype="float32"), VoxelSize(), layout="ZCYX"
+    )
+    assert guess_stack_layout(path) == ""
+
+
+def test_guess_stack_layout_h5_axis_order(tmp_path):
+    path = tmp_path / "out.h5"
+    create_h5(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
+    with h5py.File(path, "a") as f:
+        f["raw"].attrs["axis_order"] = "TZYX"
+    assert guess_stack_layout(path, key="raw") == "TZYX"
+    assert guess_stack_layout(path) == "TZYX"
+
+
+def test_guess_stack_layout_h5_old_file_shape_heuristic(tmp_path):
+    path = tmp_path / "timeseries.h5"
+    create_h5(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
+    assert guess_stack_layout(path, key="raw") == ""
+
+    path = tmp_path / "volume.h5"
+    create_h5(path, np.empty((10, 20, 30), dtype="float32"), "raw", VoxelSize())
+    assert guess_stack_layout(path, key="raw") == "ZYX"
+
+
+def test_guess_stack_layout_zarr_axis_order(tmp_path):
+    path = tmp_path / "out.zarr"
+    create_zarr(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
+    zarr_file = zarr.open_group(store=str(path), mode="a")
+    zarr_file["raw"].attrs["axis_order"] = "TZYX"
+    assert guess_stack_layout(path, key="raw") == "TZYX"
+    assert guess_stack_layout(path) == "TZYX"
+
+
+def test_guess_stack_layout_zarr_old_file_shape_heuristic(tmp_path):
+    path = tmp_path / "timeseries.zarr"
+    create_zarr(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
+    assert guess_stack_layout(path, key="raw") == ""
+
+    path = tmp_path / "volume.zarr"
+    create_zarr(path, np.empty((10, 20, 30), dtype="float32"), "raw", VoxelSize())
+    assert guess_stack_layout(path, key="raw") == "ZYX"
+
+
+def test_guess_stack_layout_pil_shape_heuristic(tmp_path):
+    from PIL import Image
+
+    path = tmp_path / "out.png"
+    Image.fromarray(np.zeros((128, 128), dtype="uint8")).save(path)
+    assert guess_stack_layout(path) == "YX"

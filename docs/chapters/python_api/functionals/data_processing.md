@@ -9,7 +9,6 @@ Basic data processing functions are provided in the `dataprocessing` module. The
 ::: panseg.functionals.dataprocessing.dataprocessing.image_rescale
 ::: panseg.functionals.dataprocessing.dataprocessing.image_median
 ::: panseg.functionals.dataprocessing.dataprocessing.image_gaussian_smoothing
-::: panseg.functionals.dataprocessing.dataprocessing.image_crop
 ::: panseg.functionals.dataprocessing.dataprocessing.process_images
 
 ## Segmentation Functions

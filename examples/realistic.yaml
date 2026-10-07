@@ -39,7 +39,6 @@ list_tasks:
   parameters:
     image_name: LRP1 Channel1
     key: null
-    m_slicing: null
     semantic_type: raw
     stack_layout: ZYX
   skip: false

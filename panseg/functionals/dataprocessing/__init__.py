@@ -13,7 +13,6 @@ from panseg.functionals.dataprocessing.dataprocessing import (
     fix_layout_to_CZYX,
     fix_layout_to_YX,
     fix_layout_to_ZYX,
-    image_crop,
     image_gaussian_smoothing,
     image_median,
     image_rescale,
@@ -39,7 +38,6 @@ __all__ = [
     # dataprocessing
     "image_gaussian_smoothing",
     "image_rescale",
-    "image_crop",
     "image_median",
     "compute_scaling_factor",
     "compute_scaling_voxelsize",

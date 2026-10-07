@@ -6,14 +6,14 @@ import h5py
 import napari
 import numpy as np
 from magicgui import magic_factory
-from magicgui.widgets import Container, Label
+from magicgui.widgets import Container, Label, SpinBox
 from napari.layers import Image, Labels
 from napari.qt.threading import thread_worker
 from napari.utils import CyclicLabelColormap
 from pydantic import BaseModel, Field
 
 from panseg import logger
-from panseg.core.image import ImageProperties, PanSegImage, SemanticType
+from panseg.core.image import ImageLayout, ImageProperties, PanSegImage, SemanticType
 from panseg.functionals.proofreading.split_merge_tools import split_merge_from_seeds
 from panseg.functionals.proofreading.utils import get_bboxes
 from panseg.io import H5_EXTENSIONS
@@ -40,6 +40,7 @@ class ProofreadingState(BaseModel):
 
     active: bool = False
     current_seg_layer_name: str | None = None
+    timepoint: int | None = None
     corrected_cells: set = Field(default_factory=set)
     bboxes: dict[int, list[list[int]]] | None = None
     seg_properties: ImageProperties | None = None
@@ -76,6 +77,52 @@ class ProofreadingHandler:
         return self._state.active
 
     @property
+    def is_timeseries(self) -> bool:
+        """True if the session is bound to one timepoint of a timeseries."""
+        return self._state.timepoint is not None
+
+    @property
+    def timepoint(self) -> int:
+        """Returns the timepoint the session is bound to."""
+        if self._state.timepoint is None:
+            raise ValueError(
+                "Session is not bound to a timepoint: not a timeseries segmentation"
+            )
+        return self._state.timepoint
+
+    @property
+    def n_timepoints(self) -> int:
+        """Returns the number of timepoints of the segmentation layer."""
+        if not self.is_timeseries:
+            raise ValueError("Not a timeseries segmentation")
+        return int(self.get_layer_data(self.seg_layer_name).shape[0])
+
+    @property
+    def scribbles_layer_name(self) -> str:
+        """Returns the name of the scribbles canvas, tracking the session timepoint."""
+        if self.is_timeseries:
+            return f"{SCRIBBLES_LAYER_NAME} (t={self.timepoint})"
+        return SCRIBBLES_LAYER_NAME
+
+    @property
+    def corrected_layer_name(self) -> str:
+        """Returns the name of the corrected cells canvas, tracking the session timepoint."""
+        if self.is_timeseries:
+            return f"{CORRECTED_CELLS_LAYER_NAME} (t={self.timepoint})"
+        return CORRECTED_CELLS_LAYER_NAME
+
+    @property
+    def helper_scale(self) -> tuple[float, ...]:
+        """Returns the scale of the slice-sized helper layers.
+
+        The helper layers carry no time dimension: their scale is the
+        segmentation scale without the time entry.
+        """
+        if self.is_timeseries:
+            return self.scale[1:]
+        return self.scale
+
+    @property
     def scale(self) -> tuple[float, ...]:
         """Returns the current scale of the segmentation."""
         if self._scale is None:
@@ -99,16 +146,23 @@ class ProofreadingHandler:
 
     @property
     def segmentation(self) -> np.ndarray:
-        """Returns the current segmentation data."""
+        """Returns the current segmentation data.
+
+        For timeseries segmentations the session world is the slice: this is
+        the layer data at the session timepoint.
+        """
         if self._state.current_seg_layer_name is None:
             # return None
             raise ValueError("Segmentation layer not found")
-        return self.get_layer_data(self._state.current_seg_layer_name)
+        data = self.get_layer_data(self._state.current_seg_layer_name)
+        if self.is_timeseries:
+            return data[self.timepoint]
+        return data
 
     @property
     def scribbles(self) -> np.ndarray:
         """Returns the current scribbles."""
-        return self.get_layer_data(SCRIBBLES_LAYER_NAME)
+        return self.get_layer_data(self.scribbles_layer_name)
 
     def get_layer_data(self, layer_name: str) -> np.ndarray:
         """Returns the data of a layer in the viewer.
@@ -135,7 +189,9 @@ class ProofreadingHandler:
             )
             return
         self.update_layer(
-            np.zeros_like(self.segmentation), SCRIBBLES_LAYER_NAME, scale=self.scale
+            np.zeros_like(self.segmentation),
+            self.scribbles_layer_name,
+            scale=self.helper_scale,
         )
 
     @property
@@ -146,7 +202,7 @@ class ProofreadingHandler:
     @property
     def corrected_cells_mask(self) -> np.ndarray:
         """Returns the mask for corrected cells."""
-        return self.get_layer_data(CORRECTED_CELLS_LAYER_NAME)
+        return self.get_layer_data(self.corrected_layer_name)
 
     def reset_corrected(self) -> None:
         """Resets the corrected cells mask to an empty state."""
@@ -155,13 +211,13 @@ class ProofreadingHandler:
                 "Proofreading widget not initialized. Run the proofreading widget tool once first",
                 thread="Reset Corrected Cells Mask",
             )
-            return None
+            return
 
         self._state.corrected_cells = set()
         self.update_layer(
             np.zeros_like(self.segmentation),
-            CORRECTED_CELLS_LAYER_NAME,
-            scale=self.scale,
+            self.corrected_layer_name,
+            scale=self.helper_scale,
             colormap=correct_cells_cmap,
             opacity=1,
         )
@@ -198,22 +254,106 @@ class ProofreadingHandler:
         """Resets the proofreading handler to its initial state."""
         self._state = ProofreadingState()
 
-    def setup(self, segmentation: PanSegImage):
+    def setup(self, segmentation: PanSegImage, timepoint: int | None = None):
         """Initializes the proofreading handler with a new segmentation.
 
         Args:
             segmentation (PanSegImage): The segmentation image to set up.
+            timepoint (int | None): The timepoint to bind the session to.
+                Must be given for timeseries segmentations; None for still
+                images.
+
+        Raises:
+            ValueError: If the segmentation is a timeseries and no timepoint
+                is given.
         """
+        if timepoint is None and segmentation.is_timeseries:
+            raise ValueError(
+                "Time series segmentation: the proofreading session must be "
+                "bound to a timepoint"
+            )
         self.reset()
         self._scale = segmentation.scale
         self._state = ProofreadingState(
             active=True,
             current_seg_layer_name=segmentation.name,
             seg_properties=segmentation.properties,
+            timepoint=timepoint,
         )
+        self._remove_stale_helper_layers()
         self.reset_bboxes()
         self.reset_corrected()
         self.reset_scribbles()
+
+    def _remove_stale_helper_layers(self) -> None:
+        """Removes helper canvases left over by a previous session.
+
+        Re-initialization may switch between a timeseries and a still
+        segmentation: the old canvases (named for another session or layout)
+        would otherwise linger unused in the viewer. The canvases of the
+        current session are kept.
+        """
+        viewer = napari.current_viewer()
+        if viewer is None:
+            return
+        for prefix in (SCRIBBLES_LAYER_NAME, CORRECTED_CELLS_LAYER_NAME):
+            for layer in list(viewer.layers):
+                if layer.name.startswith(prefix) and layer.name not in (
+                    self.scribbles_layer_name,
+                    self.corrected_layer_name,
+                ):
+                    viewer.layers.remove(layer)
+
+    def rebind(self, timepoint: int) -> None:
+        """Re-binds an active timeseries session to another timepoint.
+
+        Re-binding is not re-initialization: the scribbles and corrected
+        cells canvases persist with their content (they are only renamed to
+        track the new timepoint), while the slice-scoped derived state
+        (bboxes, corrected-cells set, undo/redo history) is recomputed for
+        the new timepoint. The corrected-cells set is re-derived from the
+        persisted corrected cells canvas.
+
+        Args:
+            timepoint (int): The timepoint to re-bind the session to.
+        """
+        if not self.active:
+            raise ValueError(
+                "Proofreading widget not initialized. Run the proofreading widget tool once first"
+            )
+        if not self.is_timeseries:
+            raise ValueError("The session is not bound to a timeseries segmentation")
+        if not 0 <= timepoint < self.n_timepoints:
+            raise ValueError(
+                f"Timepoint {timepoint} is out of range: "
+                f"the segmentation has {self.n_timepoints} timepoints"
+            )
+
+        old_scribbles_name = self.scribbles_layer_name
+        old_corrected_name = self.corrected_layer_name
+        self._state.timepoint = timepoint
+
+        viewer = napari.current_viewer()
+        if viewer is not None:
+            # The canvases persist across timepoint changes: rename, don't clear.
+            if old_scribbles_name in viewer.layers:
+                viewer.layers[old_scribbles_name].name = self.scribbles_layer_name
+            if old_corrected_name in viewer.layers:
+                viewer.layers[old_corrected_name].name = self.corrected_layer_name
+
+        self.reset_bboxes()
+        self._state.corrected_cells = self._corrected_cells_from_mask()
+        self._state.history_undo.clear()
+        self._state.history_redo.clear()
+
+    def _corrected_cells_from_mask(self) -> set:
+        """Derives the corrected-cells set from the persisted corrected cells canvas."""
+        mask = self.corrected_cells_mask
+        return {
+            int(cell_id)
+            for cell_id in np.unique(self.segmentation[mask != 0])
+            if cell_id != 0
+        }
 
     ## Undo/Redo actions
     def _capture_state(self) -> ProofreadingData:
@@ -232,18 +372,39 @@ class ProofreadingHandler:
 
     def _restore_state(self, state: ProofreadingData) -> None:
         """Restores a given state."""
-        self.update_layer(
-            data=state.segmentation, layer_name=self.seg_layer_name, scale=self.scale
-        )
+        self._write_segmentation(state.segmentation)
         self.update_layer(
             data=state.corrected_cells_mask,
-            layer_name=CORRECTED_CELLS_LAYER_NAME,
-            scale=self.scale,
+            layer_name=self.corrected_layer_name,
+            scale=self.helper_scale,
         )
 
         self.reset_scribbles()
         self._state.corrected_cells = state.corrected_cells
         self._state.bboxes = state.bboxes
+
+    def _write_segmentation(self, data: np.ndarray) -> None:
+        """Writes segmentation data back to the segmentation layer.
+
+        The data is one ZYX/YX slice for timeseries sessions (written into the
+        session timepoint, leaving the other timepoints untouched) and the
+        full array for still images.
+
+        Args:
+            data (np.ndarray): The segmentation data to write.
+        """
+        viewer = napari.current_viewer()
+        if viewer is None:
+            raise RuntimeError("No viewer found")
+        if self.seg_layer_name not in viewer.layers:
+            raise ValueError(f"Layer {self.seg_layer_name} not found in viewer")
+        layer = viewer.layers[self.seg_layer_name]
+        if self.is_timeseries:
+            layer.data[self.timepoint] = data
+        else:
+            layer.data = data
+        layer.scale = self.scale  # type: ignore
+        layer.refresh()
 
     def _perform_undo_redo(
         self,
@@ -303,6 +464,8 @@ class ProofreadingHandler:
         with h5py.File(filepath, "a") as f:
             f.create_dataset(name="mask", data=mask_layer)
             f["mask"].attrs["corrected_cells"] = list(self.corrected_cells)
+            if self.is_timeseries:
+                f["mask"].attrs["timepoint"] = self.timepoint
 
         for name, image in [("raw", raw), ("pmap", pmap)]:
             if image is not None:
@@ -319,16 +482,32 @@ class ProofreadingHandler:
             raise ValueError(f"File not found! {filepath}")
 
         viewer = napari.current_viewer()
+        if viewer is None:
+            raise ValueError("No napari viewer found")
         ps_segmentation = PanSegImage.from_h5(filepath, key="label")
 
         with h5py.File(filepath, "r") as f:
             if "mask" not in f:
                 log("Corrected cells mask not found in file", thread="Load State")
                 corrected_cells = set()
-                mask = np.zeros_like(ps_segmentation._data)
+                if ps_segmentation.is_timeseries:
+                    # Legacy file without a timepoint attribute: fall back
+                    # to the displayed timepoint (or the first one) and a
+                    # slice-sized empty mask. Canonical layouts put T first.
+                    n_timepoints = ps_segmentation._data.shape[0]
+                    if len(viewer.dims.current_step) >= 4:
+                        fallback_timepoint = int(viewer.dims.current_step[0])
+                    else:
+                        fallback_timepoint = 0
+                    timepoint = min(fallback_timepoint, n_timepoints - 1)
+                    mask = np.zeros_like(ps_segmentation._data[timepoint])
+                else:
+                    mask = np.zeros_like(ps_segmentation._data)
+                    timepoint = None
             else:
                 corrected_cells = set(f["mask"].attrs["corrected_cells"])  # type: ignore
                 mask: np.ndarray = f["mask"][...]  # type: ignore
+                timepoint: int | None = f["mask"].attrs.get("timepoint", None)  # type: ignore
 
             for name in ["raw", "pmap"]:
                 if name in f:
@@ -348,12 +527,12 @@ class ProofreadingHandler:
 
         ps_image_layer_tuple = ps_segmentation.to_napari_layer_tuple()
         viewer._add_layer_from_data(*ps_image_layer_tuple)
-        self.setup(ps_segmentation)
+        self.setup(ps_segmentation, timepoint=timepoint)
 
         self.update_layer(
             mask,
-            CORRECTED_CELLS_LAYER_NAME,
-            scale=self.scale,
+            self.corrected_layer_name,
+            scale=self.helper_scale,
             colormap=correct_cells_cmap,
             opacity=1,
         )
@@ -379,10 +558,12 @@ class ProofreadingHandler:
         """
         id_mask = self.segmentation == cell_id
 
-        corrected_mask = self.get_layer_data(CORRECTED_CELLS_LAYER_NAME)
+        corrected_mask = self.get_layer_data(self.corrected_layer_name)
         corrected_mask[id_mask] += 1
         corrected_mask[id_mask] %= 2
-        self.update_layer(corrected_mask, CORRECTED_CELLS_LAYER_NAME, scale=self.scale)
+        self.update_layer(
+            corrected_mask, self.corrected_layer_name, scale=self.helper_scale
+        )
 
     def toggle_corrected_cell(self, cell_id: int):
         """Toggles a cell as corrected or not.
@@ -424,6 +605,11 @@ class ProofreadingHandler:
     ):
         """Updates the viewer after proofreading is completed.
 
+        For timeseries sessions only the session timepoint is written: every
+        other timepoint of the layer is left byte-identical. The session
+        timepoint is read at write-back time, which is safe because the
+        widget refuses Timepoint changes while a worker is running.
+
         Args:
             seg_slice (np.ndarray): The segmentation slice to update.
             region_slice (tuple[slice, ...]): The region slice to update in the viewer.
@@ -434,15 +620,20 @@ class ProofreadingHandler:
         if viewer is None:
             raise RuntimeError("No viewer found")
         if self.seg_layer_name in viewer.layers:
-            viewer.layers[self.seg_layer_name].data[region_slice] = seg_slice
-            viewer.layers[self.seg_layer_name].scale = self.scale  # type: ignore
-            viewer.layers[self.seg_layer_name].refresh()
+            layer = viewer.layers[self.seg_layer_name]
+            index = (
+                (self.timepoint, *region_slice) if self.is_timeseries else region_slice
+            )
+            layer.data[index] = seg_slice
+            layer.refresh()
         else:
             raise ValueError(f"Layer {self.seg_layer_name} not found in viewer")
 
 
 class Proofreading_Tab:
     def __init__(self):
+        # Never assign this directly outside _set_busy: the flag doubles as
+        # the Timepoint field's enabled state (see _set_busy).
         self.busy = False
 
         # Initialize the handler
@@ -493,6 +684,24 @@ class Proofreading_Tab:
             " will be merged<br>Labels marked with <strong>different colors</strong> will be split.",
         )
 
+        # The int input is the timepoint selector for timeseries segmentations:
+        # moving it re-binds the session and moves the T slider (one-way).
+        self.widget_timepoint_select = SpinBox(
+            value=0,
+            min=0,
+            max=0,
+            name="timepoint",
+            label="Timepoint",
+            tooltip="Proofreading is applied to the timepoint selected here only.\n"
+            "The Scribbles and Correct Labels canvases persist across timepoint switches:\n"
+            "marks from a processed timepoint are applied to the next one if you run\n"
+            "Split/Merge before cleaning them. Use 'Clean scribbles' after switching timepoints.",
+        )
+        self.widget_timepoint_select.changed.connect(self._on_timepoint_changed)
+        self.widget_timepoint_container = Container(
+            widgets=[self.widget_timepoint_select], labels=True
+        )
+
         self.widget_label_extraction = Label(
             value="Double click in move mode to select labels.\n"
             "Selected labels will be extracted to a new layer.",
@@ -506,6 +715,7 @@ class Proofreading_Tab:
                 self.tab_help,
                 self.widget_label_split_merge,
                 self.widget_proofreading_initialisation,
+                self.widget_timepoint_container,
                 self.widget_split_and_merge_from_scribbles,
                 self.widget_clean_scribble,
                 self.widget_label_extraction,
@@ -526,9 +736,9 @@ class Proofreading_Tab:
             self._on_mode_changed
         )
 
-    def _hide_all_widgets(self):
-        """Hide all widgets initially."""
-        widgets_to_hide = [
+    def _session_widgets(self) -> list:
+        """Returns the widgets shown for every active proofreading session."""
+        return [
             self.widget_label_split_merge,
             self.widget_split_and_merge_from_scribbles,
             self.widget_clean_scribble,
@@ -539,23 +749,19 @@ class Proofreading_Tab:
             self.widget_save_div,
             self.widget_save_state,
         ]
-        for widget in widgets_to_hide:
+
+    def _timeseries_widgets(self) -> list:
+        """Returns the widgets shown only for timeseries sessions."""
+        return [self.widget_timepoint_container]
+
+    def _hide_all_widgets(self):
+        """Hide all widgets initially."""
+        for widget in [*self._session_widgets(), *self._timeseries_widgets()]:
             widget.hide()
 
     def _show_all_widgets(self):
         """Show all widgets."""
-        widgets_to_show = [
-            self.widget_label_split_merge,
-            self.widget_split_and_merge_from_scribbles,
-            self.widget_clean_scribble,
-            self.widget_label_extraction,
-            self.widget_filter_segmentation,
-            self.widget_undo,
-            self.widget_redo,
-            self.widget_save_div,
-            self.widget_save_state,
-        ]
-        for widget in widgets_to_show:
+        for widget in self._session_widgets():
             widget.show()
 
     def get_container(self):
@@ -628,10 +834,11 @@ class Proofreading_Tab:
     def _initialize_from_layer(
         self, segmentation: Labels, are_you_sure: bool = False
     ) -> None:
-        if segmentation.name in [
-            SCRIBBLES_LAYER_NAME,
-            CORRECTED_CELLS_LAYER_NAME,
-        ]:  # Avoid re-initializing with proofreading helper layers
+        if segmentation.name.startswith(
+            SCRIBBLES_LAYER_NAME
+        ) or segmentation.name.startswith(
+            CORRECTED_CELLS_LAYER_NAME
+        ):  # Avoid re-initializing with proofreading helper layers
             log(
                 "Scribble or corrected cells layer is not intended to be proofread, choose a segmentation",
                 thread="Proofreading tool",
@@ -652,7 +859,13 @@ class Proofreading_Tab:
             return
 
         ps_segmentation = PanSegImage.from_napari_layer(segmentation)
-        self.handler.setup(ps_segmentation)
+        timepoint = None
+        if ps_segmentation.is_timeseries:
+            # The int input defaults to the T slider position at initialisation.
+            timepoint = self._displayed_timepoint()
+            if timepoint is None or timepoint >= ps_segmentation.shape[0]:
+                timepoint = 0
+        self.handler.setup(ps_segmentation, timepoint=timepoint)
 
         # Hide help text
         self.tab_help.hide()
@@ -662,6 +875,7 @@ class Proofreading_Tab:
             "Re-initialize Proofreading"  # type: ignore
         )
         self._show_all_widgets()
+        self._update_timepoint_widgets()
         log("Proofreading initialized", thread="Proofreading tool")
 
         # Update layer choices
@@ -671,7 +885,8 @@ class Proofreading_Tab:
             self.widget_proofreading_initialisation.segmentation.choices = [
                 layer
                 for layer in viewer.layers
-                if layer.name not in [SCRIBBLES_LAYER_NAME, CORRECTED_CELLS_LAYER_NAME]
+                if not layer.name.startswith(SCRIBBLES_LAYER_NAME)
+                and not layer.name.startswith(CORRECTED_CELLS_LAYER_NAME)
             ]
 
     def _initialize_from_file(self, file: Path, are_you_sure: bool = False) -> None:
@@ -697,7 +912,99 @@ class Proofreading_Tab:
             "Re-initialize Proofreading"  # type: ignore
         )
         self._show_all_widgets()
+        self._update_timepoint_widgets()
         log("Proofreading initialized", thread="Proofreading tool")
+
+    def _displayed_timepoint(self, viewer: napari.Viewer | None = None) -> int | None:
+        """Returns the timepoint currently displayed by the viewer's T slider."""
+        if viewer is None:
+            viewer = napari.current_viewer()
+        if viewer is None:
+            return None
+        return int(viewer.dims.current_step[0])
+
+    def _ensure_matching_timepoint(self, action: str) -> bool:
+        """Returns True when the operation may run at the displayed timepoint.
+
+        In a timeseries session the T slider may show a different timepoint
+        than the session is bound to (the selector moves the slider one-way
+        only). Applying the operation then would silently target the wrong
+        cell, so it is refused with a log hint.
+        """
+        if not self.handler.is_timeseries:
+            return True
+        displayed = self._displayed_timepoint()
+        if displayed == self.handler.timepoint:
+            return True
+        log(
+            f"The displayed timepoint ({displayed}) does not match the session "
+            f"timepoint ({self.handler.timepoint}). {action} was not applied: "
+            f"set the Timepoint field to {displayed} or move the time slider back "
+            f"to {self.handler.timepoint}.",
+            thread="Proofreading tool",
+            level="error",
+        )
+        return False
+
+    def _update_timepoint_widgets(self) -> None:
+        """Shows and binds the timepoint selector for timeseries sessions, hides it otherwise."""
+        if self.handler.is_timeseries:
+            self.widget_timepoint_select.max = self.handler.n_timepoints - 1
+            self.widget_timepoint_select.value = self.handler.timepoint
+            self.widget_timepoint_container.show()
+            viewer = napari.current_viewer()
+            if viewer is not None:
+                viewer.dims.set_current_step(0, self.handler.timepoint)
+        else:
+            self.widget_timepoint_container.hide()
+
+    def _set_busy(self, busy: bool) -> None:
+        """Sets the busy flag and with it the availability of the Timepoint field.
+
+        While a proofreading worker runs, the Timepoint field is disabled: a
+        mid-flight re-bind would re-target the worker's write-back to another
+        timepoint's slice.
+
+        Args:
+            busy (bool): True while a worker is running, False otherwise.
+        """
+        self.busy = busy
+        self.widget_timepoint_select.enabled = not busy
+
+    def _on_timepoint_changed(self, timepoint: int) -> None:
+        """Re-binds the session to the selected timepoint and moves the T slider.
+
+        The int input — not the T slider — is the timepoint selector: the
+        slider follows the input (one-way).
+
+        While a split/merge or label-extraction worker runs, the change is
+        refused: the in-flight worker computes its result from the session's
+        current timepoint and writes it back there when it completes, so
+        re-binding now would land the result in the wrong timepoint's slice
+        and discard the undo snapshot the worker pushed.
+
+        Args:
+            timepoint (int): The selected timepoint.
+        """
+        if not self.handler.active or not self.handler.is_timeseries:
+            return
+        if timepoint == self.handler.timepoint:
+            return
+        if self.busy:
+            log(
+                f"The proofreading tool is busy. The timepoint change to "
+                f"{timepoint} was not applied: wait for the running worker to "
+                f"finish before switching timepoints.",
+                thread="Proofreading tool",
+                level="error",
+            )
+            # Snap the field back so it keeps showing the session timepoint.
+            self.widget_timepoint_select.value = self.handler.timepoint
+            return
+        self.handler.rebind(timepoint)
+        viewer = napari.current_viewer()
+        if viewer is not None:
+            viewer.dims.set_current_step(0, timepoint)
 
     def _on_mode_changed(self, mode: str):
         if mode == "New":
@@ -738,6 +1045,9 @@ class Proofreading_Tab:
             )
             return
 
+        if not self._ensure_matching_timepoint("Split/Merge"):
+            return
+
         ps_image = PanSegImage.from_napari_layer(image)
 
         if ps_image.semantic_type == SemanticType.RAW:
@@ -757,6 +1067,13 @@ class Proofreading_Tab:
                 level="error",
             )
 
+        # The session world is the slice: a timeseries boundary image is
+        # restricted to the session timepoint so the unchanged 2D/3D
+        # split/merge machinery runs on matching shapes.
+        image_data = ps_image.get_data()
+        if ps_image.is_timeseries:
+            image_data = image_data[self.handler.timepoint]
+
         @thread_worker(progress=True)
         def func():
             if self.handler.scribbles.sum() == 0:
@@ -766,7 +1083,7 @@ class Proofreading_Tab:
             new_seg, region_slice, bboxes = split_merge_from_seeds(
                 self.handler.scribbles,
                 self.handler.segmentation,
-                image=ps_image.get_data(),
+                image=image_data,
                 bboxes=self.handler.bboxes,
                 max_label=self.handler.max_label,
                 correct_labels=self.handler.corrected_cells,
@@ -783,7 +1100,7 @@ class Proofreading_Tab:
                     thread="filter_segmentation",
                     level="INFO",
                 )
-            self.busy = False
+            self._set_busy(False)
 
         def on_error(err):
             log(
@@ -791,13 +1108,13 @@ class Proofreading_Tab:
                 thread="filter_segmentation",
                 level="Warning",
             )
-            self.busy = False
+            self._set_busy(False)
 
         if self.busy:
             log("Busy! Try again later!", thread="filter_segmentation", level="Warning")
             return
 
-        self.busy = True
+        self._set_busy(True)
         worker = func()  # type: ignore
         worker.returned.connect(on_done)
         worker.errored.connect(on_error)
@@ -814,7 +1131,7 @@ class Proofreading_Tab:
             )
             return
 
-        if "Scribbles" not in viewer.layers:
+        if self.handler.scribbles_layer_name not in viewer.layers:
             log(
                 "Scribble Layer not defined. Run the proofreading widget tool once first",
                 thread="Clean scribble",
@@ -843,12 +1160,20 @@ class Proofreading_Tab:
             filtered_seg[self.handler.corrected_cells_mask == 0] = 0
 
             properties = self.handler.seg_properties
+            if self.handler.is_timeseries:
+                # A single-timepoint layer of the proofread timepoint's
+                # corrected cells, not a full-length timeseries.
+                new_name = f"{properties.name}_corrected_t{self.handler.timepoint:03d}"
+                new_layout = ImageLayout(properties.image_layout.value.replace("T", ""))
+            else:
+                new_name = f"{properties.name}_corrected"
+                new_layout = properties.image_layout
 
             new_seg_properties = ImageProperties(
-                name=f"{properties.name}_corrected",
+                name=new_name,
                 semantic_type=SemanticType.SEGMENTATION,
                 voxel_size=properties.voxel_size,
-                image_layout=properties.image_layout,
+                image_layout=new_layout,
                 original_voxel_size=properties.original_voxel_size,
             )
             new_ps_seg = PanSegImage(filtered_seg, new_seg_properties)
@@ -860,7 +1185,7 @@ class Proofreading_Tab:
             viewer = napari.current_viewer()
             if result is not None and viewer is not None:
                 viewer._add_layer_from_data(*result)
-            self.busy = False
+            self._set_busy(False)
             log(
                 "Done extracting corrected labels",
                 thread="filter_segmentation",
@@ -873,13 +1198,13 @@ class Proofreading_Tab:
                 thread="filter_segmentation",
                 level="WARNING",
             )
-            self.busy = False
+            self._set_busy(False)
 
         if self.busy:
             log("Busy! Try again later!", thread="filter_segmentation", level="Warning")
             return
 
-        self.busy = True
+        self._set_busy(True)
         worker = func()  # type: ignore
         worker.returned.connect(on_done)
         worker.errored.connect(on_error)
@@ -950,7 +1275,7 @@ class Proofreading_Tab:
         def _add_label_to_corrected(_viewer: napari.Viewer, event):
             # Maybe it would be better to run this callback only if the layer is active
             # if _viewer.layers.selection.active.name == CORRECTED_CELLS_LAYER_NAME:
-            if CORRECTED_CELLS_LAYER_NAME in _viewer.layers:
+            if self.handler.corrected_layer_name in _viewer.layers:
                 self._widget_add_label_to_corrected(
                     viewer=viewer, position=event.position
                 )
@@ -963,15 +1288,28 @@ class Proofreading_Tab:
     ):
         """Adds or removes a label at a given position to/from the corrected cells.
 
+        For timeseries sessions the operation is refused when the displayed
+        timepoint diverges from the session timepoint.
         Args:
             position (tuple[int, ...]): The position of the cell in the viewer.
         """
-        if CORRECTED_CELLS_LAYER_NAME not in viewer.layers:
+        if self.handler.corrected_layer_name not in viewer.layers:
             raise ValueError("Corrected cells layer not found in viewer")
 
-        raster_position = [
-            int(p / s) for p, s in zip(position, self.handler.scale, strict=True)
-        ]
+        if not self._ensure_matching_timepoint("The cell marking"):
+            return
+        if self.handler.is_timeseries:
+            # The event position spans (t, z, y, x); the handler world is the
+            # (z, y, x) slice, so the timepoint component is dropped and the
+            # helper scale (without the time entry) rasterizes it.
+            raster_position = [
+                int(p / s)
+                for p, s in zip(position[1:], self.handler.helper_scale, strict=True)
+            ]
+        else:
+            raster_position = [
+                int(p / s) for p, s in zip(position, self.handler.scale, strict=True)
+            ]
         cell_id = self.handler.segmentation[*raster_position]
         self.handler.toggle_corrected_cell(cell_id)
 
@@ -990,9 +1328,8 @@ class Proofreading_Tab:
         self.widget_split_and_merge_from_scribbles.image.choices = raws + predictions
 
         # Set values to inserted
-        if event.type == "inserted":
-            if (
-                event.value._metadata.get("semantic_type", None)
-                == SemanticType.SEGMENTATION
-            ):
-                self.widget_proofreading_initialisation.segmentation.value = event.value
+        if event.type == "inserted" and (
+            event.value._metadata.get("semantic_type", None)
+            == SemanticType.SEGMENTATION
+        ):
+            self.widget_proofreading_initialisation.segmentation.value = event.value

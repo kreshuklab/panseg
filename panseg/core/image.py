@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from enum import Enum
 from pathlib import Path
@@ -9,18 +10,51 @@ import h5py
 import numpy as np
 from napari.layers import Image, Labels
 from napari.types import LayerDataTuple
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 import panseg.functionals.dataprocessing as dp
-from panseg.io.h5 import H5_EXTENSIONS, create_h5
+from panseg.io.h5 import H5_EXTENSIONS, create_h5, read_h5_time_spacing
 from panseg.io.io import smart_load_with_vs
 from panseg.io.mesh import create_mesh
-from panseg.io.tiff import create_tiff
+from panseg.io.tiff import (
+    TIFF_EXTENSIONS,
+    check_ome_single_file,
+    create_tiff,
+    read_ome_time_spacing,
+)
 from panseg.io.voxelsize import VoxelSize
-from panseg.io.zarr import create_zarr
+from panseg.io.zarr import ZARR_EXTENSIONS, create_zarr, read_zarr_time_spacing
 
 logger = logging.getLogger(__name__)
 last_warning = 0.0
+
+# Conversion factors from source time units to the canonical unit, seconds.
+_TIME_UNITS_TO_SECONDS = {
+    "s": 1.0,
+    "sec": 1.0,
+    "second": 1.0,
+    "seconds": 1.0,
+    "ms": 1e-3,
+    "millisecond": 1e-3,
+    "milliseconds": 1e-3,
+    "us": 1e-6,
+    "\u00b5s": 1e-6,  # µs (micro sign)
+    "\u03bcs": 1e-6,  # µs (Greek small letter mu)
+    "microsecond": 1e-6,
+    "microseconds": 1e-6,
+    "min": 60.0,
+    "minute": 60.0,
+    "minutes": 60.0,
+    "h": 3600.0,
+    "hr": 3600.0,
+    "hour": 3600.0,
+    "hours": 3600.0,
+}
+
+# Canonical time units offered in the UIs, ordered from the shortest to the
+# longest duration. A curated subset of the keys of _TIME_UNITS_TO_SECONDS:
+# the aliases stay for parsing, the UIs only offer one spelling per unit.
+TIME_UNIT_CHOICES = ("µs", "ms", "s", "min", "h")
 
 
 class SemanticType(Enum):
@@ -57,7 +91,10 @@ class ImageType(Enum):
 
 class ImageDimensionality(Enum):
     """
-    Enum class for image dimensionality.
+    Enum class for the spatial dimensionality of an image.
+
+    Dimensionality is spatial only: it never counts the time or channel
+    axes. Time presence is the orthogonal ``is_timeseries`` property.
 
     Attributes:
         TWO (str): 2D images
@@ -72,10 +109,16 @@ class ImageLayout(Enum):
     """
     Enum class for image layout.
     Axis available are:
-    - X: Width
-    - Y: Height
-    - Z: Depth
+    - T: Time
     - C: Channel
+    - Z: Depth
+    - Y: Height
+    - X: Width
+
+    Every layout is a projection of the canonical order T-C-Z-Y-X: only the
+    present axes, in that relative order. The layout string alone carries the
+    axes; axis indices, spatial dimensionality, and time presence are derived
+    from it by projection and never stored.
 
     Attributes:
         YX (str): 2D image with X and Y axis
@@ -83,6 +126,10 @@ class ImageLayout(Enum):
         ZYX (str): 3D image with Z, X and Y axis
         CZYX (str): 3D image with Channel, Z, X and Y axis
         ZCYX (str): 3D image with Z, Channel, X and
+        TYX (str): 2D timeseries with Time, X and Y axis
+        TCYX (str): 2D timeseries with Time, Channel, X and Y axis
+        TZYX (str): 3D timeseries with Time, Z, X and Y axis
+        TCZYX (str): 3D timeseries with Time, Channel, Z, X and Y axis
     """
 
     YX = "YX"
@@ -90,10 +137,56 @@ class ImageLayout(Enum):
     ZYX = "ZYX"
     CZYX = "CZYX"
     ZCYX = "ZCYX"  # This is not supported, should be converted to CZYX during import
+    TYX = "TYX"
+    TCYX = "TCYX"
+    TZYX = "TZYX"
+    TCZYX = "TCZYX"
 
     @classmethod
     def to_choices(cls) -> list[str]:
         return [il.value for il in cls]
+
+    @property
+    def spatial_axes(self) -> str:
+        """The spatial projection of the layout, i.e. the axes without T and C."""
+        return self.value.replace("T", "").replace("C", "")
+
+    @property
+    def spatial_axis_indices(self) -> tuple[int, ...]:
+        """Indices of the spatial axes in the layout, in Z, Y, X order."""
+        return tuple(self.value.index(axis) for axis in self.spatial_axes)
+
+    def axis_index(self, axis: str) -> int | None:
+        """Index of the given axis in the layout, or None if absent."""
+        if axis in self.value:
+            return self.value.index(axis)
+        return None
+
+    @property
+    def is_timeseries(self) -> bool:
+        """True if the layout carries a time axis."""
+        return "T" in self.value
+
+    @property
+    def dimensionality(self) -> ImageDimensionality:
+        """Spatial dimensionality, independent of the time and channel axes."""
+        if "Z" in self.value:
+            return ImageDimensionality.THREE
+        return ImageDimensionality.TWO
+
+    @property
+    def channel_axis(self) -> int | None:
+        """Index of the channel axis in the layout, or None if absent."""
+        if "C" in self.value:
+            return self.value.index("C")
+        return None
+
+    @property
+    def time_axis(self) -> int | None:
+        """Index of the time axis in the layout, or None if absent."""
+        if "T" in self.value:
+            return self.value.index("T")
+        return None
 
 
 class ImageProperties(BaseModel):
@@ -106,6 +199,12 @@ class ImageProperties(BaseModel):
         voxel_size (VoxelSize): Voxel size of the image
         image_layout (ImageLayout): Image layout of the image
         original_voxel_size (VoxelSize): Original voxel size of the image
+        source_file_name (str | None): Name of the source file
+        t_spacing (float | None): Time spacing between timepoints.
+            None means the source carried no timing metadata.
+        t_unit (str): Unit of the time spacing. Normalized to "s" at
+            construction; other units (ms, µs, min, h) are converted to
+            seconds.
     """
 
     name: str
@@ -114,19 +213,27 @@ class ImageProperties(BaseModel):
     image_layout: ImageLayout
     original_voxel_size: VoxelSize
     source_file_name: str | None = None
+    t_spacing: float | None = None
+    t_unit: str = "s"
+
+    @model_validator(mode="after")
+    def _normalize_time_spacing(self) -> "ImageProperties":
+        factor = _TIME_UNITS_TO_SECONDS.get(self.t_unit.lower())
+        if factor is None:
+            raise ValueError(
+                f"Time unit {self.t_unit!r} not recognized, should be one of "
+                "s, ms, µs (us), min or h (hour)"
+            )
+        if self.t_spacing is not None:
+            if self.t_spacing <= 0:
+                raise ValueError("Time spacing must be positive")
+            self.t_spacing = self.t_spacing * factor
+        self.t_unit = "s"
+        return self
 
     @property
     def dimensionality(self) -> ImageDimensionality:
-        if self.image_layout in (ImageLayout.YX, ImageLayout.CYX):
-            return ImageDimensionality.TWO
-        elif self.image_layout in (
-            ImageLayout.ZYX,
-            ImageLayout.CZYX,
-            ImageLayout.ZCYX,
-        ):
-            return ImageDimensionality.THREE
-        else:
-            raise ValueError(f"Image layout {self.image_layout} not recognized")
+        return self.image_layout.dimensionality
 
     @property
     def image_type(self) -> ImageType:
@@ -139,14 +246,15 @@ class ImageProperties(BaseModel):
 
     @property
     def channel_axis(self) -> int | None:
-        if self.image_layout in (ImageLayout.CYX, ImageLayout.CZYX):
-            return 0
-        elif self.image_layout == ImageLayout.ZCYX:
-            return 1
-        elif self.image_layout in (ImageLayout.YX, ImageLayout.ZYX):
-            return None
-        else:
-            raise ValueError(f"Image layout {self.image_layout} not recognized")
+        return self.image_layout.channel_axis
+
+    @property
+    def time_axis(self) -> int | None:
+        return self.image_layout.time_axis
+
+    @property
+    def is_timeseries(self) -> bool:
+        return self.image_layout.is_timeseries
 
     def interpolation_order(self, image_default: int = 1) -> int:
         if self.image_type == ImageType.LABEL:
@@ -188,8 +296,7 @@ class PanSegImage:
         Returns:
             PanSegImage: New image
         """
-
-        property_dict = self._properties.model_dump(exclude_none=True)
+        property_dict = self._properties.model_dump()
 
         if name == self.name:
             raise ValueError("New derived name should be different from the original")
@@ -206,6 +313,28 @@ class PanSegImage:
 
         new_properties = ImageProperties(**property_dict)
         return PanSegImage(data, new_properties)
+
+    def set_t_spacing(self, t_spacing: float | None, t_unit: str = "s") -> None:
+        """Replace the time spacing of this image, in place.
+
+        Rebuilds the properties through the validated ImageProperties
+        constructor, so the unit is normalized to seconds and the
+        spacing checked for positivity - unlike a raw attribute
+        assignment on the properties. The frame-by-frame loop uses it
+        to stamp the inputs' shared spacing onto the split timepoints
+        (a timepoint is not a timeseries and carries no spacing of its
+        own; see split_timepoints), so task bodies preserve it through
+        derive_new and property tasks can override it.
+
+        Args:
+            t_spacing (float | None): new time spacing in the given
+                unit, or None to mark it unknown.
+            t_unit (str): unit of t_spacing (s, ms, µs/us, min or h).
+        """
+        properties = self._properties.model_dump()
+        properties["t_spacing"] = t_spacing
+        properties["t_unit"] = t_unit
+        self._properties = ImageProperties(**properties)
 
     @classmethod
     def from_napari_layer(cls, layer: Image | Labels) -> "PanSegImage":
@@ -244,6 +373,10 @@ class PanSegImage:
 
         source_file_name = metadata.get("source_file_name", None)
 
+        # Old layers lack the time spacing metadata: it defaults to unknown.
+        t_spacing = metadata.get("t_spacing", None)
+        t_unit = metadata.get("t_unit", "s")
+
         # Loading from napari layer, the id needs to be present in the metadata
         # If not present, the layer is corrupted
         if "id" in metadata:
@@ -258,6 +391,8 @@ class PanSegImage:
             image_layout=image_layout,
             original_voxel_size=original_voxel_size,
             source_file_name=source_file_name,
+            t_spacing=t_spacing,
+            t_unit=t_unit,
         )
 
         if image_type != properties.image_type:
@@ -274,10 +409,9 @@ class PanSegImage:
             return [self]
         assert self.channel_axis is not None, "No channel axis known!"
 
-        if self.dimensionality == ImageDimensionality.TWO:
-            new_image_layout = ImageLayout.YX
-        else:
-            new_image_layout = ImageLayout.ZYX
+        # The split image keeps every axis except C.
+        prefix = "T" if self.is_timeseries else ""
+        new_image_layout = ImageLayout(prefix + self.image_layout.spatial_axes)
 
         images = []
         for ch in range(self.shape[self.channel_axis]):
@@ -290,12 +424,47 @@ class PanSegImage:
             )
         return images
 
+    def split_timepoints(self) -> list["PanSegImage"]:
+        """Split a timeseries into single-timepoint images, one per timepoint.
+
+        Mirrors split_channels: each timepoint is a derive_new of this image
+        with the T axis dropped from the layout (TZYX->ZYX, TYX->YX,
+        TCZYX->CZYX, TCYX->CYX), the time slice as data and the name
+        f"{name}_t{i}" (the channel naming convention). A timepoint is not a
+        timeseries: it carries no time spacing (t_spacing None, t_unit the
+        canonical "s"), so the caller restacks with restack_timepoints to
+        stamp the parent spacing back on.
+
+        A still image returns itself as the only timepoint.
+        """
+        if not self.is_timeseries:
+            return [self]
+        assert self.time_axis is not None, "No time axis known!"
+
+        # The split image keeps every axis except T.
+        new_image_layout = ImageLayout(self.image_layout.value.replace("T", ""))
+
+        images = []
+        for t_index in range(self.shape[self.time_axis]):
+            images.append(
+                self.derive_new(
+                    data=np.take(self._data, t_index, axis=self.time_axis),
+                    name=self.name + f"_t{t_index}",
+                    image_layout=new_image_layout,
+                    t_spacing=None,
+                )
+            )
+        return images
+
     def merge_with(self, image: "PanSegImage"):
+        """Merge two images along the channel dimension."""
         if not all(
             (
                 self.semantic_type == image.semantic_type,
                 self.voxel_size == image.voxel_size,
                 self.dimensionality == image.dimensionality,
+                self.is_timeseries == image.is_timeseries,
+                self.properties.t_spacing == image.properties.t_spacing,
             )
         ):
             raise ValueError("Images can't be merged, not compatible!")
@@ -303,10 +472,8 @@ class PanSegImage:
         images = self.split_channels()
         images.extend(image.split_channels())
 
-        if self.dimensionality == ImageDimensionality.TWO:
-            new_image_layout = ImageLayout.CYX
-        else:
-            new_image_layout = ImageLayout.CZYX
+        prefix = "T" if self.is_timeseries else ""
+        new_image_layout = ImageLayout(prefix + "C" + self.image_layout.spatial_axes)
 
         new_props = ImageProperties(
             name=self.name + "_merged",
@@ -315,9 +482,11 @@ class PanSegImage:
             image_layout=new_image_layout,
             original_voxel_size=self.original_voxel_size,
             source_file_name=self.source_file_name,
+            t_spacing=self.properties.t_spacing,
         )
 
-        data = np.stack([im.get_data() for im in images])
+        stack_axis = 1 if self.is_timeseries else 0
+        data = np.stack([im.get_data() for im in images], axis=stack_axis)
         return PanSegImage(data, new_props)
 
     def to_napari_layer_tuple(self) -> LayerDataTuple:
@@ -341,6 +510,7 @@ class PanSegImage:
             {
                 "name": self.name,
                 "scale": self.scale,
+                "axis_labels": [ax.lower() for ax in self.image_layout.value],
                 "metadata": metadata,
             },
             self.image_type.value,
@@ -378,6 +548,10 @@ class PanSegImage:
             if voxel_size.voxels_size is not None:
                 f[key].attrs["element_size_um"] = voxel_size.voxels_size
             f[key].attrs["panseg_image_metadata_json"] = metadata
+            f[key].attrs["axis_order"] = self.image_layout.value
+            if self.is_timeseries and self.properties.t_spacing is not None:
+                f[key].attrs["t_spacing"] = self.properties.t_spacing
+                f[key].attrs["t_spacing_unit"] = self.properties.t_unit
 
     @classmethod
     def from_h5(cls, path: Path | str, key: str) -> "PanSegImage":
@@ -403,63 +577,18 @@ class PanSegImage:
         return cls(data, properties)
 
     def _check_ndim(self, data: np.ndarray) -> np.ndarray:
-        if self.image_layout in (ImageLayout.CYX, ImageLayout.ZYX):
-            if data.ndim != 3:
-                raise ValueError(
-                    f"Data has shape {data.shape} but should have 3 dimensions for layout {self.image_layout}"
-                )
-
-        elif self.image_layout in (ImageLayout.CZYX, ImageLayout.ZCYX):
-            if data.ndim != 4:
-                raise ValueError(
-                    f"Data has shape {data.shape} but should have 4 dimensions for layout {self.image_layout}"
-                )
-
-        elif self.image_layout in (ImageLayout.YX,):
-            if data.ndim != 2:
-                raise ValueError(
-                    f"Data has shape {data.shape} but should have 2 dimensions for layout {self.image_layout}"
-                )
-
-        else:
-            raise ValueError(f"Image layout {self.image_layout} not recognized")
+        expected_ndim = len(self.image_layout.value)
+        if data.ndim != expected_ndim:
+            raise ValueError(
+                f"Data has shape {data.shape} but should have {expected_ndim} dimensions for layout {self.image_layout}"
+            )
 
         return data
 
     def _check_shape(
         self, data: np.ndarray, properties: ImageProperties
     ) -> tuple[np.ndarray, ImageProperties]:
-        if self.image_layout == ImageLayout.ZYX:
-            if data.shape[0] == 1:
-                logger.warning(
-                    "Image layout is ZYX but data has only one z slice, casting to YX"
-                )
-                properties.image_layout = ImageLayout.YX
-                return data[0], properties
-
-        elif self.image_layout == ImageLayout.CZYX:
-            if data.shape[0] == 1 and data.shape[1] == 1:
-                logger.warning(
-                    "Image layout is CZYX but data has only one z slice and one channel, casting to YX"
-                )
-                properties.image_layout = ImageLayout.YX
-                return data[0, 0], properties
-
-            elif data.shape[0] == 1 and data.shape[1] > 1:
-                logger.warning(
-                    "Image layout is CZYX but data has only one channel, casting to ZYX"
-                )
-                properties.image_layout = ImageLayout.ZYX
-                return data[0], properties
-
-            elif data.shape[0] > 1 and data.shape[1] == 1:
-                logger.warning(
-                    "Image layout is CZYX but data has only one z slice, casting to CYX"
-                )
-                properties.image_layout = ImageLayout.CYX
-                return data[:, 0], properties
-
-        elif self.image_layout == ImageLayout.ZCYX:
+        if self.image_layout == ImageLayout.ZCYX:
             logger.warning(
                 "Image layout is ZCYX but should have been converted to CZYX. PanSeg is doing this now."
             )
@@ -467,6 +596,34 @@ class PanSegImage:
             data = np.moveaxis(data, 0, 1)
             return self._check_shape(data, properties)
 
+        # Singleton squeeze rule: drop every length-1 axis except Y and X,
+        # the layout is the projection onto what remains.
+        layout = self.image_layout
+        axes = layout.value
+        drop_idx = [
+            i
+            for i, (ax, n) in enumerate(zip(axes, data.shape))
+            if ax not in "YX" and n == 1
+        ]
+        if not drop_idx:
+            return data, properties
+
+        dropped_axes = [ax for i, ax in enumerate(axes) if i in drop_idx]
+        remaining_axes = "".join(ax for i, ax in enumerate(axes) if i not in drop_idx)
+        dropped_words = {
+            "T": "timepoint",
+            "C": "channel",
+            "Z": "z slice",
+        }
+        dropped = " and ".join(dropped_words[ax] for ax in dropped_axes)
+        logger.warning(
+            f"Image layout is {layout.value} but data has only one {dropped}, casting to {remaining_axes}"
+        )
+        for i in reversed(drop_idx):
+            data = np.take(data, 0, axis=i)
+        properties.image_layout = ImageLayout(remaining_axes)
+        if "T" in dropped_axes:
+            properties.t_spacing = None
         return data, properties
 
     def _check_labels_have_no_channels(self) -> None:
@@ -533,22 +690,26 @@ class PanSegImage:
     def scale(self) -> tuple[float, ...]:
         """Returns the scale of the image.
 
-        The scale is equal to the voxel size in each spatial dimension and 1 in other channels.
+        The scale is equal to the voxel size in each spatial dimension, 1.0
+        in the time dimension and 1 in the channel dimension. The time axis
+        stays in timepoint indices (the napari t axis shows the existing
+        timepoints, not elapsed time): the spacing is carried in
+        properties.t_spacing and surfaced by the export metadata and the
+        input tab info panel.
         """
-        if self.image_layout == ImageLayout.YX:
-            return (self.voxel_size.y, self.voxel_size.x)
-        elif self.image_layout == ImageLayout.ZYX:
-            return (self.voxel_size.z, self.voxel_size.y, self.voxel_size.x)
-        elif self.image_layout == ImageLayout.CYX:
-            return (1.0, self.voxel_size.y, self.voxel_size.x)
-        elif self.image_layout == ImageLayout.CZYX:
-            return (1.0, self.voxel_size.z, self.voxel_size.y, self.voxel_size.x)
-        elif self.image_layout == ImageLayout.ZCYX:
+        if self.image_layout == ImageLayout.ZCYX:
             raise ValueError(
                 f"Image layout {self.image_layout} not supported, should have been converted to CZYX"
             )
-        else:
-            raise ValueError(f"Image layout {self.image_layout} not recognized")
+
+        axis_scales = {
+            "T": 1.0,
+            "C": 1.0,
+            "Z": self.voxel_size.z,
+            "Y": self.voxel_size.y,
+            "X": self.voxel_size.x,
+        }
+        return tuple(axis_scales[ax] for ax in self.image_layout.value)
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -606,9 +767,18 @@ class PanSegImage:
         return self._properties.channel_axis
 
     @property
+    def time_axis(self) -> int | None:
+        return self._properties.time_axis
+
+    @property
     def is_multichannel(self) -> bool:
         """Returns True if the image is multichannel, False otherwise."""
         return self.channel_axis is not None
+
+    @property
+    def is_timeseries(self) -> bool:
+        """Returns True if the image carries a time axis, False otherwise."""
+        return self._properties.is_timeseries
 
     def interpolation_order(self, image_default: int = 1) -> int:
         """Returns the default interpolation order used for the image."""
@@ -623,35 +793,113 @@ class PanSegImage:
         return self.original_voxel_size.voxels_size is not None
 
 
+def restack_timepoints(
+    timepoints: list[PanSegImage],
+    t_spacing: float | None,
+    t_unit: str = "s",
+    name: str | None = None,
+) -> PanSegImage:
+    """Restack single-timepoint images into a timeseries along a new outer T axis.
+
+    The inverse of split_timepoints: the timepoints are stacked with
+    np.stack along a new leading axis and the layout gains a T prefix
+    (ZYX->TZYX, YX->TYX). t_spacing/t_unit are stamped by the caller (they
+    are lost in the split) - usually the parent timeseries's spacing.
+
+    Args:
+        timepoints (list[PanSegImage]): single-timepoint images; every
+            timepoint must be a still image and agree in shape, layout,
+            voxel_size, semantic_type and t_spacing (the same checks as
+            merge_with).
+        t_spacing (float | None): time spacing between the restacked
+            timepoints, None if unknown.
+        t_unit (str): unit of the time spacing, normalized to seconds.
+        name (str | None): name of the restacked image; defaults to the
+            first timepoint's name plus "_restacked".
+    """
+    if not timepoints:
+        raise ValueError("Restacking needs at least one timepoint")
+
+    first = timepoints[0]
+    for timepoint in timepoints:
+        if timepoint.is_timeseries:
+            raise ValueError(
+                f"Image {timepoint.name} to restack is not a single timepoint "
+                f"(layout {timepoint.image_layout})"
+            )
+    for timepoint in timepoints[1:]:
+        if not all(
+            (
+                timepoint.semantic_type == first.semantic_type,
+                timepoint.voxel_size == first.voxel_size,
+                timepoint.dimensionality == first.dimensionality,
+                timepoint.image_layout == first.image_layout,
+                timepoint.shape == first.shape,
+                timepoint.properties.t_spacing == first.properties.t_spacing,
+            )
+        ):
+            raise ValueError(
+                f"Timepoints {first.name} and {timepoint.name} can't be "
+                "restacked, not compatible!"
+            )
+
+    if name is None:
+        name = first.name + "_restacked"
+
+    new_props = ImageProperties(
+        name=name,
+        semantic_type=first.semantic_type,
+        voxel_size=first.voxel_size,
+        image_layout=ImageLayout("T" + first.image_layout.value),
+        original_voxel_size=first.original_voxel_size,
+        source_file_name=first.source_file_name,
+        t_spacing=t_spacing,
+        t_unit=t_unit,
+    )
+    data = np.stack([timepoint.get_data() for timepoint in timepoints], axis=0)
+    return PanSegImage(data, new_props)
+
+
+def _layout_tokens(stack_layout: str) -> list[tuple[str, bool]]:
+    """Tokenize a stack layout into (letter, inverted) pairs, in written order.
+
+    A '-' inverts the letter that follows it.
+    """
+    tokens: list[tuple[str, bool]] = []
+    invert_next = False
+    for char in stack_layout:
+        if char == "-":
+            invert_next = True
+            continue
+        tokens.append((char, invert_next))
+        invert_next = False
+    return tokens
+
+
 def stack_sort(stack_layout: str, data, voxel_size):
     """Sort the stack layout, data, and voxelsize
 
     Makes the image stack layout unique for any number of dimensions.
     """
+    # Canonical rank order: T, C, Z, Y, X. T and C are non-spatial axes and
+    # do not take part in the voxel size mapping.
     sort_order = [
-        ("C", 0),
-        ("Z", 1),
-        ("Y", 2),
-        ("X", 3),
+        ("T", 0),
+        ("C", 1),
+        ("Z", 2),
+        ("Y", 3),
+        ("X", 4),
     ]
 
+    tokens = _layout_tokens(stack_layout)
+    # ZCXY -> [2,1,4,3]
+    invert = [inverted for _, inverted in tokens]
     sort_idxs = []
     sort_idxs_wo_channel = []
-    # ZCXY -> [1,0,3,2]
-    invert = []
-    invert_next = False
-    for c in stack_layout:
-        if c == "-":
-            invert_next = True
-            continue
-        if invert_next:
-            invert.append(True)
-            invert_next = False
-        else:
-            invert.append(False)
+    for c, _ in tokens:
         sort_idxs.extend([n for c_sorted, n in sort_order if c == c_sorted])
         sort_idxs_wo_channel.extend(
-            [n for c_sorted, n in sort_order if c == c_sorted and c != "C"]
+            [n for c_sorted, n in sort_order if c == c_sorted and c not in "CT"]
         )
     # fill in gaps, like missing channel dimension:
     sort_idxs = np.argsort(sort_idxs)
@@ -662,7 +910,7 @@ def stack_sort(stack_layout: str, data, voxel_size):
     stack_layout = "".join([stack_layout[i] for i in sort_idxs])
 
     # ZCXY -> [1,0,3,2] -> [1,3,2] -> [0,2,1]
-    # layout..sort_idxs...sort_wo_ch..sorting for voxelsize
+    # layout->sort_idxs ->sort_w/o_ch->sorting for voxelsize
     sort_idxs_wo_channel = np.argsort(sort_idxs_wo_channel)
     if len(sort_idxs_wo_channel) == 2:
         sort_idxs_wo_channel = np.insert(sort_idxs_wo_channel + 1, 0, 0)
@@ -672,13 +920,106 @@ def stack_sort(stack_layout: str, data, voxel_size):
     return stack_layout, data, voxel_size
 
 
+# A stack layout optionally carries a slice in brackets after the letters,
+# e.g. "txyz[:3,:,:]": the letters order the axes, the slice truncates the
+# data before the axes are inverted and reordered.
+_STACK_LAYOUT_SPEC_PATTERN = re.compile(
+    r"(?P<axes>[-A-Za-z]*)(?:\[(?P<slicing>[^\[\]]*)\])?"
+)
+
+
+def split_stack_layout(stack_layout: str) -> tuple[str, str | None]:
+    """Split a stack layout spec into its layout letters and an optional slice.
+
+    The slice, when present, is what sits between the brackets without the
+    brackets themselves, e.g. "txyz[:3,:,:]" -> ("txyz", ":3,:,:").
+
+    Raises:
+        ValueError: if the spec is not letters optionally followed by a
+            bracketed slice, or carries letters outside t, c, z, y, x.
+    """
+    match = _STACK_LAYOUT_SPEC_PATTERN.fullmatch(stack_layout.strip())
+    if match is None:
+        raise ValueError(
+            f"Stack layout {stack_layout!r} is not understood: expected layout "
+            "letters (t, c, z, y, x, each optionally prefixed with '-') with an "
+            "optional slice in brackets, e.g. 'txyz[:3,:,:]'."
+        )
+    axes, slicing = match.group("axes"), match.group("slicing")
+    unknown = sorted(
+        {char for char in axes if char != "-" and char.upper() not in "TCZYX"}
+    )
+    if unknown:
+        raise ValueError(
+            f"Stack layout {stack_layout!r} is not understood: unknown axis "
+            f"letter(s) {''.join(unknown)!r}, expected t, c, z, y or x, each "
+            "optionally prefixed with '-'."
+        )
+    return axes, slicing or None
+
+
+def _parse_slicing(slicing: str) -> list[slice | int]:
+    """Parse a slicing string like "0:3, :, :, :50" into numpy index entries."""
+    entries: list[slice | int] = []
+    for part in slicing.split(","):
+        part = part.strip()
+        try:
+            if ":" in part:
+                fields = [field.strip() for field in part.split(":")]
+                entries.append(
+                    slice(*(int(field) if field else None for field in fields))
+                )
+            elif part:
+                entries.append(int(part))
+            else:
+                raise ValueError("empty entry")
+        except (TypeError, ValueError) as err:
+            raise ValueError(
+                f"Slicing {slicing!r} is not understood: expected one entry per "
+                f"axis like '0:3', ':', '10:20:2' or an integer, got {part!r}."
+            ) from err
+    return entries
+
+
+def crop_to_stack_layout(
+    data: np.ndarray, stack_layout: str, slicing: str
+) -> tuple[str, np.ndarray]:
+    """Crop data along the axes of stack_layout, in the order they are written.
+
+    The entries follow the user-supplied layout, before any axis inversion or
+    reordering: entry i applies to axis i of stack_layout. There may be fewer
+    entries than axes, the remaining axes are then left untouched. An integer
+    entry selects a single index and drops its axis: the letter, and its '-'
+    inversion marker, leaves the layout too.
+
+    Returns:
+        The (possibly shortened) stack layout and the cropped data.
+    """
+    entries = _parse_slicing(slicing)
+    n_axes = len(_layout_tokens(stack_layout))
+    if len(entries) > n_axes:
+        raise ValueError(
+            f"Slicing {slicing!r} has {len(entries)} entries but the stack "
+            f"layout {stack_layout!r} has {n_axes} axes."
+        )
+    dropped = {i for i, entry in enumerate(entries) if isinstance(entry, int)}
+    data = data[tuple(entries)]
+    if dropped:
+        stack_layout = "".join(
+            f"{'-' if inverted else ''}{char}"
+            for i, (char, inverted) in enumerate(_layout_tokens(stack_layout))
+            if i not in dropped
+        )
+
+    return stack_layout, data
+
+
 def import_image(
     path: Path,
     key: str | None = None,
     image_name: str = "image",
     semantic_type: str = "raw",
     stack_layout: str = "YX",
-    m_slicing: str | None = None,
 ) -> PanSegImage | list[PanSegImage]:
     """
     Open an image file and create a PanSegImage object.
@@ -687,17 +1028,34 @@ def import_image(
         path (Path): Path to the image file
         key (Optional[str]): Key to load data from h5 or zarr files
         image_name (str): Name of the image (a unique name to identify the image)
-        semantic_type (str): Semantic type of the image, should be raw, segmentation,
-            prediction or label
-        stack_layout (str): Layout of the image, should be YX, CYX, ZYX, CZYX or ZCYX
-        m_slicing (str): Slicing to apply to the image, should be a string
-            with the format [start:stop, ...] for each dimension.
+        semantic_type (str): Semantic type of the image, should be raw,
+            segmentation, prediction or label.
+        stack_layout (str): Layout of the image, any of the letters t, c, z, y, x
+            Prepend any letter with a minus to invert it.
+            A slice can follow the letters, e.g. "txyz[:3,:,:]", to slice the
+            data before the axes are reordered.
     """
     global last_warning
-    stack_layout = stack_layout.upper()
+    stack_layout, slicing = split_stack_layout(stack_layout.upper())
+    is_tiff = path.suffix.lower() in TIFF_EXTENSIONS
+    if is_tiff:
+        # Multi-file OME-TIFF (UUID/FileName chain) is rejected at import.
+        check_ome_single_file(path)
+
     data, voxel_size = smart_load_with_vs(path, key)
     if voxel_size is None:
         voxel_size = VoxelSize()
+
+    # The time spacing is extracted from OME-TIFF metadata or the PanSeg
+    # h5/zarr attrs; other formats stay T-unaware and import with it unknown.
+    t_spacing: float | None = None
+    t_unit = "s"
+    if is_tiff:
+        t_spacing, t_unit = read_ome_time_spacing(path)
+    elif path.suffix.lower() in H5_EXTENSIONS:
+        t_spacing, t_unit = read_h5_time_spacing(path, key)
+    elif path.suffix.lower() in ZARR_EXTENSIONS:
+        t_spacing, t_unit = read_zarr_time_spacing(path, key)
 
     if not len(stack_layout.replace("-", "")) == len(data.shape):
         raise ValueError(
@@ -705,15 +1063,21 @@ def import_image(
         )
 
     original_data_shape = data.shape
+    # The slicing follows the user-supplied layout order, so it happens before
+    # stack_sort reorders (and inverts) the axes to the canonical T-C-Z-Y-X.
+    if slicing is not None:
+        stack_layout, data = crop_to_stack_layout(data, stack_layout, slicing)
     stack_layout, data, voxel_size = stack_sort(stack_layout, data, voxel_size)
 
     images = []
     image_layout = ImageLayout(stack_layout)
 
-    if image_layout in [ImageLayout.ZYX, ImageLayout.YX]:
-        if m_slicing is not None:
-            data = dp.image_crop(data, m_slicing)
-
+    if image_layout in [
+        ImageLayout.ZYX,
+        ImageLayout.YX,
+        ImageLayout.TZYX,
+        ImageLayout.TYX,
+    ]:
         image_properties = ImageProperties(
             name=image_name,
             semantic_type=SemanticType(semantic_type),
@@ -721,6 +1085,8 @@ def import_image(
             image_layout=image_layout,
             original_voxel_size=voxel_size,
             source_file_name=path.stem,
+            t_spacing=t_spacing if image_layout.is_timeseries else None,
+            t_unit=t_unit if image_layout.is_timeseries else "s",
         )
         if image_properties.image_type == ImageType.IMAGE:
             data = dp.normalize_01(data)
@@ -766,6 +1132,50 @@ def import_image(
                 source_file_name=path.stem,
             )
             images.append(PanSegImage(data=data[ch], properties=image_properties))
+
+    elif image_layout is ImageLayout.TCYX:
+        if (data.shape[1] > min(data.shape[2:]) or data.shape[1] > 9) and (
+            time.time() - last_warning
+        ) > 120:
+            last_warning = time.time()
+            raise ValueError(
+                f"Double check the stack layout and try again!\nData shape {original_data_shape}"
+            )
+
+        for ch in range(data.shape[1]):
+            image_properties = ImageProperties(
+                name=image_name + f"_{ch}",
+                semantic_type=SemanticType(semantic_type),
+                voxel_size=voxel_size,
+                image_layout=ImageLayout.TYX,
+                original_voxel_size=voxel_size,
+                source_file_name=path.stem,
+                t_spacing=t_spacing,
+                t_unit=t_unit,
+            )
+            images.append(PanSegImage(data=data[:, ch], properties=image_properties))
+
+    elif image_layout is ImageLayout.TCZYX:
+        if (data.shape[1] > min(data.shape[2:]) or data.shape[1] > 9) and (
+            time.time() - last_warning
+        ) > 120:
+            last_warning = time.time()
+            raise ValueError(
+                f"Double check the stack layout and try again!\nData shape {original_data_shape}"
+            )
+
+        for ch in range(data.shape[1]):
+            image_properties = ImageProperties(
+                name=image_name + f"_{ch}",
+                semantic_type=SemanticType(semantic_type),
+                voxel_size=voxel_size,
+                image_layout=ImageLayout.TZYX,
+                original_voxel_size=voxel_size,
+                source_file_name=path.stem,
+                t_spacing=t_spacing,
+                t_unit=t_unit,
+            )
+            images.append(PanSegImage(data=data[:, ch], properties=image_properties))
 
     elif image_layout is ImageLayout.ZCYX:
         logger.warning("##### WARNING: Depricated image layout ZCYX used #####")
@@ -876,6 +1286,7 @@ def save_image(
             stack=data,
             voxel_size=voxel_size,
             layout=image.image_layout.value,
+            t_spacing=image.properties.t_spacing,
         )
 
     elif export_format == "zarr":
@@ -888,6 +1299,9 @@ def save_image(
             stack=data,
             voxel_size=voxel_size,
             key=key,
+            axis_order=image.image_layout.value,
+            t_spacing=image.properties.t_spacing,
+            t_spacing_unit=image.properties.t_unit,
         )
 
     elif export_format == "h5":
@@ -895,7 +1309,15 @@ def save_image(
             raise ValueError("Key is required for h5 format")
 
         file_path_name = directory / f"{name_pattern}.h5"
-        create_h5(path=file_path_name, stack=data, voxel_size=voxel_size, key=key)
+        create_h5(
+            path=file_path_name,
+            stack=data,
+            voxel_size=voxel_size,
+            key=key,
+            axis_order=image.image_layout.value,
+            t_spacing=image.properties.t_spacing,
+            t_spacing_unit=image.properties.t_unit,
+        )
 
     else:
         raise ValueError(
@@ -913,10 +1335,27 @@ def save_image(
                 "Mesh export only supported for 3D, "
                 f"received: {image.dimensionality}, {image.name}"
             )
-        file_path_name = directory / f"{name_pattern}.{export_mesh}"
-        create_mesh(
-            path=file_path_name,
-            stack=data,
-            voxel_size=voxel_size,
-            close_mesh=close_mesh,
-        )
+        if image.is_timeseries:
+            # one mesh file per timepoint keeps the 1:1 timepoint-file
+            # mapping; empty timepoints export their (empty) scene too
+            time_axis = image.time_axis
+            assert time_axis is not None, "No time axis known!"
+            for t_index in range(data.shape[time_axis]):
+                frame = np.take(data, t_index, axis=time_axis)
+                file_path_name = (
+                    directory / f"{name_pattern}_t{t_index:03d}.{export_mesh}"
+                )
+                create_mesh(
+                    path=file_path_name,
+                    stack=frame,
+                    voxel_size=voxel_size,
+                    close_mesh=close_mesh,
+                )
+        else:
+            file_path_name = directory / f"{name_pattern}.{export_mesh}"
+            create_mesh(
+                path=file_path_name,
+                stack=data,
+                voxel_size=voxel_size,
+                close_mesh=close_mesh,
+            )

@@ -4,10 +4,11 @@ from typing import Optional
 from panseg.core.image import ImageLayout, PanSegImage, SemanticType
 from panseg.functionals.dataprocessing import fix_layout
 from panseg.functionals.prediction import biio_prediction, unet_prediction
-from panseg.tasks import task_tracker
+from panseg.tasks import task_tracker, timepoint_map
 
 
 @task_tracker
+@timepoint_map
 def unet_prediction_task(
     image: PanSegImage,
     model_name: str | None,
@@ -77,6 +78,7 @@ def unet_prediction_task(
 
 
 @task_tracker
+@timepoint_map
 def biio_prediction_task(
     image: PanSegImage,
     model_id: str,

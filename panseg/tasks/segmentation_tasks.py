@@ -10,12 +10,13 @@ from panseg.functionals.segmentation import (
     multicut,
     mutex_ws,
 )
-from panseg.tasks import task_tracker
+from panseg.tasks import task_tracker, timepoint_map
 
 logger = logging.getLogger(__name__)
 
 
 @task_tracker
+@timepoint_map
 def dt_watershed_task(
     image: PanSegImage,
     threshold: float = 0.5,
@@ -113,6 +114,7 @@ def dt_watershed_task(
 
 
 @task_tracker
+@timepoint_map
 def clustering_segmentation_task(
     image: PanSegImage,
     over_segmentation: PanSegImage | None = None,
@@ -186,6 +188,7 @@ def clustering_segmentation_task(
 
 
 @task_tracker
+@timepoint_map
 def lmc_segmentation_task(
     boundary_pmap: PanSegImage,
     superpixels: PanSegImage,
@@ -196,12 +199,16 @@ def lmc_segmentation_task(
     """Lifted multicut segmentation task.
 
     Args:
-        boundary_pmap (PanSegImage): cell boundary prediction, PanSegImage of shape (Z, Y, X) with values between 0 and 1.
-        superpixels (PanSegImage): superpixels/over-segmentation. Must have the same shape as boundary_pmap.
-        nuclei (PanSegImage): a nuclear segmentation or prediction map. Must have the same shape as boundary_pmap.
+        boundary_pmap (PanSegImage): cell boundary prediction, PanSegImage of
+            shape (Z, Y, X) with values between 0 and 1.
+        superpixels (PanSegImage): superpixels/over-segmentation.
+            Must have the same shape as boundary_pmap.
+        nuclei (PanSegImage): a nuclear segmentation or prediction map.
+            Must have the same shape as boundary_pmap.
         beta (float): beta parameter for the Multicut.
-            A small value will steer the segmentation towards under-segmentation, while
-            a high-value bias the segmentation towards the over-segmentation. (default: 0.5)
+            A small value will steer the segmentation towards under-segmentation,
+            while a high-value bias the segmentation towards the
+            over-segmentation. (default: 0.5)
         post_min_size (int): minimal size of the segments after Multicut. (default: 100)
     """
     if (
@@ -231,6 +238,7 @@ def lmc_segmentation_task(
 
 
 @task_tracker
+@timepoint_map
 def aio_watershed_task(
     image: PanSegImage,
     nuclei: Optional[PanSegImage],

@@ -8,6 +8,7 @@ from panseg.tasks.workflow_handler import RunTimeInputSchema, Task_message
 
 @task_tracker(
     is_root=True,
+    stack_level=True,
     list_inputs={
         "input_path": RunTimeInputSchema(
             description="Path to a file, or a directory containing files (all files will be imported) or list of paths.",
@@ -22,7 +23,6 @@ def import_image_task(
     stack_layout: str,
     image_name: str | None = None,
     key: str | None = None,
-    m_slicing: str | None = None,
 ) -> PanSegImage | list[PanSegImage] | Task_message:
     """
     Task wrapper creating a PanSegImage object from an image file.
@@ -30,10 +30,12 @@ def import_image_task(
     Args:
         input_path (Path): path to the image file
         semantic_type (str): semantic type of the image (raw, segmentation, prediction)
-        stack_layout (str): stack layout of the image (3D, 2D, 2D_time)
-        image_name (str): name of the image, if None the name will be the same as the file name
+        stack_layout (str): stack layout of the image
+            (any of the letters tczyx), optionally followed by a slice to
+            truncate before importing, e.g. "TYXC[:3,:,:,:]"
+        image_name (str): name of the image, if None the name will be the
+            same as the file name.
         key (str | None): key for the image (used only for h5 and zarr formats)
-        m_slicing (str | None): m_slicing of the image (None, time, z, y, x)
     """
 
     if image_name is None:
@@ -45,12 +47,12 @@ def import_image_task(
         image_name=image_name,
         semantic_type=semantic_type,
         stack_layout=stack_layout,
-        m_slicing=m_slicing,
     )
 
 
 @task_tracker(
     is_leaf=True,
+    stack_level=True,
     list_inputs={
         "export_directory": RunTimeInputSchema(
             description="Output directory path where the image will be saved",
@@ -103,7 +105,7 @@ def export_image_task(
     return None
 
 
-@task_tracker
+@task_tracker(stack_level=True)
 def merge_channels_task(**kwargs) -> PanSegImage:
     """Merge an arbitrary number of PanSegImages
 

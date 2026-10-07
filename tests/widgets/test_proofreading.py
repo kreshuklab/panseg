@@ -1,3 +1,5 @@
+import contextlib
+import threading
 from collections import deque
 from pathlib import Path
 
@@ -8,6 +10,7 @@ from magicgui.widgets import Container
 from napari.qt import get_qapp
 
 from panseg.core.image import PanSegImage
+from panseg.functionals.proofreading.split_merge_tools import split_merge_from_seeds
 from panseg.viewer_napari.widgets.proofreading import (
     CORRECTED_CELLS_LAYER_NAME,
     SCRIBBLES_LAYER_NAME,
@@ -158,10 +161,12 @@ class TestProofreadingHandler:
             seg_layer_name=mocker.DEFAULT,
             scale=mocker.DEFAULT,
             update_layer=mocker.DEFAULT,
+            _write_segmentation=mocker.DEFAULT,
         )
         proof._restore_state(mocker.sentinel)
 
-        assert mock["update_layer"].call_count == 2
+        mock["_write_segmentation"].assert_called_once()
+        mock["update_layer"].assert_called_once()
 
     def test__perform_undo_redo(self, proof, mocker):
         mock = mocker.patch.multiple(
@@ -213,7 +218,7 @@ class TestProofreadingHandler:
             "panseg.viewer_napari.widgets.proofreading.ProofreadingHandler",
             # corrected_cells_mask=napari_segmentation.data,
             corrected_cells_mask=[4],
-            corrected_cells=set((1, 2, 3)),
+            corrected_cells={1, 2, 3},
             scale=mocker.DEFAULT,
         )
         mock_update_layer = mocker.patch.object(proof, "update_layer")
@@ -223,7 +228,7 @@ class TestProofreadingHandler:
         )
 
         with h5py.File(h5_path, "r") as f:
-            assert all([k in f.keys() for k in ("label", "mask", "pmap", "raw")])
+            assert all(k in f for k in ("label", "mask", "pmap", "raw"))
 
         proof.load_state_from_disk(h5_path)
 
@@ -314,16 +319,300 @@ class TestProofreadingHandler:
         assert proof.max_label == 0
 
 
+def _full_region_slice(shape: tuple[int, ...]) -> tuple[slice, ...]:
+    return tuple(slice(0, s) for s in shape)
+
+
+class TestProofreadingHandlerTimeSeries:
+    @pytest.fixture
+    def bound_handler(
+        self, proof, make_napari_viewer_proxy, napari_timeseries_segmentation
+    ):
+        """A handler bound to timepoint 1 of the deterministic timeseries layer."""
+        viewer = make_napari_viewer_proxy()
+        viewer.add_layer(napari_timeseries_segmentation)
+        proof.setup(
+            PanSegImage.from_napari_layer(napari_timeseries_segmentation), timepoint=1
+        )
+        return proof, viewer, napari_timeseries_segmentation
+
+    def test_setup_binds_slice_world(self, bound_handler):
+        proof, viewer, layer = bound_handler
+
+        assert proof.active
+        assert proof.is_timeseries
+        assert proof.timepoint == 1
+        assert proof.n_timepoints == 3
+        assert "Scribbles (t=1)" in viewer.layers
+        assert "Correct Labels (t=1)" in viewer.layers
+        assert "Scribbles" not in viewer.layers
+        assert "Correct Labels" not in viewer.layers
+        for layer_name in ("Scribbles (t=1)", "Correct Labels (t=1)"):
+            canvas = viewer.layers[layer_name]
+            assert canvas.data.shape == layer.data.shape[1:]
+            np.testing.assert_array_equal(canvas.scale, (1.0, 1.0, 1.0))
+            np.testing.assert_array_equal(canvas.data, 0)
+
+    def test_scribbles_and_corrected_mask_read_dynamic_layers(self, bound_handler):
+        proof, viewer, _ = bound_handler
+        viewer.layers["Scribbles (t=1)"].data[0, 0, 0] = 7
+        viewer.layers["Correct Labels (t=1)"].data[0, 0, 0] = 7
+
+        np.testing.assert_array_equal(
+            proof.scribbles, viewer.layers["Scribbles (t=1)"].data
+        )
+        np.testing.assert_array_equal(
+            proof.corrected_cells_mask, viewer.layers["Correct Labels (t=1)"].data
+        )
+
+    def test_segmentation_property_reads_slice(self, bound_handler):
+        proof, _, timeseries = bound_handler
+        np.testing.assert_array_equal(proof.segmentation, timeseries.data[1])
+        assert proof.segmentation.shape == timeseries.data.shape[1:]
+
+    def test_max_label_on_slice(self, bound_handler):
+        proof, _, _ = bound_handler
+        # t=1 carries labels 3 and 4; other timepoints carry 1, 2 and 5.
+        assert proof.max_label == 4
+
+    def test_bboxes_on_slice(self, bound_handler):
+        proof, _, _ = bound_handler
+        assert set(proof.bboxes) == {0, 3, 4}
+
+    def test_reset_scribbles_targets_current_timepoint(self, bound_handler):
+        proof, viewer, _ = bound_handler
+        viewer.layers["Scribbles (t=1)"].data[0, 0, 0] = 7
+
+        proof.reset_scribbles()
+
+        np.testing.assert_array_equal(viewer.layers["Scribbles (t=1)"].data, 0)
+
+    def test_reset_corrected_targets_current_timepoint(self, bound_handler):
+        proof, viewer, _ = bound_handler
+        proof.toggle_corrected_cell(3)
+
+        proof.reset_corrected()
+
+        np.testing.assert_array_equal(viewer.layers["Correct Labels (t=1)"].data, 0)
+        assert proof.corrected_cells == set()
+
+    def test_toggle_corrected_cell_marks_slice(self, bound_handler):
+        proof, viewer, _ = bound_handler
+
+        proof.toggle_corrected_cell(3)
+
+        assert proof.corrected_cells == {3}
+        mask = viewer.layers["Correct Labels (t=1)"].data
+        assert mask.shape == (4, 10, 10)
+        np.testing.assert_array_equal(mask[0:2, 0:2, 0:2], 1)
+        assert mask.sum() == 8
+
+    def test_undo_snapshot_is_slice_sized(self, bound_handler):
+        proof, _, _ = bound_handler
+
+        proof.save_to_history()
+
+        snapshot = proof._state.history_undo[0]
+        assert snapshot.segmentation.shape == (4, 10, 10)
+        assert snapshot.corrected_cells_mask.shape == (4, 10, 10)
+
+    def test_undo_restores_segmentation_at_timepoint(self, bound_handler):
+        proof, _viewer, layer = bound_handler
+        before = layer.data.copy()
+        proof.save_to_history()
+        edited = proof.segmentation.copy()
+        edited[0:2, 0:2, 0:2] = 99
+        layer.data[1] = edited
+
+        proof.undo()
+
+        np.testing.assert_array_equal(layer.data[1], before[1])
+        assert (layer.data[1][0:2, 0:2, 0:2] == 3).all()
+
+    def test_update_after_proofreading_writes_only_selected_timepoint(
+        self, bound_handler
+    ):
+        proof, _, layer = bound_handler
+        before = layer.data.copy()
+
+        edited = proof.segmentation.copy()
+        edited[0:2, 0:2, 0:2] = 42
+        proof.update_after_proofreading(edited, _full_region_slice(edited.shape), {})
+
+        after = layer.data
+        np.testing.assert_array_equal(after[0], before[0])
+        np.testing.assert_array_equal(after[2], before[2])
+        np.testing.assert_array_equal(after[1], edited)
+
+    def test_update_after_proofreading_2d_tyx(
+        self, proof, make_napari_viewer_proxy, napari_timeseries_segmentation_2d
+    ):
+        viewer = make_napari_viewer_proxy()
+        viewer.add_layer(napari_timeseries_segmentation_2d)
+        layer = viewer.layers["test_segmentation_timeseries_2d"]
+        proof.setup(
+            PanSegImage.from_napari_layer(napari_timeseries_segmentation_2d),
+            timepoint=2,
+        )
+        before = layer.data.copy()
+
+        edited = proof.segmentation.copy()
+        edited[5:7, 5:7] = 6
+        proof.update_after_proofreading(edited, _full_region_slice(edited.shape), {})
+
+        np.testing.assert_array_equal(layer.data[0], before[0])
+        np.testing.assert_array_equal(layer.data[1], before[1])
+        np.testing.assert_array_equal(layer.data[2], edited)
+
+    def test_rebind_renames_canvases_and_persists_content(self, bound_handler):
+        proof, viewer, _ = bound_handler
+        viewer.layers["Scribbles (t=1)"].data[0, 0, 0] = 7
+        viewer.layers["Correct Labels (t=1)"].data[1, 1, 1] = 7
+        scribbles_before = viewer.layers["Scribbles (t=1)"].data.copy()
+        corrected_before = viewer.layers["Correct Labels (t=1)"].data.copy()
+
+        proof.rebind(2)
+
+        assert proof.timepoint == 2
+        assert "Scribbles (t=1)" not in viewer.layers
+        assert "Correct Labels (t=1)" not in viewer.layers
+        assert "Scribbles (t=2)" in viewer.layers
+        assert "Correct Labels (t=2)" in viewer.layers
+        np.testing.assert_array_equal(
+            viewer.layers["Scribbles (t=2)"].data, scribbles_before
+        )
+        np.testing.assert_array_equal(
+            viewer.layers["Correct Labels (t=2)"].data, corrected_before
+        )
+
+    def test_rebind_recomputes_derived_state(self, bound_handler):
+        proof, _, _ = bound_handler
+        proof.toggle_corrected_cell(3)
+        proof.save_to_history()
+        assert proof._state.history_undo
+
+        proof.rebind(2)
+
+        # The mask marked the t=0 cube; at t=2 that cube is label 5.
+        assert proof.corrected_cells == {5}
+        assert set(proof.bboxes) == {0, 5}
+        assert len(proof._state.history_undo) == 0
+        assert len(proof._state.history_redo) == 0
+
+    def test_rebind_rejects_out_of_range_timepoint(self, bound_handler):
+        proof, _, _ = bound_handler
+
+        with pytest.raises(ValueError):
+            proof.rebind(3)
+        assert proof.timepoint == 1
+
+    def test_save_and_load_roundtrip_timeseries(
+        self, bound_handler, tmp_path, make_napari_viewer_proxy
+    ):
+        proof, viewer, layer = bound_handler
+        proof.toggle_corrected_cell(3)
+        h5_path = tmp_path / "timeseries_state.h5"
+
+        proof.save_state_to_disk(h5_path, raw=None, pmap=None)
+
+        with h5py.File(h5_path, "r") as f:
+            assert f["label"].shape == layer.data.shape
+            assert f["mask"].shape == (4, 10, 10)
+            assert f["mask"].attrs["timepoint"] == 1
+            assert set(f["mask"].attrs["corrected_cells"]) == {3}
+
+        fresh_handler = ProofreadingHandler()
+        fresh_handler.load_state_from_disk(h5_path)
+
+        assert fresh_handler.is_timeseries
+        assert fresh_handler.timepoint == 1
+        assert fresh_handler.corrected_cells == {3}
+        assert "Scribbles (t=1)" in viewer.layers
+        assert "Correct Labels (t=1)" in viewer.layers
+        # the loaded state restores the corrected mask into the viewer layer
+        mask = viewer.layers["Correct Labels (t=1)"].data
+        assert mask[0:2, 0:2, 0:2].sum() == 8
+
+    def test_save_static_has_no_timepoint_attribute(
+        self, proof, make_napari_viewer_proxy, napari_segmentation, tmp_path
+    ):
+        viewer = make_napari_viewer_proxy()
+        viewer.add_layer(napari_segmentation)
+        proof.setup(PanSegImage.from_napari_layer(napari_segmentation))
+        h5_path = tmp_path / "static_state.h5"
+
+        proof.save_state_to_disk(h5_path, raw=None, pmap=None)
+
+        with h5py.File(h5_path, "r") as f:
+            assert "timepoint" not in f["mask"].attrs
+
+    def test_n_timepoints_raises_for_static(self, proof):
+        with pytest.raises(ValueError):
+            _ = proof.n_timepoints
+
+    def test_timepoint_raises_for_static(self, proof):
+        with pytest.raises(ValueError):
+            _ = proof.timepoint
+
+    def test_setup_requires_timepoint_for_timeseries(
+        self, proof, napari_timeseries_segmentation
+    ):
+        with pytest.raises(ValueError, match="must be bound to a timepoint"):
+            proof.setup(PanSegImage.from_napari_layer(napari_timeseries_segmentation))
+
+    def test_corrected_cells_from_mask_excludes_background(self, bound_handler):
+        proof, viewer, _ = bound_handler
+        # A stale mark over background at t=1 (z=3, y=0, x=0 is outside every cell).
+        viewer.layers["Correct Labels (t=1)"].data[3, 0, 0] = 1
+
+        proof.rebind(1)
+
+        assert 0 not in proof.corrected_cells
+        assert proof.corrected_cells == set()
+
+    def test_load_legacy_timeseries_file_without_mask(
+        self, bound_handler, napari_timeseries_segmentation, tmp_path
+    ):
+        proof, viewer, _ = bound_handler
+        proof.toggle_corrected_cell(3)
+        h5_path = tmp_path / "legacy_timeseries_state.h5"
+        proof.save_state_to_disk(h5_path, raw=None, pmap=None)
+        with h5py.File(h5_path, "a") as f:
+            del f["mask"]
+
+        fresh_handler = ProofreadingHandler()
+        fresh_handler.load_state_from_disk(h5_path)
+
+        # No timepoint attribute: the session falls back to the displayed
+        # timepoint (the T slider centers on t=1) with an empty slice mask.
+        assert fresh_handler.active
+        assert fresh_handler.timepoint == 1
+        assert fresh_handler.corrected_cells == set()
+        mask = viewer.layers["Correct Labels (t=1)"].data
+        assert mask.shape == napari_timeseries_segmentation.data.shape[1:]
+        np.testing.assert_array_equal(mask, 0)
+
+
 class TestProofreadingTab:
     def test_init(self, tab):
         assert not tab.busy
-        assert len(tab.container) == 11
+        assert len(tab.container) == 12
+
+    def test_timepoint_select_has_label_and_tooltip(self, tab):
+        assert tab.widget_timepoint_select.label == "Timepoint"
+        assert "timepoint" in tab.widget_timepoint_select.tooltip
+        assert "Clean scribbles" in tab.widget_timepoint_select.tooltip
 
     def test_hide_all(self, tab):
         app = get_qapp()
         tab.container.show()
+        tab._show_all_widgets()
+        tab.widget_timepoint_container.show()
+        tab.widget_timepoint_select.show()
         tab._hide_all_widgets()
-        assert all([not w.visible for w in tab.container[3:]])
+        assert all(not w.visible for w in tab._session_widgets())
+        assert not tab.widget_timepoint_container.visible
+        assert not tab.widget_timepoint_select.visible
         tab.container.hide()
         app.quit()
 
@@ -331,7 +620,10 @@ class TestProofreadingTab:
         app = get_qapp()
         tab.container.show()
         tab._show_all_widgets()
-        assert all([w.visible for w in tab.container[3:]])
+        assert all(w.visible for w in tab._session_widgets())
+        # The timeseries-only widgets are managed per session type.
+        assert not tab.widget_timepoint_container.visible
+        assert not tab.widget_timepoint_select.visible
         tab.container.hide()
         app.quit()
 
@@ -750,3 +1042,362 @@ class TestProofreadingTab:
         assert tab.widget_save_state.raw.value is None
         assert tab.widget_save_state.pmap.value is None
         assert tab.widget_split_and_merge_from_scribbles.image.value is None
+
+
+class TestProofreadingTabTimeSeries:
+    @pytest.fixture
+    def timeseries_tab(
+        self, tab, make_napari_viewer_proxy, napari_timeseries_segmentation
+    ):
+        """A tab initialized on the deterministic timeseries layer at timepoint 0."""
+        viewer = make_napari_viewer_proxy()
+        viewer.add_layer(napari_timeseries_segmentation)
+        viewer.dims.set_current_step(0, 0)
+        tab.container.show()
+        tab._initialize_from_layer(napari_timeseries_segmentation)
+        return tab, viewer
+
+    def test_init_defaults_to_slider_position(
+        self, tab, make_napari_viewer_proxy, napari_timeseries_segmentation
+    ):
+        viewer = make_napari_viewer_proxy()
+        viewer.add_layer(napari_timeseries_segmentation)
+        tab.container.show()
+        viewer.dims.set_current_step(0, 2)
+
+        tab._initialize_from_layer(napari_timeseries_segmentation)
+
+        assert tab.handler.timepoint == 2
+        assert tab.widget_timepoint_container.visible
+        assert tab.widget_timepoint_select.visible
+        assert tab.widget_timepoint_select.value == 2
+        assert tab.widget_timepoint_select.max == 2
+        assert "Scribbles (t=2)" in viewer.layers
+
+    def test_init_static_hides_timepoint_widgets(
+        self, tab, make_napari_viewer_proxy, napari_segmentation
+    ):
+        viewer = make_napari_viewer_proxy()
+        viewer.add_layer(napari_segmentation)
+        tab.container.show()
+
+        tab._initialize_from_layer(napari_segmentation)
+
+        assert not tab.widget_timepoint_container.visible
+        assert not tab.widget_timepoint_select.visible
+        assert not tab.handler.is_timeseries
+
+    def test_reinit_removes_stale_helper_layers(
+        self, timeseries_tab, napari_segmentation, mocker
+    ):
+        tab, viewer = timeseries_tab
+        assert "Scribbles (t=0)" in viewer.layers
+        viewer.add_layer(napari_segmentation)
+
+        tab._initialize_from_layer(napari_segmentation, are_you_sure=True)
+
+        assert "Scribbles (t=0)" not in viewer.layers
+        assert "Correct Labels (t=0)" not in viewer.layers
+        assert "Scribbles" in viewer.layers
+        assert "Correct Labels" in viewer.layers
+        assert not tab.handler.is_timeseries
+
+    def test_timepoint_input_change_rebinds_and_moves_slider(self, timeseries_tab):
+        tab, viewer = timeseries_tab
+        assert tab.handler.timepoint == 0
+        scribbles = viewer.layers["Scribbles (t=0)"]
+        scribbles.data[0, 0, 0] = 7
+        marks = scribbles.data.copy()
+
+        tab.widget_timepoint_select.value = 2
+
+        assert tab.handler.timepoint == 2
+        assert viewer.dims.current_step[0] == 2
+        assert "Scribbles (t=0)" not in viewer.layers
+        assert "Scribbles (t=2)" in viewer.layers
+        np.testing.assert_array_equal(viewer.layers["Scribbles (t=2)"].data, marks)
+
+    def test_slider_move_does_not_update_timepoint_input(self, timeseries_tab):
+        tab, viewer = timeseries_tab
+        assert tab.handler.timepoint == 0
+
+        viewer.dims.set_current_step(0, 2)
+
+        assert tab.widget_timepoint_select.value == 0
+        assert tab.handler.timepoint == 0
+
+    def test_init_from_layer_rejects_timeseries_helper_layer_by_prefix(
+        self, tab, make_napari_viewer_proxy, napari_timeseries_segmentation, mocker
+    ):
+        mock_log = mocker.patch("panseg.viewer_napari.widgets.proofreading.log")
+        layer = napari_timeseries_segmentation
+        layer.name = "Scribbles (t=1)"
+
+        tab._initialize_from_layer(layer)
+
+        mock_log.assert_called_with(
+            "Scribble or corrected cells layer is not intended to be proofread, choose a segmentation",
+            thread="Proofreading tool",
+            level="error",
+        )
+        assert not tab.handler.active
+
+    def test_init_from_layer_choices_exclude_helper_layers_by_prefix(
+        self, tab, make_napari_viewer_proxy, napari_timeseries_segmentation
+    ):
+        viewer = make_napari_viewer_proxy()
+        viewer.add_layer(napari_timeseries_segmentation)
+        viewer.add_labels(
+            np.zeros((3, 4, 10, 10), dtype="uint16"), name="Scribbles (t=1)"
+        )
+
+        tab._initialize_from_layer(napari_timeseries_segmentation)
+
+        choices = tab.widget_proofreading_initialisation.segmentation.choices
+        assert napari_timeseries_segmentation in choices
+        assert viewer.layers["Scribbles (t=1)"] not in choices
+
+    def test_split_merge_refused_when_slider_diverges(
+        self, timeseries_tab, mocker, napari_timeseries_prediction
+    ):
+        tab, viewer = timeseries_tab
+        viewer.dims.set_current_step(0, 2)
+        mock_log = mocker.patch("panseg.viewer_napari.widgets.proofreading.log")
+        mock_split_merge = mocker.patch(
+            "panseg.viewer_napari.widgets.proofreading.split_merge_from_seeds"
+        )
+
+        tab.widget_split_and_merge_from_scribbles(
+            viewer=viewer, image=napari_timeseries_prediction
+        )
+
+        mock_split_merge.assert_not_called()
+        assert mock_log.call_args_list[-1].args[0] == (
+            "The displayed timepoint (2) does not match the session timepoint (0). "
+            "Split/Merge was not applied: set the Timepoint field to 2 or move the time "
+            "slider back to 0."
+        )
+        assert not tab.busy
+
+    def test_set_busy_locks_timepoint_field(self, timeseries_tab):
+        tab, _viewer = timeseries_tab
+        assert tab.widget_timepoint_select.enabled
+
+        tab._set_busy(True)
+
+        assert tab.busy
+        assert not tab.widget_timepoint_select.enabled
+
+        tab._set_busy(False)
+
+        assert not tab.busy
+        assert tab.widget_timepoint_select.enabled
+
+    def test_split_merge_writeback_isolated_from_midflight_timepoint_change(
+        self, timeseries_tab, napari_timeseries_prediction, mocker, qtbot
+    ):
+        """A Timepoint change while a split/merge worker runs is refused.
+
+        The in-flight write-back must land in the session timepoint's slice
+        only, and the undo snapshot the worker pushed must survive.
+        """
+        tab, viewer = timeseries_tab
+        layer = viewer.layers["test_segmentation_timeseries"]
+        before = layer.data.copy()
+        scribbles = viewer.layers["Scribbles (t=0)"]
+        # One scribble color over the two t=0 cells: they merge.
+        scribbles.data[0:2, 0:2, 0:2] = 1
+        scribbles.data[0:2, 5:7, 5:7] = 1
+
+        # Hold the worker inside split_merge_from_seeds — after it pushed the
+        # undo snapshot, before it writes back — to make the race window
+        # deterministic.
+        reached, release = threading.Event(), threading.Event()
+        real_split_merge = split_merge_from_seeds
+
+        def blocked_split_merge(*args, **kwargs):
+            reached.set()
+            assert release.wait(timeout=30)
+            return real_split_merge(*args, **kwargs)
+
+        mocker.patch(
+            "panseg.viewer_napari.widgets.proofreading.split_merge_from_seeds",
+            side_effect=blocked_split_merge,
+        )
+        mock_log = mocker.patch("panseg.viewer_napari.widgets.proofreading.log")
+
+        worker = tab.widget_split_and_merge_from_scribbles(
+            viewer=viewer, image=napari_timeseries_prediction
+        )
+        assert worker is not None
+        assert tab.busy
+        try:
+            # The Timepoint field is locked while the worker runs.
+            assert not tab.widget_timepoint_select.enabled
+            qtbot.waitUntil(lambda: reached.is_set(), timeout=10000)
+            assert len(tab.handler._state.history_undo) == 1
+
+            tab.widget_timepoint_select.value = 2
+
+            # The rebind is refused: session, slider and field all stay on t=0.
+            assert mock_log.call_args_list[-1].args[0] == (
+                "The proofreading tool is busy. The timepoint change to 2 was not "
+                "applied: wait for the running worker to finish before switching "
+                "timepoints."
+            )
+            assert tab.handler.timepoint == 0
+            assert tab.widget_timepoint_select.value == 0
+            assert viewer.dims.current_step[0] == 0
+            assert "Scribbles (t=0)" in viewer.layers
+
+            release.set()
+            qtbot.waitUntil(lambda: not tab.busy, timeout=10000)
+            assert tab.widget_timepoint_select.enabled
+
+            # The merged result landed in t=0 only.
+            after = layer.data
+            np.testing.assert_array_equal(after[1], before[1])
+            np.testing.assert_array_equal(after[2], before[2])
+            merged = after[0]
+            assert (merged[0:2, 0:2, 0:2] == 1).all()
+            assert (merged[0:2, 5:7, 5:7] == 1).all()
+            assert (merged[4:, 8:, 8:] == 0).all()
+
+            # The worker's undo snapshot survived the attempted rebind.
+            assert len(tab.handler._state.history_undo) == 1
+            assert not tab.handler._state.history_redo
+            np.testing.assert_array_equal(
+                tab.handler._state.history_undo[0].segmentation, before[0]
+            )
+        finally:
+            # Never leave the worker blocked in a failed test run.
+            release.set()
+            with contextlib.suppress(Exception):
+                qtbot.waitUntil(lambda: not worker.is_running, timeout=10000)
+
+    def test_split_merge_applies_to_session_timepoint_only(
+        self, timeseries_tab, napari_timeseries_prediction, qtbot
+    ):
+        tab, viewer = timeseries_tab
+        layer = viewer.layers["test_segmentation_timeseries"]
+        before = layer.data.copy()
+        scribbles = viewer.layers["Scribbles (t=0)"]
+        # One scribble color over the two t=0 cells: they merge.
+        scribbles.data[0:2, 0:2, 0:2] = 1
+        scribbles.data[0:2, 5:7, 5:7] = 1
+
+        worker = tab.widget_split_and_merge_from_scribbles(
+            viewer=viewer, image=napari_timeseries_prediction
+        )
+        assert worker is not None
+        qtbot.waitUntil(lambda: not tab.busy)
+
+        after = layer.data
+        np.testing.assert_array_equal(after[1], before[1])
+        np.testing.assert_array_equal(after[2], before[2])
+        merged = after[0]
+        assert (merged[0:2, 0:2, 0:2] == 1).all()
+        assert (merged[0:2, 5:7, 5:7] == 1).all()
+        assert (merged[4:, 8:, 8:] == 0).all()
+
+    def test_split_merge_slices_boundary_image_at_session_timepoint(
+        self, timeseries_tab, napari_timeseries_prediction, mocker, qtbot
+    ):
+        tab, viewer = timeseries_tab
+        mock_split_merge = mocker.patch(
+            "panseg.viewer_napari.widgets.proofreading.split_merge_from_seeds"
+        )
+        mock_split_merge.return_value = (
+            tab.handler.segmentation.copy(),
+            _full_region_slice((4, 10, 10)),
+            {},
+        )
+        scribbles = viewer.layers["Scribbles (t=0)"]
+        scribbles.data[0, 0, 0] = 1
+
+        tab.widget_split_and_merge_from_scribbles(
+            viewer=viewer, image=napari_timeseries_prediction
+        )
+        qtbot.waitUntil(lambda: not tab.busy)
+
+        image_data = mock_split_merge.call_args.kwargs["image"]
+        np.testing.assert_array_equal(image_data, napari_timeseries_prediction.data[0])
+
+    def test_double_click_refused_when_slider_diverges(
+        self, timeseries_tab, make_napari_viewer_proxy, mocker
+    ):
+        tab, viewer = timeseries_tab
+        viewer.dims.set_current_step(0, 2)
+        mock_log = mocker.patch("panseg.viewer_napari.widgets.proofreading.log")
+        mock_toggle = mocker.patch.object(tab.handler, "toggle_corrected_cell")
+
+        tab._widget_add_label_to_corrected(viewer, (2, 1, 1, 1))
+
+        mock_toggle.assert_not_called()
+        assert mock_log.call_args_list[-1].args[0] == (
+            "The displayed timepoint (2) does not match the session timepoint (0). "
+            "The cell marking was not applied: set the Timepoint field to 2 or move "
+            "the time slider back to 0."
+        )
+
+    def test_widget_add_label_to_corrected_rasterizes_slice(self, timeseries_tab):
+        tab, viewer = timeseries_tab
+        # Event position at t=0, z=1, y=1, x=1; scale (1, 1, 1, 1): the t
+        # axis is in timepoint indices, so the world position is the index.
+        position = (0.0, 1.0, 1.0, 1.0)
+
+        tab._widget_add_label_to_corrected(viewer, position)
+
+        # (z, y, x) = (1, 1, 1) is inside the t=0 cube, label 1.
+        assert tab.handler.corrected_cells == {1}
+
+    def test_extract_corrected_labels_single_timepoint_layer(
+        self, timeseries_tab, qtbot
+    ):
+        tab, viewer = timeseries_tab
+        tab.widget_timepoint_select.value = 1
+        tab.handler.toggle_corrected_cell(3)
+
+        worker = tab.widget_filter_segmentation()
+        assert worker is not None
+        # The Timepoint field is locked while the extraction runs.
+        assert not tab.widget_timepoint_select.enabled
+        qtbot.waitUntil(lambda: not tab.busy)
+        assert tab.widget_timepoint_select.enabled
+
+        extracted = viewer.layers["test_segmentation_timeseries_corrected_t001"]
+        assert extracted.data.shape == (4, 10, 10)
+        expected = tab.handler.segmentation.copy()
+        expected[tab.handler.corrected_cells_mask == 0] = 0
+        np.testing.assert_array_equal(extracted.data, expected)
+
+    def test_clean_scribble_targets_current_timepoint(self, timeseries_tab, mocker):
+        tab, viewer = timeseries_tab
+        viewer.layers["Scribbles (t=0)"].data[0, 0, 0] = 7
+        mock_reset = mocker.patch.object(tab.handler, "reset_scribbles")
+
+        tab.widget_clean_scribble(viewer=viewer)
+
+        mock_reset.assert_called_once()
+
+    def test_init_from_file_binds_saved_timepoint(
+        self, tab, make_napari_viewer_proxy, napari_timeseries_segmentation, tmp_path
+    ):
+        viewer = make_napari_viewer_proxy()
+        viewer.add_layer(napari_timeseries_segmentation)
+        tab.container.show()
+        tab._initialize_from_layer(napari_timeseries_segmentation)
+        tab.handler.toggle_corrected_cell(3)
+        h5_path = tmp_path / "timeseries_state.h5"
+        tab.handler.save_state_to_disk(h5_path, raw=None, pmap=None)
+        viewer.layers.remove("test_segmentation_timeseries")
+        viewer.dims.set_current_step(0, 0)
+
+        tab._initialize_from_file(h5_path, are_you_sure=True)
+
+        assert tab.handler.timepoint == 1
+        assert tab.widget_timepoint_select.visible
+        assert tab.widget_timepoint_select.value == 1
+        assert viewer.dims.current_step[0] == 1
+        assert tab.handler.corrected_cells == {3}
+        assert "Correct Labels (t=1)" in viewer.layers

@@ -2,12 +2,21 @@ import logging
 import struct
 import warnings
 from pathlib import Path
+from xml.etree import ElementTree
 
 import numpy as np
 import pytest
 import tifffile
 
-from panseg.io.tiff import create_tiff, load_tiff, read_tiff_shape, read_tiff_voxel_size
+from panseg.io.tiff import (
+    check_ome_single_file,
+    create_tiff,
+    load_tiff,
+    read_ome_axes,
+    read_ome_time_spacing,
+    read_tiff_shape,
+    read_tiff_voxel_size,
+)
 from panseg.io.voxelsize import VoxelSize
 
 OME_DESCRIPTION_HEADER = (
@@ -85,10 +94,22 @@ def test_tiff_roundtrip_small(tmp_path, dtype):
 
 def test_tiff_roundtrip_bigtiff(tmp_path):
     data = np.array(np.random.random((875, 100, 100)), dtype="float32")
-    out = tmp_path / "out.tiff"
+    out = tmp_path / "out.ome.tiff"
     create_tiff(out, data, VoxelSize(), force_bigtiff=True)
     assert out.exists()
     loaded = load_tiff(out)
+    assert loaded.shape == data.shape
+    assert np.array_equal(loaded, data)
+
+
+def test_tiff_roundtrip_bigtiff_renaming(tmp_path):
+    data = np.array(np.random.random((875, 100, 100)), dtype="float32")
+    out = tmp_path / "out.tiff"
+    written = tmp_path / "out.ome.tiff"
+    create_tiff(out, data, VoxelSize(), force_bigtiff=True)
+    assert not out.exists()
+    assert written.exists()
+    loaded = load_tiff(written)
     assert loaded.shape == data.shape
     assert np.array_equal(loaded, data)
 
@@ -104,7 +125,7 @@ def test_create_tiff_roundtrip_voxel_size(tmp_path):
 def test_create_tiff_bigtiff_roundtrip_voxel_size(tmp_path):
     data = np.random.random((10, 20, 30)).astype("float32")
     voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.2))
-    out = tmp_path / "out.tiff"
+    out = tmp_path / "out.ome.tiff"
     create_tiff(out, data, voxel_size, force_bigtiff=True)
     assert _assert_no_warnings(read_tiff_voxel_size, out) == voxel_size
     assert read_tiff_shape(out) == (10, 20, 30)
@@ -118,7 +139,7 @@ def test_create_tiff_bigtiff_roundtrip_voxel_size(tmp_path):
 def test_create_tiff_bigtiff_roundtrip_voxel_size_layouts(tmp_path, layout, shape):
     data = np.random.random(shape).astype("float32")
     voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.2))
-    out = tmp_path / "out.tiff"
+    out = tmp_path / "out.ome.tiff"
     create_tiff(out, data, voxel_size, layout=layout, force_bigtiff=True)
     assert _assert_no_warnings(read_tiff_voxel_size, out) == voxel_size
     assert read_tiff_shape(out) == shape
@@ -307,3 +328,437 @@ def test_read_tiff_voxel_size_resource_rgb_3d():
     path = Path(__file__).resolve().parent.parent / "resources" / "rgb_3D.tif"
     with pytest.warns(UserWarning, match="No metadata found"):
         assert read_tiff_voxel_size(path) == VoxelSize()
+
+
+# Committed resliced anchors: the three T-bearing OME-TIFFs resliced offline
+# to T=4, C=3, Z=2, Y=X=32 (see ome_tiff_examples/reslice_anchors.py). Tests
+# load the committed files and never reslice at runtime.
+OME_EXAMPLES = (
+    Path(__file__).resolve().parent.parent / "resources" / "ome_tiff_examples"
+)
+
+COMMITTED_ANCHORS = [
+    pytest.param("time-series.ome.tif", "TYX", (4, 32, 32), id="TYX"),
+    pytest.param("4D-series.ome.tif", "TZYX", (4, 2, 32, 32), id="TZYX"),
+    pytest.param(
+        "multi-channel-4D-series.ome.tif", "TCZYX", (4, 3, 2, 32, 32), id="TCZYX"
+    ),
+]
+
+
+@pytest.mark.parametrize("file_name, axes, shape", COMMITTED_ANCHORS)
+def test_committed_anchor_axes_and_shape(file_name, axes, shape):
+    path = OME_EXAMPLES / file_name
+    assert path.exists()
+    with tifffile.TiffFile(path) as tiff:
+        series = tiff.series[0]
+        assert series.axes == axes
+        assert series.shape == shape
+        data = tiff.asarray()
+    assert data.shape == shape
+    assert data.dtype == np.int8
+
+
+@pytest.mark.parametrize("file_name, axes, shape", COMMITTED_ANCHORS)
+def test_committed_anchor_no_timing_metadata(file_name, axes, shape):
+    path = OME_EXAMPLES / file_name
+    with tifffile.TiffFile(path) as tiff:
+        root = ElementTree.fromstring(tiff.ome_metadata)
+    pixels = _ome_pixels(root)
+    assert "TimeIncrement" not in pixels.attrib
+    assert "TimeIncrementUnit" not in pixels.attrib
+    assert not [e for e in pixels if e.tag.endswith("Plane")]
+
+
+def test_committed_anchor_license_note():
+    note = (OME_EXAMPLES / "LICENSE.md").read_text()
+    assert "CC-BY-4.0" in note
+    assert "The Open Microscopy Environment" in note
+
+
+def test_committed_anchor_reslice_script_documented():
+    script = OME_EXAMPLES / "reslice_anchors.py"
+    assert script.exists()
+    text = script.read_text()
+    assert "ome_tiff_examples.tar.xz" in text
+    assert "time-series.ome.tif" in text
+    assert "4D-series.ome.tif" in text
+    assert "multi-channel-4D-series.ome.tif" in text
+
+
+# Synthetic OME-TIFF builders: every timing variant, written into tmp_path at
+# test time (none of the committed anchors carries timing metadata).
+def _ome_pixels(root):
+    image = next(e for e in root if e.tag.endswith("Image"))
+    return next(e for e in image if e.tag.endswith("Pixels"))
+
+
+@pytest.mark.parametrize("unit", ["s", "ms", "min"])
+def test_ome_time_increment(make_ome_timeseries, unit):
+    path = make_ome_timeseries(t_increment=500, t_increment_unit=unit)
+    with tifffile.TiffFile(path) as tiff:
+        series = tiff.series[0]
+        assert series.axes == "TZYX"
+        assert series.shape == (4, 5, 16, 16)
+        root = ElementTree.fromstring(tiff.ome_metadata)
+    pixels = _ome_pixels(root)
+    assert pixels.get("TimeIncrement") == "500"
+    assert pixels.get("TimeIncrementUnit") == unit
+    assert not [e for e in pixels if e.tag.endswith("Plane")]
+
+
+def test_ome_timeseries_uniform_plane_delta_t(make_ome_timeseries):
+    path = make_ome_timeseries(plane_delta_t=1000, plane_delta_t_unit="ms")
+    with tifffile.TiffFile(path) as tiff:
+        root = ElementTree.fromstring(tiff.ome_metadata)
+    pixels = _ome_pixels(root)
+    assert pixels.get("TimeIncrement") is None
+    planes = [e for e in pixels if e.tag.endswith("Plane")]
+    assert len(planes) == 4 * 5
+    per_timepoint = {}
+    for p in planes:
+        per_timepoint.setdefault(p.get("TheT"), set()).add(p.get("DeltaT"))
+    # realistic absolute acquisition times: the first plane of timepoint i
+    # sits at i * 1000 ms
+    assert per_timepoint == {
+        "0": {"0"},
+        "1": {"1000"},
+        "2": {"2000"},
+        "3": {"3000"},
+    }
+    assert all(p.get("DeltaTUnit") == "ms" for p in planes)
+
+
+def test_ome_timeseries_nonuniform_plane_delta_t(make_ome_timeseries):
+    path = make_ome_timeseries(nonuniform_plane_delta_t=True)
+    with tifffile.TiffFile(path) as tiff:
+        root = ElementTree.fromstring(tiff.ome_metadata)
+    pixels = _ome_pixels(root)
+    assert pixels.get("TimeIncrement") is None
+    per_timepoint = {}
+    for p in pixels:
+        if p.tag.endswith("Plane"):
+            per_timepoint.setdefault(p.get("TheT"), set()).add(p.get("DeltaT"))
+    assert len(per_timepoint) == 4
+    # absolute times whose first-plane differences are non-uniform
+    assert per_timepoint == {
+        "0": {"0"},
+        "1": {"1000"},
+        "2": {"3000"},
+        "3": {"7000"},
+    }
+
+
+def test_ome_timeseries_no_timing_metadata(make_ome_timeseries):
+    path = make_ome_timeseries()
+    with tifffile.TiffFile(path) as tiff:
+        series = tiff.series[0]
+        root = ElementTree.fromstring(tiff.ome_metadata)
+    assert series.axes == "TZYX"
+    pixels = _ome_pixels(root)
+    assert pixels.get("TimeIncrement") is None
+    assert not [e for e in pixels if e.tag.endswith("Plane")]
+
+
+def test_ome_timeseries_t1_squeezes(make_ome_timeseries):
+    path = make_ome_timeseries(axes="TYX", shape=(1, 16, 16))
+    with tifffile.TiffFile(path) as tiff:
+        series = tiff.series[0]
+        root = ElementTree.fromstring(tiff.ome_metadata)
+    pixels = _ome_pixels(root)
+    assert pixels.get("SizeT") == "1"
+    assert series.axes == "YX"
+    assert series.shape == (16, 16)
+
+
+@pytest.mark.parametrize("file_name, axes, shape", COMMITTED_ANCHORS)
+def test_read_ome_axes_committed_anchors(file_name, axes, shape):
+    assert read_ome_axes(OME_EXAMPLES / file_name) == axes
+
+
+def test_read_ome_axes_non_ome_tiff(tmp_path):
+    out = tmp_path / "out.tiff"
+    create_tiff(out, np.empty((10, 20, 30), dtype="float32"), VoxelSize())
+    assert read_ome_axes(out) is None
+
+
+def test_read_ome_axes_multifile_uses_first_position(ome_timeseries_multifile):
+    first, second, _ = ome_timeseries_multifile
+    assert read_ome_axes(first) == "TZYX"
+    assert read_ome_axes(second) == "TZYX"
+
+
+@pytest.mark.parametrize("unit", ["s", "ms", "min"])
+def test_read_ome_time_spacing_time_increment(make_ome_timeseries, unit):
+    path = make_ome_timeseries(t_increment=500, t_increment_unit=unit)
+    assert read_ome_time_spacing(path) == (500.0, unit)
+
+
+def test_read_ome_time_spacing_uniform_plane_delta_t(make_ome_timeseries):
+    # DeltaT holds absolute times 0, 1000, 2000, 3000 ms; the spacing is
+    # recovered as their uniform difference, not read directly
+    path = make_ome_timeseries(plane_delta_t=1000, plane_delta_t_unit="ms")
+    assert read_ome_time_spacing(path) == (1000.0, "ms")
+
+
+def test_read_ome_time_spacing_delta_t_offset_is_differenced_away(
+    make_ome_timeseries,
+):
+    # absolute times not starting at 0: only the differences matter
+    path = make_ome_timeseries(
+        plane_delta_t=[5, 1005, 2005, 3005], plane_delta_t_unit="ms"
+    )
+    assert read_ome_time_spacing(path) == (1000.0, "ms")
+
+
+def test_read_ome_time_spacing_constant_zero_delta_t_warns_unknown(
+    make_ome_timeseries,
+):
+    # constant DeltaT of 0.0 (all absolute times zero) is not a positive
+    # spacing: warn and treat as missing, never return 0.0
+    path = make_ome_timeseries(plane_delta_t=0.0, plane_delta_t_unit="ms")
+    with pytest.warns(UserWarning, match="DeltaT"):
+        assert read_ome_time_spacing(path) == (None, "s")
+
+
+def test_read_ome_time_spacing_partial_delta_t_warns_unknown(make_ome_timeseries):
+    # planes documented for every timepoint, but DeltaT absent on one of them
+    path = make_ome_timeseries(
+        plane_delta_t=[0, None, 2000, 3000], plane_delta_t_unit="ms"
+    )
+    with pytest.warns(UserWarning, match="DeltaT"):
+        assert read_ome_time_spacing(path) == (None, "s")
+
+
+def test_read_ome_time_spacing_single_timepoint_delta_t_warns_unknown(
+    make_ome_timeseries,
+):
+    # a single timepoint carries no difference to recover a spacing from
+    path = make_ome_timeseries(
+        axes="TYX", shape=(1, 16, 16), plane_delta_t=1000, plane_delta_t_unit="ms"
+    )
+    with pytest.warns(UserWarning, match="DeltaT"):
+        assert read_ome_time_spacing(path) == (None, "s")
+
+
+def test_read_ome_time_spacing_nonuniform_plane_delta_t(make_ome_timeseries):
+    path = make_ome_timeseries(nonuniform_plane_delta_t=True)
+    with pytest.warns(UserWarning, match="DeltaT"):
+        assert read_ome_time_spacing(path) == (None, "s")
+
+
+def test_read_ome_time_spacing_absent(make_ome_timeseries):
+    path = make_ome_timeseries()
+    assert read_ome_time_spacing(path) == (None, "s")
+
+
+def test_read_ome_time_spacing_non_ome_tiff(tmp_path):
+    out = tmp_path / "out.tiff"
+    create_tiff(out, np.empty((10, 20, 30), dtype="float32"), VoxelSize())
+    assert read_ome_time_spacing(out) == (None, "s")
+
+
+_OME_NS = "http://www.openmicroscopy.org/Schemas/OME/2016-06"
+
+
+def _set_tiff_data_uuid(path, uuid_text, file_name=None):
+    """Append a UUID child element to the first TiffData of the OME-XML.
+
+    Mirrors the OME 2016-06 schema: UUID is a child of TiffData and FileName
+    is an optional attribute of it, defaulting to the opened file.
+    """
+    with tifffile.TiffFile(path) as tiff:
+        root = ElementTree.fromstring(tiff.ome_metadata)
+    image = next(e for e in root if e.tag.endswith("Image"))
+    pixels = next(e for e in image if e.tag.endswith("Pixels"))
+    tiff_data = next(e for e in pixels if e.tag.endswith("TiffData"))
+    uuid_el = ElementTree.SubElement(tiff_data, f"{{{_OME_NS}}}UUID")
+    uuid_el.text = uuid_text
+    if file_name is not None:
+        uuid_el.set("FileName", file_name)
+    ElementTree.register_namespace("", _OME_NS)
+    xml = ElementTree.tostring(root, encoding="unicode")
+    with tifffile.TiffFile(path, mode="r+") as tiff:
+        tiff.pages[0].tags["ImageDescription"].overwrite(xml.encode("ascii"))
+
+
+def test_check_ome_single_file_rejects_multifile(ome_timeseries_multifile):
+    first, second, _ = ome_timeseries_multifile
+    with pytest.raises(ValueError, match="Multi-file OME-TIFF"):
+        check_ome_single_file(first)
+
+
+def test_check_ome_single_file_allows_single_file(make_ome_timeseries):
+    check_ome_single_file(make_ome_timeseries())
+
+
+def test_check_ome_single_file_allows_self_referencing_uuid(
+    make_ome_timeseries,
+):
+    path = make_ome_timeseries()
+    _set_tiff_data_uuid(
+        path, "urn:uuid:11111111-1111-4111-8111-111111111111", path.name
+    )
+    check_ome_single_file(path)
+
+
+def test_check_ome_single_file_allows_uuid_without_file_name(
+    make_ome_timeseries,
+):
+    path = make_ome_timeseries()
+    _set_tiff_data_uuid(path, "urn:uuid:11111111-1111-4111-8111-111111111111")
+    check_ome_single_file(path)
+
+
+def test_check_ome_single_file_ignores_non_ome(tmp_path):
+    out = tmp_path / "out.tiff"
+    create_tiff(out, np.empty((10, 20, 30), dtype="float32"), VoxelSize())
+    check_ome_single_file(out)
+
+
+# --- Time-aware export: a time-bearing image is always written
+# as OME-TIFF (the ImageJ branch stays time-less), T fills the T slot of the
+# TZCYXS order, TimeIncrement is written only when the spacing is known. ---
+
+# Layouts and shapes of the time-bearing exports (every layout writes a
+# 4-timepoint file). The per-layout SizeT/SizeC/SizeZ attribute expectations
+# live in TIMESERIES_EXPORT_PIXEL_SIZES and are consumed only by
+# test_create_tiff_timeseries_ome_pixel_sizes.
+TIMESERIES_EXPORT_CASES = [
+    pytest.param("TYX", (4, 16, 16), id="TYX"),
+    pytest.param("TCYX", (4, 2, 16, 16), id="TCYX"),
+    pytest.param("TZYX", (4, 5, 16, 16), id="TZYX"),
+    pytest.param("TCZYX", (4, 2, 5, 16, 16), id="TCZYX"),
+]
+
+TIMESERIES_EXPORT_PIXEL_SIZES = {
+    "TYX": {"SizeT": "4", "SizeC": "1", "SizeZ": "1"},
+    "TCYX": {"SizeT": "4", "SizeC": "2", "SizeZ": "1"},
+    "TZYX": {"SizeT": "4", "SizeC": "1", "SizeZ": "5"},
+    "TCZYX": {"SizeT": "4", "SizeC": "2", "SizeZ": "5"},
+}
+
+
+@pytest.mark.parametrize("layout,shape", TIMESERIES_EXPORT_CASES)
+def test_create_tiff_timeseries_layouts_write_ome(tmp_path, layout, shape):
+    data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
+    out = tmp_path / "out.ome.tiff"
+    create_tiff(out, data, VoxelSize(voxels_size=(1.0, 1.0, 1.0)), layout=layout)
+    with tifffile.TiffFile(out) as tiff:
+        assert tiff.series[0].axes == layout
+        assert tiff.series[0].shape == shape
+        assert tiff.imagej_metadata is None
+        loaded = tiff.asarray()
+    assert np.array_equal(loaded, data)
+
+
+@pytest.mark.parametrize("layout,shape", TIMESERIES_EXPORT_CASES)
+def test_create_tiff_timeseries_ome_pixel_sizes(tmp_path, layout, shape):
+    data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
+    out = tmp_path / "out.ome.tiff"
+    voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.2))
+    create_tiff(out, data, voxel_size, layout=layout)
+    with tifffile.TiffFile(out) as tiff:
+        pixels = _ome_pixels(ElementTree.fromstring(tiff.ome_metadata))
+    for key, value in TIMESERIES_EXPORT_PIXEL_SIZES[layout].items():
+        assert pixels.get(key) == value
+    assert _assert_no_warnings(read_tiff_voxel_size, out) == voxel_size
+
+
+@pytest.mark.parametrize("layout,shape", TIMESERIES_EXPORT_CASES)
+def test_create_tiff_timeseries_time_increment(tmp_path, layout, shape):
+    data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
+    out = tmp_path / "out.ome.tiff"
+    create_tiff(
+        out,
+        data,
+        VoxelSize(voxels_size=(1.0, 1.0, 1.0)),
+        layout=layout,
+        t_spacing=10.5,
+    )
+    with tifffile.TiffFile(out) as tiff:
+        pixels = _ome_pixels(ElementTree.fromstring(tiff.ome_metadata))
+    assert pixels.get("SizeT") == "4"
+    assert pixels.get("TimeIncrement") == "10.5"
+    assert pixels.get("TimeIncrementUnit") == "s"
+    assert read_ome_time_spacing(out) == (10.5, "s")
+
+
+@pytest.mark.parametrize("layout,shape", TIMESERIES_EXPORT_CASES)
+def test_create_tiff_timeseries_unknown_t_spacing_no_time_metadata(
+    tmp_path, layout, shape
+):
+    data = (np.random.default_rng(0).random(shape) * 100).astype("uint16")
+    out = tmp_path / "out.ome.tiff"
+    create_tiff(out, data, VoxelSize(voxels_size=(1.0, 1.0, 1.0)), layout=layout)
+    with tifffile.TiffFile(out) as tiff:
+        pixels = _ome_pixels(ElementTree.fromstring(tiff.ome_metadata))
+    assert pixels.get("SizeT") == "4"
+    assert pixels.get("TimeIncrement") is None
+    assert pixels.get("TimeIncrementUnit") is None
+    assert not [e for e in pixels if e.tag.endswith("Plane")]
+    assert read_ome_time_spacing(out) == (None, "s")
+
+
+def test_create_tiff_timeseries_bigtiff_behavior_unchanged(tmp_path):
+    # forced bigtiff stays available for T layouts; BigTIFF is still only
+    # chosen when forced or above the 4 GiB boundary
+    data = (np.random.default_rng(0).random((4, 5, 16, 16)) * 100).astype("uint16")
+    out = tmp_path / "out.tiff"
+    written = tmp_path / "out.ome.tiff"
+    create_tiff(
+        out,
+        data,
+        VoxelSize(voxels_size=(1.0, 1.0, 1.0)),
+        layout="TZYX",
+        t_spacing=2.0,
+        force_bigtiff=True,
+    )
+    with tifffile.TiffFile(written) as tiff:
+        assert tiff.is_bigtiff
+        assert tiff.series[0].axes == "TZYX"
+        assert np.array_equal(tiff.asarray(), data)
+    assert read_ome_time_spacing(written) == (2.0, "s")
+
+
+def test_create_tiff_imagej_branch_stays_timeless(tmp_path):
+    # a non-T layout keeps the ImageJ writer, even when a t_spacing is passed
+    out = tmp_path / "out.tiff"
+    create_tiff(
+        out,
+        np.zeros((5, 16, 16), dtype="uint16"),
+        VoxelSize(voxels_size=(1.0, 1.0, 1.0)),
+        layout="ZYX",
+        t_spacing=10.0,
+    )
+    with tifffile.TiffFile(out) as tiff:
+        assert tiff.imagej_metadata is not None
+        assert tiff.ome_metadata is None
+
+
+def test_ome_timeseries_multifile_chain(ome_timeseries_multifile):
+    first, second, data = ome_timeseries_multifile
+    assert first.exists()
+    assert second.exists()
+    with tifffile.TiffFile(first) as tiff:
+        series = tiff.series[0]
+        root_first = ElementTree.fromstring(tiff.ome_metadata)
+        loaded = tiff.asarray()
+    with tifffile.TiffFile(second) as tiff:
+        root_second = ElementTree.fromstring(tiff.ome_metadata)
+    pixels_first = _ome_pixels(root_first)
+    assert pixels_first.get("SizeT") == "4"
+    tiff_data = [e for e in pixels_first if e.tag.endswith("TiffData")]
+    assert len(tiff_data) == 2
+    uuid_pairs = {
+        (u.text, u.get("FileName"))
+        for td in tiff_data
+        for u in td
+        if u.tag.endswith("UUID")
+    }
+    assert len(uuid_pairs) == 2
+    assert {name for _, name in uuid_pairs} == {first.name, second.name}
+    assert _ome_pixels(root_second).get("SizeT") == "2"
+    assert series.axes == "TZYX"
+    assert series.shape == data.shape == (4, 2, 16, 16)
+    np.testing.assert_array_equal(loaded, data)

@@ -7,6 +7,31 @@ from panseg import logger
 from panseg.io.voxelsize import VoxelSize
 
 
+def _export_empty_scene(scene: "trimesh.Scene", path: Path) -> None:
+    """
+    Write a scene without geometry to disk.
+
+    trimesh refuses to export empty scenes ("Can't export empty scenes!").
+    An empty timepoint still needs its file to preserve the 1:1
+    timepoint-file mapping, so the empty container is written with the
+    format's low-level exporter. Formats without an empty-scene writer keep
+    trimesh's behavior and raise.
+    """
+    file_type = path.suffix.lstrip(".").lower()
+    if file_type == "glb":
+        path.write_bytes(trimesh.exchange.gltf.export_glb(scene))
+    elif file_type == "gltf":
+        data = trimesh.exchange.gltf.export_gltf(scene)
+        path.write_bytes(data["model.gltf"])
+    elif file_type == "obj":
+        data = trimesh.exchange.export.export_obj(scene)
+        path.write_bytes(data if isinstance(data, bytes) else data.encode("ascii"))
+    elif file_type == "ply":
+        path.write_bytes(trimesh.exchange.ply.export_ply(scene.to_mesh()))
+    else:
+        scene.export(path)
+
+
 def create_mesh(
     path: Path,
     stack: np.ndarray,
@@ -45,5 +70,8 @@ def create_mesh(
         )
         scene.add_geometry(mesh)
 
-    scene.export(path)
+    if scene.geometry:
+        scene.export(path)
+    else:
+        _export_empty_scene(scene, path)
     return scene

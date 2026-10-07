@@ -3,7 +3,7 @@ from typing import Optional
 
 import napari
 from magicgui import magic_factory
-from magicgui.widgets import Container, Label, PushButton
+from magicgui.widgets import Container, PushButton
 from napari.layers import Image, Labels, Layer, Shapes
 
 from panseg import logger
@@ -81,7 +81,7 @@ class Preprocessing_Tab:
         viewer = napari.current_viewer()
         if viewer is not None:
             addShape_button.clicked.connect(
-                lambda _: viewer.add_shapes(ndim=3, scale=viewer.layers.extent.step)
+                lambda _: self._add_crop_shapes_layer(viewer)
             )
         self.widget_cropping_placeholder = Container(widgets=[addShape_button])
         self.widget_cropping.hide()
@@ -118,14 +118,6 @@ class Preprocessing_Tab:
         self.widget_image_pair_operations = self.factory_image_pair_operations()
         self.widget_image_pair_operations.self.bind(self)
 
-        # @@@@@ Placeholder @@@@@
-        self.hidden_label = Label(
-            value="Preprocessing only supported for 2D and 3D images"
-        )
-        self.hidden_label.hide()
-        self.to_restore = []
-        self.hidden = False
-
         # @@@@@ Toggle buttons @@@@@
         self.widget_show_rescaling = self.factory_show_button()
         self.widget_show_rescaling.self.bind(self)
@@ -150,7 +142,6 @@ class Preprocessing_Tab:
         self.container = Container(
             widgets=[
                 self.tab_help,
-                self.hidden_label,
                 div("Layer Selection"),
                 self.widget_layer_select,
                 div("Crop"),
@@ -170,7 +161,6 @@ class Preprocessing_Tab:
 
     def get_container(self):
         # getter to keep consistency to other tabs
-        # only needed to hide hole tab (4d workaround)
         return self.container
 
     @magic_factory(
@@ -210,24 +200,6 @@ class Preprocessing_Tab:
         else:
             self.widget_image_pair_operations.hide()
             self.widget_show_image_operations.show()
-
-    def toggle_visibility_3(self, visible: bool):
-        """Toggle visibility of everything in preprocessing"""
-        logger.debug(f"toggle_visibility_3 called with {visible}")
-        if visible and self.hidden:
-            self.hidden_label.hide()
-            for w in self.to_restore:
-                w.show()
-            self.to_restore = []
-            self.toggle_visibility_1(True)
-            self.hidden = False
-        elif not visible:
-            self.hidden = True
-            for w in self.container:
-                if w.visible:
-                    self.to_restore.append(w)
-                    w.hide()
-            self.hidden_label.show()
 
     @magic_factory(
         call_button="Run Gaussian Smoothing",
@@ -341,6 +313,23 @@ class Preprocessing_Tab:
             },
         )
 
+    def _add_crop_shapes_layer(self, viewer):
+        """Add the shapes layer the crop rectangle is drawn in.
+
+        The layer's dimensionality follows the selected image's spatial
+        dimensionality (2 for YX/TYX, 3 for ZYX/TZYX). A rectangle drawn on
+        a timeseries carries no T coordinate, so the crop ignores the
+        rectangle's position along the time axis.
+        """
+        layer = self.widget_layer_select.layer.value
+        if not isinstance(layer, (Image, Labels)):
+            viewer.add_shapes(ndim=3, scale=viewer.layers.extent.step)
+            return
+        ps_image = PanSegImage.from_napari_layer(layer)
+        axis_indices = ps_image.image_layout.spatial_axis_indices
+        scale = tuple(layer.scale[i] for i in axis_indices)
+        viewer.add_shapes(ndim=len(axis_indices), scale=scale)
+
     def update_layer_selection(self, event):
         """To be called when the layer list changes."""
         logger.debug(
@@ -391,11 +380,8 @@ class Preprocessing_Tab:
             self.widget_cropping.crop_z.hide()
             return None
 
-        if ps_image.is_multichannel:
-            raise ValueError("Multichannel images are not supported for cropping.")
-
         self.widget_cropping.crop_z.show()
-        image_shape_z = ps_image.shape[0]
+        image_shape_z = ps_image.shape[ps_image.image_layout.spatial_axis_indices[0]]
 
         self.widget_cropping.crop_z.step = 1
 
@@ -575,27 +561,28 @@ class Preprocessing_Tab:
         if not (isinstance(image, Image) or isinstance(image, Labels)):
             raise ValueError("Image must be an Image or Label layer.")
 
-        if len(image.data.shape) > 3:
-            logger.warning(
-                "Preprocessing not supported for 4d images",
-            )
-            self.toggle_visibility_3(False)
-            return
-        else:
-            self.toggle_visibility_3(True)
+        ps_image = PanSegImage.from_napari_layer(image)
 
-        if image.data.ndim == 2 or (image.data.ndim == 3 and image.data.shape[0] == 1):
+        if ps_image.dimensionality == ImageDimensionality.TWO:
             for widget in self.list_widget_rescaling_3d:
                 widget.hide()
         else:
             for widget in self.list_widget_rescaling_3d:
                 widget.show()
 
-        offset = 1 if image.data.ndim == 2 else 0
-        for i, (shape, scale) in enumerate(zip(image.data.shape, image.scale)):
-            # TODO: fix for 4d images
-            self.widget_rescaling.out_voxel_size[i + offset].value = scale
-            self.widget_rescaling.reference_shape[i + offset].value = shape
+        # Prefill from the spatial axes only: T and C are never surfaced.
+        # The widget slots are in fixed Z, Y, X order; absent axes keep
+        # their untouched defaults.
+        for axis, widget_index in zip("ZYX", range(3)):
+            layer_axis = ps_image.image_layout.axis_index(axis)
+            if layer_axis is None:
+                continue
+            self.widget_rescaling.out_voxel_size[widget_index].value = image.scale[
+                layer_axis
+            ]
+            self.widget_rescaling.reference_shape[widget_index].value = ps_image.shape[
+                layer_axis
+            ]
 
         if isinstance(image, Labels):
             self.widget_rescaling.order.value = RescaleType.NEAREST.int_val

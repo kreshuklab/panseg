@@ -106,6 +106,23 @@ def read_h5_shape(path: Path, key: Optional[str] = None) -> tuple[int, ...]:
     return shape
 
 
+def read_h5_axis_order(path: Path, key: Optional[str] = None) -> Optional[str]:
+    """
+    Read the axis_order attribute of a dataset written by PanSeg, e.g. "TZYX".
+
+    Args:
+        path (Path): Path to the h5file
+        key (Optional[str], optional): Optional, key of the dataset in the h5 file. Defaults to None.
+
+    Returns:
+        str | None: axis order string, or None when the attribute is absent
+            (older files)
+    """
+    with h5py.File(path, "r") as f:
+        data = _get_h5_dataset(f, key)
+        return data.attrs.get("axis_order", None)
+
+
 def read_h5_voxel_size(
     path: Path,
     key: Optional[str] = None,
@@ -133,12 +150,42 @@ def read_h5_voxel_size(
     return voxel_size
 
 
+def read_h5_time_spacing(
+    path: Path, key: Optional[str] = None
+) -> tuple[Optional[float], str]:
+    """
+    Read the time spacing attrs of a dataset written by PanSeg.
+
+    The attrs are written when the exported axis order carries a time axis
+    and the spacing is known. Returns (None, "s") when the attrs are absent
+    (older files, unknown spacing, or no time axis).
+
+    Args:
+        path (Path): Path to the h5file
+        key (Optional[str], optional): Optional, key of the dataset in the h5 file. Defaults to None.
+
+    Returns:
+        tuple: (time spacing value or None, unit string)
+    """
+    with h5py.File(path, "r") as f:
+        data = _get_h5_dataset(f, key)
+        t_spacing = data.attrs.get("t_spacing", None)
+        t_unit = str(data.attrs.get("t_spacing_unit", "s"))
+
+    if t_spacing is None:
+        return None, "s"
+    return float(t_spacing), t_unit
+
+
 def create_h5(
     path: Path,
     stack: np.ndarray,
     key: str,
     voxel_size: Optional[VoxelSize] = None,
     mode: str = "a",
+    axis_order: Optional[str] = None,
+    t_spacing: Optional[float] = None,
+    t_spacing_unit: str = "s",
 ) -> None:
     """
     Create a dataset inside a h5 file from a numpy array.
@@ -149,6 +196,14 @@ def create_h5(
         key (str): key of the dataset in the h5 file.
         voxel_size (VoxelSize): voxel size of the dataset.
         mode (str): mode to open the h5 file ['w', 'a'].
+        axis_order (Optional[str]): layout string of the stack (e.g. "TZYX"),
+            written as the dataset attr ``axis_order``. Written on every
+            PanSeg export; old readers ignore it.
+        t_spacing (Optional[float]): time spacing between timepoints in
+            seconds, written as the dataset attr ``t_spacing`` when the axis
+            order carries a time axis. None (unknown) writes no time attrs.
+        t_spacing_unit (str): unit of the time spacing, written as the
+            dataset attr ``t_spacing_unit``.
 
     """
 
@@ -165,6 +220,11 @@ def create_h5(
         # save voxel_size
         if voxel_size is not None and voxel_size.voxels_size is not None:
             f[key].attrs["element_size_um"] = voxel_size.voxels_size
+        if axis_order is not None:
+            f[key].attrs["axis_order"] = axis_order
+            if "T" in axis_order and t_spacing is not None:
+                f[key].attrs["t_spacing"] = t_spacing
+                f[key].attrs["t_spacing_unit"] = t_spacing_unit
 
 
 def list_h5_keys(path: Path) -> list[str]:

@@ -5,19 +5,19 @@ from typing import Optional, Sequence
 
 from magicgui import magic_factory
 from magicgui.widgets import Container, Label, PushButton, create_widget
-from magicgui.widgets.bases import ButtonWidget, CategoricalWidget
+from magicgui.widgets.bases import ButtonWidget, CategoricalWidget, ValueWidget
 from napari.layers import Image, Labels, Layer
 from qtpy import QtGui
 
 from panseg import logger
-from panseg.core.image import PanSegImage, SemanticType
+from panseg.core.image import TIME_UNIT_CHOICES, PanSegImage, SemanticType
 from panseg.io import H5_EXTENSIONS, ZARR_EXTENSIONS
-from panseg.io.h5 import list_h5_keys, read_h5_shape
-from panseg.io.io import shape_to_stack_layout
-from panseg.io.pil import PIL_EXTENSIONS, read_pil_shape
-from panseg.io.tiff import TIFF_EXTENSIONS, read_tiff_shape
-from panseg.io.zarr import list_zarr_keys, read_zarr_shape
-from panseg.tasks.dataprocessing_tasks import set_voxel_size_task
+from panseg.io.h5 import list_h5_keys
+from panseg.io.io import guess_stack_layout
+from panseg.io.pil import PIL_EXTENSIONS
+from panseg.io.tiff import TIFF_EXTENSIONS
+from panseg.io.zarr import list_zarr_keys
+from panseg.tasks.dataprocessing_tasks import set_t_spacing_task, set_voxel_size_task
 from panseg.tasks.io_tasks import import_image_task
 from panseg.viewer_napari import log
 from panseg.viewer_napari.widgets.utils import (
@@ -73,6 +73,12 @@ class Input_Tab:
 
         # self.widget_set_voxel_size.called.connect(self._on_set_voxel_size_layer_done)
 
+        # @@@@@ Set time spacing @@@@@
+        self.widget_set_t_spacing = self.factory_set_t_spacing()
+        self._wrap_t_spacing()
+        self.widget_set_t_spacing.self.bind(self)
+        self.widget_set_t_spacing.hide()
+
         # @@@@@ Show info @@@@@
         self.widget_info = Label(
             value="Select layer to show information here...",
@@ -103,6 +109,8 @@ class Input_Tab:
                 self.widget_info,
                 div("Set voxel size"),
                 self.widget_set_voxel_size,
+                div("Set time spacing"),
+                self.widget_set_t_spacing,
             ],
             labels=False,
         )
@@ -138,7 +146,7 @@ class Input_Tab:
         stack_layout={
             "value": "",
             "label": "Stack layout",
-            "tooltip": "c for channel, xyz for dimensions, e.g.:\nzyxc will be reshaped to [C][Z]YX.\nInvert an axis by adding `-` infront of the letter.",
+            "tooltip": "t for time, c for channel, xyz for dimensions, e.g.:\ntzyxc will be reshaped to [T][C][Z]YX.\nInvert an axis by adding `-` infront of the letter.\nTruncate the data before importing with a slice after the letters, e.g. txyz[:3,:,:]:\nthe entries follow the layout as written, before reordering, an integer drops its axis.",
             "widget_type": "LineEdit",
         },
     )
@@ -299,25 +307,33 @@ class Input_Tab:
 
         if ext in H5_EXTENSIONS:
             key = self.dataset_key.value
-            shape = read_h5_shape(path=path, key=key)
-            self.widget_open_file.stack_layout.value = shape_to_stack_layout(shape)
+            self.widget_open_file.stack_layout.value = guess_stack_layout(path, key)
 
         elif ext in ZARR_EXTENSIONS:
             key = self.dataset_key.value
-            shape = read_zarr_shape(path=path, key=key)
-            self.widget_open_file.stack_layout.value = shape_to_stack_layout(shape)
+            self.widget_open_file.stack_layout.value = guess_stack_layout(path, key)
 
         elif ext in TIFF_EXTENSIONS:
-            shape = read_tiff_shape(path)
-            self.widget_open_file.stack_layout.value = shape_to_stack_layout(shape)
+            self.widget_open_file.stack_layout.value = guess_stack_layout(path)
 
         elif ext in PIL_EXTENSIONS:
-            shape = read_pil_shape(path)
-            self.widget_open_file.stack_layout.value = shape_to_stack_layout(shape)
+            self.widget_open_file.stack_layout.value = guess_stack_layout(path)
 
     def _on_done(self):
         logger.debug("_on_done called!")
         self.look_up_dataset_keys(self.widget_open_file.path.value)
+
+    def _selected_panseg_image(self) -> PanSegImage:
+        """Return the PanSegImage of the layer selected in the Details widget."""
+        layer = self.widget_details_layer_select.layer.value
+        if layer is None:
+            raise ValueError("No layer selected.")
+
+        assert isinstance(layer, (Image, Labels)), (
+            "Only Image and Labels layers are supported for PanSeg."
+            f" Layer was {layer}, type: {type(layer)}"
+        )
+        return PanSegImage.from_napari_layer(layer)
 
     @magic_factory(
         call_button="Set Voxel Size",
@@ -331,15 +347,7 @@ class Input_Tab:
         voxel_size: tuple[float, float, float] = (1.0, 1.0, 1.0),
     ) -> None:
         """Set the voxel size of the selected layer."""
-        layer = self.widget_details_layer_select.layer.value
-        if layer is None:
-            raise ValueError("No layer selected.")
-
-        assert isinstance(layer, (Image, Labels)), (
-            "Only Image and Labels layers are supported for PanSeg voxel size."
-            f"layer was {layer}, type: {type(layer)}"
-        )
-        ps_image = PanSegImage.from_napari_layer(layer)
+        ps_image = self._selected_panseg_image()
         return schedule_task(
             set_voxel_size_task,
             task_kwargs={
@@ -348,11 +356,88 @@ class Input_Tab:
             },
         )
 
+    @magic_factory(
+        call_button="Set Time Spacing",
+    )
+    def factory_set_t_spacing(self) -> None:
+        """Set the time spacing of the selected timeseries layer."""
+        ps_image = self._selected_panseg_image()
+        if not ps_image.is_timeseries:
+            raise ValueError(
+                f"Layer {ps_image.name} is not a timeseries, no time spacing to set."
+            )
+
+        value = self.t_spacing.value.strip()
+        if value == "":
+            t_spacing_value: float | None = None
+        else:
+            try:
+                t_spacing_value = float(value)
+            except ValueError:
+                logger.warning(f"Invalid time spacing {value!r}.")
+                return
+            if t_spacing_value <= 0:
+                logger.warning(f"Time spacing must be positive, got {t_spacing_value}.")
+                return
+
+        return schedule_task(
+            set_t_spacing_task,
+            task_kwargs={
+                "image": ps_image,
+                "t_spacing": t_spacing_value,
+                "t_unit": self.t_unit.value,
+            },
+        )
+
+    def _wrap_t_spacing(self):
+        """Group the time spacing value and its unit in one horizontal row."""
+        w = self.widget_set_t_spacing
+
+        t_spacing_d = {
+            "label": "Time spacing",
+            "widget_type": "LineEdit",
+            "options": {
+                "tooltip": "Set the time spacing between timepoints in the selected unit.\n"
+                "Leave empty to mark the time spacing as unknown.",
+            },
+            "annotation": str,
+            "name": "_t_spacing",
+        }
+        t_unit_d = {
+            "label": "Unit",
+            "widget_type": "ComboBox",
+            "value": "s",
+            "options": {
+                "choices": list(TIME_UNIT_CHOICES),
+                "tooltip": "Unit of the time spacing.",
+            },
+            "annotation": str,
+            "name": "_t_unit",
+        }
+
+        t_spacing: ValueWidget = create_widget(**t_spacing_d)
+        t_unit: CategoricalWidget = create_widget(**t_unit_d)
+        t_unit.max_width = 80
+
+        combo = Container(
+            widgets=[t_spacing, t_unit],
+            layout="horizontal",
+            labels=False,
+            name="t_spacing_combo",
+            label="Time spacing",
+            gui_only=True,
+        )
+
+        self.t_spacing = t_spacing
+        self.t_unit = t_unit
+        w.insert(0, combo)  # pyright: ignore
+
     def _on_details_layer_select_changed(self, layer: Optional[Layer]):
         logger.debug(f"_on_details_layer_select_changed called for layer {layer}!")
 
         if layer is None:
             self.widget_set_voxel_size.hide()
+            self.widget_set_t_spacing.hide()
             self.widget_info.hide()
             return
 
@@ -368,6 +453,11 @@ class Input_Tab:
         self.widget_info.show()
 
         ps_image = PanSegImage.from_napari_layer(layer)
+        if ps_image.is_timeseries:
+            self.widget_set_t_spacing.show()
+        else:
+            self.widget_set_t_spacing.hide()
+
         if ps_image.has_valid_voxel_size():
             voxel_size_formatted = "("
             for vs in ps_image.voxel_size:
@@ -389,6 +479,14 @@ class Input_Tab:
             f"{parts['shape']:<30} {parts['voxels']:<30}\n"
             f"{parts['type']:<30} {parts['layout']:<30}"
         )
+        if ps_image.is_timeseries:
+            t_spacing = ps_image.properties.t_spacing
+            t_spacing_formatted = (
+                f"{t_spacing:.3g} {ps_image.properties.t_unit}"
+                if t_spacing is not None
+                else "None"
+            )
+            str_info += f"\n{f'Time spacing: {t_spacing_formatted}':<30}"
 
         font = QtGui.QFont("Monospace")
         font.setStyleHint(QtGui.QFont.TypeWriter)

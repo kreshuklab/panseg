@@ -7,7 +7,7 @@ import torch
 
 import panseg.core.zoo as zoo_module
 from panseg import FILE_BEST_MODEL_PYTORCH, FILE_CONFIG_TRAIN_YAML
-from panseg.core.zoo import model_zoo
+from panseg.core.zoo import Author, model_zoo
 from panseg.functionals.training.model import UNet2D, UNet3D
 from tests.conftest import IS_CUDA_AVAILABLE
 
@@ -122,6 +122,26 @@ class TestBioImageIOModelZoo:
 def test_halo_computation_local_models(model):
     """Compute the halo for locally built models with the real models' RDF kwargs."""
     assert model_zoo.compute_halo(model) == 44
+
+
+def test_dimensionality_filter_is_spatial_only():
+    """The zoo's dimensionality is a spatial property, with no T-dependent
+    values: a TZYX image picks 3D models, a TYX image 2D models."""
+    dimensionalities = {
+        record["dimensionality"]
+        for record in model_zoo.get_model_zoo_dict().values()
+        if record["added_by"] != Author.USER and record["dimensionality"]
+    }
+    assert dimensionalities <= {"2D", "3D"}
+
+    models_2d = model_zoo.list_models(
+        use_custom_models=False, dimensionality_filter=["2D"]
+    )
+    models_3d = model_zoo.list_models(
+        use_custom_models=False, dimensionality_filter=["3D"]
+    )
+    assert models_2d and models_3d
+    assert not set(models_2d) & set(models_3d)
 
 
 ZOO_MODEL_NAME = "confocal_2D_unet_ovules_ds2x"

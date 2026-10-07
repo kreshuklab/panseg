@@ -56,7 +56,6 @@ list_tasks:
     parameters:
       image_name: Col0_03_T3
       key: null
-      m_slicing: null
       semantic_type: raw
       stack_layout: ZYX
     skip: false

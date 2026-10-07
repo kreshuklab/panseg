@@ -5,7 +5,7 @@ from magicgui.widgets import Container, ProgressBar, PushButton
 from napari.layers import Image, Labels, Layer
 
 from panseg import logger
-from panseg.core.image import ImageLayout, PanSegImage, SemanticType
+from panseg.core.image import ImageDimensionality, PanSegImage, SemanticType
 from panseg.tasks.segmentation_tasks import (
     aio_watershed_task,
     clustering_segmentation_task,
@@ -490,17 +490,17 @@ class Segmentation_Tab:
             return
         ps_image = PanSegImage.from_napari_layer(image)
 
-        if ps_image.image_layout == ImageLayout.ZYX:
+        if ps_image.dimensionality == ImageDimensionality.THREE:
             self.widget_dt_ws.stacked.show()
         else:
             self.widget_dt_ws.stacked.hide()
             self.widget_dt_ws.stacked.value = False
-            if ps_image.image_layout != ImageLayout.YX:
-                log(
-                    f"Unsupported image layout: {ps_image.image_layout}",
-                    thread="DT Watershed",
-                    level="error",
-                )
+        if ps_image.is_multichannel:
+            log(
+                f"Unsupported image layout: {ps_image.image_layout}",
+                thread="DT Watershed",
+                level="error",
+            )
 
     def update_layer_selection(self, event):
         """Updates layer drop-down menus"""

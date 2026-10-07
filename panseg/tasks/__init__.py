@@ -1,9 +1,9 @@
 import importlib
 import pkgutil
 
-from panseg.tasks.workflow_handler import WorkflowHandler, task_tracker
+from panseg.tasks.workflow_handler import WorkflowHandler, task_tracker, timepoint_map
 
-__all__ = ["WorkflowHandler", "task_tracker", "Task_message"]
+__all__ = ["WorkflowHandler", "task_tracker", "timepoint_map", "Task_message"]
 
 
 # Automatically import all functions from all submodules

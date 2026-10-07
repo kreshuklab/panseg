@@ -39,7 +39,6 @@ list_tasks:
   parameters:
     image_name: sample_ovule_raw
     key: /raw
-    m_slicing: null
     semantic_type: raw
     stack_layout: ZYX
   skip: false

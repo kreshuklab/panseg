@@ -4,7 +4,6 @@ import pytest
 from panseg.functionals.dataprocessing.dataprocessing import (
     compute_scaling_factor,
     compute_scaling_voxelsize,
-    image_crop,
     image_gaussian_smoothing,
     image_median,
     image_rescale,
@@ -101,15 +100,6 @@ def test_image_gaussian_smoothing_2d():
     smoothed_image = image_gaussian_smoothing(image, sigma)
     assert smoothed_image.shape == (10, 10)
     assert smoothed_image.dtype == np.float32
-
-
-def test_image_crop():
-    image = np.random.rand(10, 10, 10)
-    cropped_image = image_crop(image, "[2:8, 2:8, 2:8]")
-    assert cropped_image.shape == (6, 6, 6)
-
-    cropped_image = image_crop(image, "[2:, :8, :8]")
-    assert cropped_image.shape == (8, 8, 8)
 
 
 def test_normalize_01():
