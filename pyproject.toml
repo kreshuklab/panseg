@@ -129,6 +129,8 @@ addopts = "-m 'not slow'"
     # TEMPORARY (macOS freeze investigation): dump all thread stacks via
     # faulthandler if any test exceeds 300 s (works even when the main thread
     # is wedged in a C call; no GIL needed).
-    faulthandler_timeout = 60
-    faulthandler_exit_on_timeout = true
+    # per-test faulthandler watchdog disabled: its dump target is pytest's
+    # capture temp file, which is lost on os._exit; the conftest watchdog
+    # below writes to $GITHUB_STEP_SUMMARY instead.
+    faulthandler_timeout = 0
 testpaths = ["tests"]

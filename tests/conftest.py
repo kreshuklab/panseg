@@ -764,3 +764,22 @@ def pytest_runtest_teardown(item, nextitem):
         file=sys.__stderr__,
         flush=True,
     )
+
+
+def pytest_configure(config):
+    """TEMPORARY (macOS freeze investigation): session-wide stack watchdog.
+
+    If 120 s pass without the suite finishing anything, dump the stacks of
+    all threads to the GitHub step summary (uploaded by the runner even when
+    the step dies via os._exit) and hard-exit so the job fails visibly
+    instead of hanging silently. Inert outside GitHub Actions.
+    """
+    import faulthandler
+    import os
+
+    timeout = float(os.environ.get("PANSEG_WATCHDOG_TIMEOUT", "120"))
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path or timeout <= 0:
+        return
+    handle = open(path, "w")
+    faulthandler.dump_traceback_later(timeout, file=handle, exit=True)
