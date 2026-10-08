@@ -731,3 +731,32 @@ def ome_timeseries_multifile(tmp_path):
     Returns (first_path, second_path, full_timeseries_data).
     """
     return _ome_multifile_chain(tmp_path)
+
+
+def pytest_collection_modifyitems(config, items):
+    """TEMPORARY (macOS freeze bisection): filter tests via the branch name.
+
+    On GitHub Actions, a branch named ``ci/bisect-<spec>`` restricts
+    collection to the items whose nodeid matches every comma-separated spec
+    part (fnmatch against ``*<part>*``, with ``--`` standing in for ``::``).
+    Inert everywhere else. Remove once the macOS freeze is understood.
+    """
+    import fnmatch
+    import os
+    import re
+
+    match = re.fullmatch(r"refs/heads/ci/bisect-(.+)", os.environ.get("GITHUB_REF", ""))
+    if not match:
+        return
+    patterns = [part.replace("--", "::") for part in match.group(1).split(",")]
+    selected = [
+        item
+        for item in items
+        if all(fnmatch.fnmatch(item.nodeid, f"*{pattern}*") for pattern in patterns)
+    ]
+    if not selected or len(selected) == len(items):
+        return
+    config.hook.pytest_deselected(
+        items=[item for item in items if item not in selected]
+    )
+    items[:] = selected
