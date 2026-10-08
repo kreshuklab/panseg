@@ -731,3 +731,36 @@ def ome_timeseries_multifile(tmp_path):
     Returns (first_path, second_path, full_timeseries_data).
     """
     return _ome_multifile_chain(tmp_path)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item, nextitem):
+    """TEMPORARY (macOS freeze investigation): per-test resource probe.
+
+    Prints fd/thread/child-process/memory counters straight to the real
+    stderr so they survive pytest's capture and land in the CI log even
+    when a later test wedges the process.
+    """
+    yield
+    import os
+    import sys
+    import threading
+
+    try:
+        import psutil
+
+        proc = psutil.Process()
+        rss = proc.memory_info().rss / (1024 * 1024)
+        kids = len(proc.children(recursive=True))
+    except Exception:
+        rss = kids = -1
+    try:
+        fds = len(os.listdir("/dev/fd"))
+    except Exception:
+        fds = -1
+    print(
+        f"\nRESLOG {item.nodeid} fds={fds} threads={threading.active_count()} "
+        f"kids={kids} rss={rss:.0f}MB",
+        file=sys.__stderr__,
+        flush=True,
+    )
