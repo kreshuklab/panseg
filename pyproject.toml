@@ -126,4 +126,8 @@ filename = "conda-recipe/meta.yaml"
 [tool.pytest.ini_options]
 markers = ["slow: marks tests as slow to run"]
 addopts = "-m 'not slow'"
+    # TEMPORARY (macOS freeze investigation): dump all thread stacks via
+    # faulthandler if any test exceeds 300 s (works even when the main thread
+    # is wedged in a C call; no GIL needed).
+    faulthandler_timeout = 300
 testpaths = ["tests"]
