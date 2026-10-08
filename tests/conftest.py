@@ -736,10 +736,12 @@ def ome_timeseries_multifile(tmp_path):
 def pytest_collection_modifyitems(config, items):
     """TEMPORARY (macOS freeze bisection): filter tests via the branch name.
 
-    On GitHub Actions, a branch named ``ci/bisect-<spec>`` restricts
-    collection to the items whose nodeid matches every comma-separated spec
-    part (fnmatch against ``*<part>*``, with ``--`` standing in for ``::``).
-    Inert everywhere else. Remove once the macOS freeze is understood.
+    Branch ``ci/bisect-<spec>``: the spec is ``;``-separated groups, each
+    group is ``,``-separated fnmatch patterns (``--`` stands in for ``::``)
+    that must ALL match a nodeid (AND); groups are OR-ed. A group whose
+    patterns start with ``-`` deselects matching items instead; a spec made
+    only of exclusion groups keeps everything else. Inert outside GitHub
+    Actions.
     """
     import fnmatch
     import os
@@ -748,15 +750,28 @@ def pytest_collection_modifyitems(config, items):
     match = re.fullmatch(r"refs/heads/ci/bisect-(.+)", os.environ.get("GITHUB_REF", ""))
     if not match:
         return
-    patterns = [part.replace("--", "::") for part in match.group(1).split(",")]
-    selected = [
-        item
-        for item in items
-        if all(fnmatch.fnmatch(item.nodeid, f"*{pattern}*") for pattern in patterns)
-    ]
+    include_groups = []
+    exclude_patterns = []
+    for group in match.group(1).split(";"):
+        patterns = [part.replace("--", "::") for part in group.split(",")]
+        if patterns and patterns[0].startswith("-"):
+            exclude_patterns.extend(pattern[1:] for pattern in patterns)
+        else:
+            include_groups.append(patterns)
+
+    def keep(item):
+        nodeid = item.nodeid
+        if any(fnmatch.fnmatch(nodeid, f"*{pattern}*") for pattern in exclude_patterns):
+            return False
+        if include_groups and not any(
+            all(fnmatch.fnmatch(nodeid, f"*{pattern}*") for pattern in group)
+            for group in include_groups
+        ):
+            return False
+        return True
+
+    selected = [item for item in items if keep(item)]
     if not selected or len(selected) == len(items):
         return
-    config.hook.pytest_deselected(
-        items=[item for item in items if item not in selected]
-    )
+    config.hook.pytest_deselected(items=[item for item in items if not keep(item)])
     items[:] = selected
