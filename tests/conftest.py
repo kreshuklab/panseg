@@ -766,20 +766,35 @@ def pytest_runtest_teardown(item, nextitem):
     )
 
 
-def pytest_configure(config):
-    """TEMPORARY (macOS freeze investigation): session-wide stack watchdog.
+_SUMMARY_HANDLE = None
 
-    If 120 s pass without the suite finishing anything, dump the stacks of
-    all threads to the GitHub step summary (uploaded by the runner even when
-    the step dies via os._exit) and hard-exit so the job fails visibly
-    instead of hanging silently. Inert outside GitHub Actions.
+
+def pytest_configure(config):
+    """TEMPORARY (macOS freeze investigation): per-test stack watchdog.
+
+    Arms a 60 s faulthandler watchdog around every test that dumps the
+    stacks of all threads to the GitHub step summary (uploaded by the runner
+    even when the step dies via os._exit) and hard-exits, so a C-level wedge
+    fails the job visibly instead of hanging silently. Inert outside GitHub
+    Actions.
     """
-    import faulthandler
+    global _SUMMARY_HANDLE
     import os
 
-    timeout = float(os.environ.get("PANSEG_WATCHDOG_TIMEOUT", "120"))
     path = os.environ.get("GITHUB_STEP_SUMMARY")
-    if not path or timeout <= 0:
-        return
-    handle = open(path, "w")
-    faulthandler.dump_traceback_later(timeout, file=handle, exit=True)
+    if path:
+        _SUMMARY_HANDLE = open(path, "w")
+
+
+@pytest.hookimpl(wrapper=True, trylast=True)
+def pytest_runtest_protocol(item, nextitem):
+    import faulthandler
+
+    if _SUMMARY_HANDLE is None:
+        return (yield)
+    timeout = float(os.environ.get("PANSEG_WATCHDOG_TIMEOUT", "60"))
+    faulthandler.dump_traceback_later(timeout, file=_SUMMARY_HANDLE, exit=True)
+    try:
+        return (yield)
+    finally:
+        faulthandler.cancel_dump_traceback_later()
