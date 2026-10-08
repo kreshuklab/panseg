@@ -130,4 +130,5 @@ addopts = "-m 'not slow'"
     # faulthandler if any test exceeds 300 s (works even when the main thread
     # is wedged in a C call; no GIL needed).
     faulthandler_timeout = 60
+    faulthandler_exit_on_timeout = true
 testpaths = ["tests"]
