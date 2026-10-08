@@ -746,6 +746,9 @@ def pytest_runtest_teardown(item, nextitem):
     import os
     import sys
     import threading
+    import time as _time
+
+    globals()["_last_progress"] = _time.monotonic()
 
     try:
         import psutil
@@ -767,35 +770,65 @@ def pytest_runtest_teardown(item, nextitem):
     )
 
 
-_SUMMARY_HANDLE = None
+_last_progress = 0.0
 
 
 def pytest_configure(config):
-    """TEMPORARY (macOS freeze investigation): per-test stack watchdog.
+    """TEMPORARY (macOS freeze investigation): multi-channel stack watchdog.
 
-    Arms a 60 s faulthandler watchdog around every test that dumps the
-    stacks of all threads to the GitHub step summary (uploaded by the runner
-    even when the step dies via os._exit) and hard-exits, so a C-level wedge
-    fails the job visibly instead of hanging silently. Inert outside GitHub
-    Actions.
+    Arms two GIL-independent faulthandler watchdogs for the whole session:
+    at 60 s of a single stalled test they dump every thread's stack to the
+    real stderr (which reaches the CI log) and hard-exit so the job fails
+    visibly, plus a second copy to the GitHub step summary. A backup thread
+    probes at 85 s and dumps via sys._current_frames in case the first path
+    is eaten. Inert outside GitHub Actions.
     """
-    global _SUMMARY_HANDLE
-    import os
-
-    path = os.environ.get("GITHUB_STEP_SUMMARY")
-    if path:
-        _SUMMARY_HANDLE = open(path, "w")
-
-
-@pytest.hookimpl(wrapper=True, trylast=True)
-def pytest_runtest_protocol(item, nextitem):
+    global _last_progress
     import faulthandler
+    import os
+    import sys
+    import threading
+    import time
 
-    if _SUMMARY_HANDLE is None:
-        return (yield)
-    timeout = float(os.environ.get("PANSEG_WATCHDOG_TIMEOUT", "60"))
-    faulthandler.dump_traceback_later(timeout, file=_SUMMARY_HANDLE, exit=True)
+    _last_progress = time.monotonic()
+
+    stderr = sys.__stderr__
     try:
-        return (yield)
-    finally:
-        faulthandler.cancel_dump_traceback_later()
+        summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+        summary = open(summary_path, "w") if summary_path else None
+    except OSError:
+        summary = None
+    if summary is not None:
+        summary.write("WATCHDOG-CONFIGURE OK\n")
+        summary.flush()
+
+    def backup():
+        time.sleep(85)
+        if time.monotonic() - _last_progress < 80:
+            return
+        try:
+            stderr.write("\nBACKUP WATCHDOG: python level alive (GIL free)\n")
+            stderr.flush()
+            import traceback
+
+            for tid, frame in sys._current_frames().items():
+                stderr.write(f"\n--- python thread {tid} ---\n")
+                traceback.print_stack(frame, file=stderr)
+            stderr.flush()
+            if summary is not None:
+                summary.write("\nBACKUP WATCHDOG dump\n")
+                import traceback as tb
+
+                for tid, frame in sys._current_frames().items():
+                    summary.write(f"\n--- python thread {tid} ---\n")
+                    tb.print_stack(frame, file=summary)
+                summary.flush()
+        except Exception:
+            pass
+        os._exit(1)
+
+    if stderr is not None:
+        faulthandler.dump_traceback_later(60, file=stderr, exit=True)
+    if summary is not None:
+        faulthandler.dump_traceback_later(60, file=summary, exit=False)
+    threading.Thread(target=backup, daemon=True).start()
