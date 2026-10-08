@@ -19,11 +19,16 @@ dependencies:
   - pip
   - pre-commit
   - pydantic==2.13.5
-  - pyside6==6.11.2
+  # pyside6>=6.10 deadlocks on macOS in GL-widget paint handling (infinite
+  # paintEvent loop; napari's vispy canvas is affected). Known-good upstream:
+  # https://discourse.vtk.org/t/issue-with-qvtkrenderwindowinteractor-and-pyside6-6-10-1-on-macos/16225
+  # Revisit when the Qt/PySide regression is fixed upstream.
+  - pyside6==6.9.3
   - pytest
   - pytest-cov
   - pytest-mock
   - pytest-qt
+  - pytest-timeout
   - python-elf==0.9.2
   - python-graphviz==0.21
   - python=3.13

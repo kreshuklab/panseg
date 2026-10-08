@@ -9,6 +9,9 @@ jobs:
       matrix:
         os: ["ubuntu-latest", "windows-latest", "macos-latest"]
     runs-on: ["${{ matrix.os }}"]
+    # Fail fast instead of hanging for hours when a test freezes (e.g. Qt/GL
+    # regressions on the macOS runners); pytest-timeout dumps the stacks.
+    timeout-minutes: 45
 
     defaults:
       run:
@@ -37,4 +40,4 @@ jobs:
       - name: Run checks
         run: |
           panseg --help
-          pytest --durations=10
+          pytest --durations=10 --timeout=300
