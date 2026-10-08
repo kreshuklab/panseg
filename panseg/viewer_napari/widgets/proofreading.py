@@ -1077,7 +1077,7 @@ class Proofreading_Tab:
         @thread_worker(progress=True)
         def func():
             if self.handler.scribbles.sum() == 0:
-                return 2
+                return None
             self.handler.save_to_history()
 
             new_seg, region_slice, bboxes = split_merge_from_seeds(
@@ -1089,12 +1089,13 @@ class Proofreading_Tab:
                 correct_labels=self.handler.corrected_cells,
             )
 
-            self.handler.update_after_proofreading(new_seg, region_slice, bboxes)
+            return new_seg, region_slice, bboxes
 
         def on_done(result):
-            if result == 2:
+            if result is None:
                 log("No scribbles found", thread="Proofreading tool")
             else:
+                self.handler.update_after_proofreading(*result)
                 log(
                     "Done splitting/merging!",
                     thread="filter_segmentation",
