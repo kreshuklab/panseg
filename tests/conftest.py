@@ -1,6 +1,7 @@
 # pylint: disable=missing-docstring,import-outside-toplevel
 
 import itertools
+import os
 import shutil
 from collections.abc import Sequence
 from pathlib import Path
