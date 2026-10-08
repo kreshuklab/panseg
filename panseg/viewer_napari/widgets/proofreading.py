@@ -610,6 +610,9 @@ class ProofreadingHandler:
         timepoint is read at write-back time, which is safe because the
         widget refuses Timepoint changes while a worker is running.
 
+        Must be called from the main Qt thread: it mutates the live viewer
+        layer and refreshes it, which drives Qt/OpenGL work.
+
         Args:
             seg_slice (np.ndarray): The segmentation slice to update.
             region_slice (tuple[slice, ...]): The region slice to update in the viewer.
@@ -1077,9 +1080,14 @@ class Proofreading_Tab:
         @thread_worker(progress=True)
         def func():
             if self.handler.scribbles.sum() == 0:
-                return 2
+                return None
             self.handler.save_to_history()
 
+            # Compute only: this worker runs off the main Qt thread and must
+            # not touch the viewer or its layers. Writing back here would run
+            # layer.refresh() (napari/vispy Qt+OpenGL callbacks) from this
+            # thread, which hangs on macOS. The result is written back on the
+            # main thread in on_done.
             new_seg, region_slice, bboxes = split_merge_from_seeds(
                 self.handler.scribbles,
                 self.handler.segmentation,
@@ -1089,12 +1097,14 @@ class Proofreading_Tab:
                 correct_labels=self.handler.corrected_cells,
             )
 
-            self.handler.update_after_proofreading(new_seg, region_slice, bboxes)
+            return new_seg, region_slice, bboxes
 
         def on_done(result):
-            if result == 2:
+            if result is None:
                 log("No scribbles found", thread="Proofreading tool")
             else:
+                # on_done runs on the main thread: touching the viewer here is safe.
+                self.handler.update_after_proofreading(*result)
                 log(
                     "Done splitting/merging!",
                     thread="filter_segmentation",

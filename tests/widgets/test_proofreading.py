@@ -1300,6 +1300,38 @@ class TestProofreadingTabTimeSeries:
         assert (merged[0:2, 5:7, 5:7] == 1).all()
         assert (merged[4:, 8:, 8:] == 0).all()
 
+    def test_split_merge_writeback_runs_on_main_thread(
+        self, timeseries_tab, napari_timeseries_prediction, mocker, qtbot
+    ):
+        """The worker computes only; the write-back lands on the main thread.
+
+        update_after_proofreading refreshes the live layer, which drives
+        Qt/OpenGL callbacks: running it from the worker thread hangs macOS.
+        """
+        tab, viewer = timeseries_tab
+        scribbles = viewer.layers["Scribbles (t=0)"]
+        scribbles.data[0, 0, 0] = 1
+
+        threads = []
+        real_update = tab.handler.update_after_proofreading
+
+        def spy_update(*args, **kwargs):
+            threads.append(threading.current_thread())
+            real_update(*args, **kwargs)
+
+        mocker.patch.object(
+            tab.handler, "update_after_proofreading", side_effect=spy_update
+        )
+
+        worker = tab.widget_split_and_merge_from_scribbles(
+            viewer=viewer, image=napari_timeseries_prediction
+        )
+        assert worker is not None
+        qtbot.waitUntil(lambda: not tab.busy)
+
+        assert threads
+        assert all(t is threading.main_thread() for t in threads)
+
     def test_split_merge_slices_boundary_image_at_session_timepoint(
         self, timeseries_tab, napari_timeseries_prediction, mocker, qtbot
     ):
