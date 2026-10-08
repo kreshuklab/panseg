@@ -24,6 +24,7 @@ dependencies:
   - pytest-cov
   - pytest-mock
   - pytest-qt
+  - pytest-timeout
   - python-elf==0.9.2
   - python-graphviz==0.21
   - python=3.13
