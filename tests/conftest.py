@@ -731,3 +731,22 @@ def ome_timeseries_multifile(tmp_path):
     Returns (first_path, second_path, full_timeseries_data).
     """
     return _ome_multifile_chain(tmp_path)
+
+
+def pytest_collection_modifyitems(config, items):
+    """TEMPORARY (macOS freeze bisection): keep only one test class.
+
+    Restricts collection to ``TestProofreadingHandlerTimeSeries`` so the
+    macOS CI job runs only the region of ``test_proofreading.py`` that
+    freezes. Remove this hook once the freeze is understood.
+    """
+    selected = [
+        item
+        for item in items
+        if item.parent is not None
+        and item.parent.name == "TestProofreadingHandlerTimeSeries"
+    ]
+    if not selected or len(selected) == len(items):
+        return
+    config.hook.pytest_deselected(items=[i for i in items if i not in selected])
+    items[:] = selected
