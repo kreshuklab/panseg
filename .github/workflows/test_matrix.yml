@@ -7,8 +7,12 @@ jobs:
   test:
     strategy:
       matrix:
-        os: ["ubuntu-latest", "windows-latest", "macos-latest"]
+        # TEMPORARY (macOS freeze bisect): macOS only, proofreading tests only.
+        os: ["macos-latest"]
     runs-on: ["${{ matrix.os }}"]
+    # Fail fast instead of hanging for hours when a test freezes (e.g. Qt/GL
+    # regressions on the macOS runners).
+    timeout-minutes: 45
 
     defaults:
       run:
@@ -35,6 +39,10 @@ jobs:
           conda-remove-defaults: true
 
       - name: Run checks
+        # TEMPORARY (macOS freeze bisect): proofreading tests only, thread-method
+        # timeout -- unlike the signal method it works when the main thread is
+        # wedged inside a C call, dumps all thread stacks, and exits the process
+        # so the job fails fast with logs instead of hanging to the job timeout.
         run: |
           panseg --help
-          pytest --durations=10
+          pytest tests/widgets/test_proofreading.py -v --durations=10 --timeout=300 --timeout-method=thread
