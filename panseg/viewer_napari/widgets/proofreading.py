@@ -1074,7 +1074,7 @@ class Proofreading_Tab:
         if ps_image.is_timeseries:
             image_data = image_data[self.handler.timepoint]
 
-        @thread_worker(progress=True)
+        @thread_worker(progress=True, ignore_errors=True)
         def func():
             if self.handler.scribbles.sum() == 0:
                 return 2

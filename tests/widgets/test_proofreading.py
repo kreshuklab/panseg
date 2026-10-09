@@ -1,5 +1,6 @@
 import contextlib
 import threading
+import time
 from collections import deque
 from pathlib import Path
 
@@ -28,6 +29,25 @@ def proof():
 @pytest.fixture(scope="function")
 def tab() -> Proofreading_Tab:
     return Proofreading_Tab()
+
+
+def _pump_until(stop_func, timeout: float = 10.0) -> None:
+    """Polls `stop_func` while processing posted Qt events.
+
+    Unlike `qtbot.waitUntil`, this does not enter a nested `QEventLoop`:
+    on the macOS CI runner. A nested event loop in the presence of a live
+    viewer stops processing timer events on macos in gh ci, so `waitUntil`
+    freezes without ever firing its own timeout.
+    `processEvents` still delivers queued cross-thread signals
+    (e.g. `worker.returned` -> `on_done`),
+    and the timeout is wall-clock based, so it always fires.
+    """
+    deadline = time.monotonic() + timeout
+    while not stop_func():
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"condition not met within {timeout:.0f}s")
+        get_qapp().processEvents()
+        time.sleep(0.01)
 
 
 class TestProofreadingHandler:
@@ -810,9 +830,7 @@ class TestProofreadingTab:
         )
 
     @pytest.mark.parametrize("rep", range(5))
-    def test_widget_split_and_merge_from_scribbles(
-        self, tab, mocker, napari_raw, rep, qtbot
-    ):
+    def test_widget_split_and_merge_from_scribbles(self, tab, mocker, napari_raw, rep):
         assert not tab.busy
         app = get_qapp()
         mock_split_merge = mocker.patch(
@@ -832,7 +850,7 @@ class TestProofreadingTab:
         )
         assert worker
 
-        qtbot.waitUntil(lambda: not tab.busy)
+        _pump_until(lambda: not tab.busy)
         assert not worker.is_running
         assert not tab.busy
 
@@ -855,7 +873,7 @@ class TestProofreadingTab:
         worker = tab.widget_split_and_merge_from_scribbles(
             viewer=mocker.sentinel, image=napari_raw
         )
-        qtbot.waitUntil(lambda: not tab.busy)
+        _pump_until(lambda: not tab.busy)
         assert not worker.is_running
 
         mocks["update_after_proofreading"].assert_called_once()
@@ -918,7 +936,7 @@ class TestProofreadingTab:
             level="error",
         )
 
-    def test_widget_filter_segmentation(self, tab, mocker, qtbot, napari_segmentation):
+    def test_widget_filter_segmentation(self, tab, mocker, napari_segmentation):
         pan_seg = PanSegImage.from_napari_layer(napari_segmentation)
         mock_get_layer = mocker.patch(
             "panseg.viewer_napari.widgets.proofreading.ProofreadingHandler.get_layer_data",
@@ -939,7 +957,7 @@ class TestProofreadingTab:
         tab.handler._state.seg_properties = pan_seg.properties
         worker = tab.widget_filter_segmentation()
         assert worker
-        qtbot.waitUntil(lambda: not tab.busy)
+        _pump_until(lambda: not tab.busy)
         assert not worker._running
 
         mocks["log"].assert_called_with(
@@ -1194,7 +1212,10 @@ class TestProofreadingTabTimeSeries:
         assert tab.widget_timepoint_select.enabled
 
     def test_split_merge_writeback_isolated_from_midflight_timepoint_change(
-        self, timeseries_tab, napari_timeseries_prediction, mocker, qtbot
+        self,
+        timeseries_tab,
+        napari_timeseries_prediction,
+        mocker,
     ):
         """A Timepoint change while a split/merge worker runs is refused.
 
@@ -1234,7 +1255,7 @@ class TestProofreadingTabTimeSeries:
         try:
             # The Timepoint field is locked while the worker runs.
             assert not tab.widget_timepoint_select.enabled
-            qtbot.waitUntil(lambda: reached.is_set(), timeout=10000)
+            assert reached.wait(timeout=10)
             assert len(tab.handler._state.history_undo) == 1
 
             tab.widget_timepoint_select.value = 2
@@ -1251,7 +1272,7 @@ class TestProofreadingTabTimeSeries:
             assert "Scribbles (t=0)" in viewer.layers
 
             release.set()
-            qtbot.waitUntil(lambda: not tab.busy, timeout=10000)
+            _pump_until(lambda: not tab.busy)
             assert tab.widget_timepoint_select.enabled
 
             # The merged result landed in t=0 only.
@@ -1273,10 +1294,10 @@ class TestProofreadingTabTimeSeries:
             # Never leave the worker blocked in a failed test run.
             release.set()
             with contextlib.suppress(Exception):
-                qtbot.waitUntil(lambda: not worker.is_running, timeout=10000)
+                _pump_until(lambda: not worker.is_running)
 
     def test_split_merge_applies_to_session_timepoint_only(
-        self, timeseries_tab, napari_timeseries_prediction, qtbot
+        self, timeseries_tab, napari_timeseries_prediction
     ):
         tab, viewer = timeseries_tab
         layer = viewer.layers["test_segmentation_timeseries"]
@@ -1290,7 +1311,7 @@ class TestProofreadingTabTimeSeries:
             viewer=viewer, image=napari_timeseries_prediction
         )
         assert worker is not None
-        qtbot.waitUntil(lambda: not tab.busy)
+        _pump_until(lambda: not tab.busy)
 
         after = layer.data
         np.testing.assert_array_equal(after[1], before[1])
@@ -1301,7 +1322,10 @@ class TestProofreadingTabTimeSeries:
         assert (merged[4:, 8:, 8:] == 0).all()
 
     def test_split_merge_slices_boundary_image_at_session_timepoint(
-        self, timeseries_tab, napari_timeseries_prediction, mocker, qtbot
+        self,
+        timeseries_tab,
+        napari_timeseries_prediction,
+        mocker,
     ):
         tab, viewer = timeseries_tab
         mock_split_merge = mocker.patch(
@@ -1318,7 +1342,7 @@ class TestProofreadingTabTimeSeries:
         tab.widget_split_and_merge_from_scribbles(
             viewer=viewer, image=napari_timeseries_prediction
         )
-        qtbot.waitUntil(lambda: not tab.busy)
+        _pump_until(lambda: not tab.busy)
 
         image_data = mock_split_merge.call_args.kwargs["image"]
         np.testing.assert_array_equal(image_data, napari_timeseries_prediction.data[0])
@@ -1352,7 +1376,8 @@ class TestProofreadingTabTimeSeries:
         assert tab.handler.corrected_cells == {1}
 
     def test_extract_corrected_labels_single_timepoint_layer(
-        self, timeseries_tab, qtbot
+        self,
+        timeseries_tab,
     ):
         tab, viewer = timeseries_tab
         tab.widget_timepoint_select.value = 1
@@ -1362,7 +1387,7 @@ class TestProofreadingTabTimeSeries:
         assert worker is not None
         # The Timepoint field is locked while the extraction runs.
         assert not tab.widget_timepoint_select.enabled
-        qtbot.waitUntil(lambda: not tab.busy)
+        _pump_until(lambda: not tab.busy)
         assert tab.widget_timepoint_select.enabled
 
         extracted = viewer.layers["test_segmentation_timeseries_corrected_t001"]
