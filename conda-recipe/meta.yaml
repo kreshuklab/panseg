@@ -1,7 +1,7 @@
 {% set python_min = "3.12" %}
 package:
   name: panseg
-  version: "2.1.2"
+  version: "2.1.2a1"
 
 source:
   path: ..
