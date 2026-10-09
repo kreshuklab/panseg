@@ -1,0 +1,40 @@
+name: Manually test proofreading on macos
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: ["macos-latest"]
+    runs-on: ["${{ matrix.os }}"]
+
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'windows' && 'powershell' || 'bash -el {0}' }}
+
+    steps:
+      - name: Setup Qt headless display
+        uses: pyvista/setup-headless-display-action@v4.3
+        with:
+          qt: true
+
+      - name: Checkout Repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set Up Miniforge
+        uses: conda-incubator/setup-miniconda@v4.0.0
+        with:
+          python-version: 3.12
+          miniforge-version: latest
+          mamba-version: "*"
+          channels: local,conda-forge
+          environment-file: "environment-dev.yaml"
+          activate-environment: "panseg-dev"
+          conda-remove-defaults: true
+
+      - name: Run checks
+        run: |
+          pip install pytest-timeout
+          pytest tests/widgets/test_proofreading.py --timeout=300 --timeout_method thread
