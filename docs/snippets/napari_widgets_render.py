@@ -1,5 +1,6 @@
 import base64
 
+from magicgui.widgets import Container
 from napari.qt import get_stylesheet
 from napari.resources._icons import _theme_path
 from qtpy import QtCore, QtGui
@@ -31,12 +32,36 @@ def get_widget_title(widget) -> str:
     return f"<h2>Widget: {widget.call_button.text}</h2>"
 
 
+def _iter_parameter_widgets(widget) -> list:
+    """Collects the parameter widgets of a (nested) magicgui container.
+
+    Composite tabs are plain Containers without `_param_options`; their
+    parameters live in nested FunctionGui sub-widgets.
+    """
+    parameter_widgets = []
+    for child in widget:
+        if hasattr(child, "_param_options"):
+            parameter_widgets.extend(
+                child.__getattr__(key) for key in child._param_options
+            )
+        elif isinstance(child, Container):
+            parameter_widgets.extend(_iter_parameter_widgets(child))
+    return parameter_widgets
+
+
 def get_parameters_tooltips(widget) -> str:
     widget.show()
+    is_function_gui = hasattr(widget, "_param_options")
+    if is_function_gui:
+        parameter_widgets = [widget.__getattr__(key) for key in widget._param_options]
+    else:
+        # Composite tabs are plain Containers without `_param_options`;
+        # collect the parameters from their nested sub-widgets instead.
+        parameter_widgets = _iter_parameter_widgets(widget)
     doc_str = "<ul>"
-    for key in widget._param_options.keys():
-        _widget = widget.__getattr__(key)
-        if _widget.visible:
+    for _widget in parameter_widgets:
+        # in composite tabs only document visible widgets that carry label and tooltip
+        if _widget.visible and (is_function_gui or (_widget.label and _widget.tooltip)):
             doc_str += f"<li><b>{_widget.label}</b>: {_widget.tooltip}</li>\n"
     doc_str += "</ul>"
     widget.close()
