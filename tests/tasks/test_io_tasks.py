@@ -9,6 +9,7 @@ from panseg.core.image import (
     SemanticType,
 )
 from panseg.functionals.dataprocessing.dataprocessing import normalize_01
+from panseg.io.tiff import create_tiff
 from panseg.io.voxelsize import VoxelSize
 from panseg.tasks.io_tasks import (
     export_image_task,
@@ -16,6 +17,7 @@ from panseg.tasks.io_tasks import (
     merge_channels_task,
 )
 from panseg.tasks.workflow_handler import Task_message
+from tests.conftest import write_still_tiff
 
 
 @pytest.mark.parametrize(
@@ -581,3 +583,76 @@ def test_merge_channels_one():
     assert merged.semantic_type == SemanticType.RAW
     assert merged.image_layout == ImageLayout.ZYX
     assert merged.shape == (32, 64, 64)
+
+
+# --- Multi-file time series import (multifile-timeseries-import spec) ---
+
+
+def test_import_image_task_list_stacks_time_series(tmp_path):
+    paths = [
+        write_still_tiff(tmp_path / f"{stem}.tiff", (8, 8), value)
+        for stem, value in (("a10", 10), ("a2", 2), ("a1", 1))
+    ]
+    image = import_image_task(
+        input_path=paths, semantic_type="segmentation", stack_layout="YX"
+    )
+    assert isinstance(image, PanSegImage)
+    assert image.image_layout == ImageLayout.TYX
+    assert image.shape[0] == 3
+
+
+def test_import_image_task_list_stacks_channels(tmp_path):
+    paths = []
+    for stem, value in (("a1", 1), ("a2", 2)):
+        data = np.full((2, 8, 8), value, dtype="uint16")
+        path = tmp_path / f"{stem}.tiff"
+        create_tiff(path, data, VoxelSize(), layout="CYX")
+        paths.append(path)
+    images = import_image_task(
+        input_path=paths, semantic_type="segmentation", stack_layout="CYX"
+    )
+    assert isinstance(images, list)
+    assert len(images) == 2
+    assert all(image.image_layout == ImageLayout.TYX for image in images)
+
+
+def test_import_image_task_list_default_name_first_sorted_stem(tmp_path):
+    paths = [
+        write_still_tiff(tmp_path / f"{stem}.tiff", (8, 8), value)
+        for stem, value in (("a10", 10), ("a2", 2), ("a1", 1))
+    ]
+    image = import_image_task(
+        input_path=paths, semantic_type="segmentation", stack_layout="YX"
+    )
+    assert image.name == "a1"
+
+
+def test_import_image_task_list_t_layout_stacks(tmp_path):
+    """A T-bearing layout describes the stacked series: a list input strips
+    it and stacks, exactly like the plain spatial layout. This is what lets
+    an exported workflow - one stack_layout for all jobs - take its input
+    as a single T-bearing file or as a selection of files."""
+    paths = [
+        write_still_tiff(tmp_path / f"{stem}.tiff", (8, 8), value)
+        for stem, value in (("a1", 1), ("a2", 2))
+    ]
+    image = import_image_task(
+        input_path=paths, semantic_type="segmentation", stack_layout="TYX"
+    )
+    assert isinstance(image, PanSegImage)
+    assert image.image_layout == ImageLayout.TYX
+    assert image.shape[0] == 2
+
+
+def test_import_image_task_list_t_slice_returns_task_message(tmp_path):
+    """The GUI wrapper converts the time-slice rejection into a
+    Task_message: the time axis of a selection comes from stacking."""
+    paths = [
+        write_still_tiff(tmp_path / f"{stem}.tiff", (8, 8), value)
+        for stem, value in (("a1", 1), ("a2", 2))
+    ]
+    result = import_image_task(
+        input_path=paths, semantic_type="segmentation", stack_layout="TYX[:1,:,:]"
+    )
+    assert isinstance(result, Task_message)
+    assert "slices the time axis" in result.message

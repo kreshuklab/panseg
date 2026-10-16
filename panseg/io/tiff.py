@@ -289,6 +289,33 @@ def read_ome_time_spacing(path: Path) -> tuple[Optional[float], str]:
     return None, "s"
 
 
+def _tiff_data_uuid_pairs(
+    pixels: ElementTree.Element, path: Path
+) -> set[tuple[Optional[str], str]]:
+    """Distinct (UUID text, file name) pairs over the TiffData elements.
+
+    The FileName attribute of a UUID child element is optional: when absent
+    it defaults to the opened file.
+
+    Args:
+        pixels (ElementTree.Element): Pixels element of the first OME Image
+        path (Path): the opened file (the FileName fallback)
+
+    Returns:
+        set: the distinct (UUID text, file name) pairs
+    """
+    pairs = set()
+    for tiff_data in pixels:
+        if tiff_data.tag.find("TiffData") == -1:
+            continue
+        for uuid in tiff_data:
+            if uuid.tag.find("UUID") == -1:
+                continue
+            name = uuid.get("FileName") or path.name
+            pairs.add((uuid.text, name))
+    return pairs
+
+
 def check_ome_single_file(path: Path) -> None:
     """
     Raise ValueError when the OME-TIFF describes a multi-file series.
@@ -310,15 +337,7 @@ def check_ome_single_file(path: Path) -> None:
     if pixels is None:
         return
 
-    pairs = set()
-    for tiff_data in pixels:
-        if tiff_data.tag.find("TiffData") == -1:
-            continue
-        for uuid in tiff_data:
-            if uuid.tag.find("UUID") == -1:
-                continue
-            name = uuid.get("FileName") or path.name
-            pairs.add((uuid.text, name))
+    pairs = _tiff_data_uuid_pairs(pixels, path)
 
     foreign = sorted({name for _, name in pairs if name.lower() != path.name.lower()})
     if len(pairs) > 1 or foreign:

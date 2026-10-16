@@ -36,7 +36,7 @@ class FilePickMode(Enum):
     directory={
         "label": "Directory",
         "mode": "d",
-        "tooltip": "Process all files in the directory",
+        "tooltip": "Process all files in the directory; if it holds only subdirectories, each subdirectory's files are processed as one time series",
     },
 )
 def widget_input_model(

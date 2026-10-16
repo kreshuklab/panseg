@@ -6,7 +6,12 @@ import pytest
 import zarr
 
 from panseg.io.h5 import create_h5
-from panseg.io.io import guess_stack_layout, shape_to_stack_layout, smart_load
+from panseg.io.io import (
+    guess_stack_layout,
+    natural_sort_key,
+    shape_to_stack_layout,
+    smart_load,
+)
 from panseg.io.mesh import create_mesh
 from panseg.io.tiff import create_tiff
 from panseg.io.voxelsize import VoxelSize
@@ -165,6 +170,34 @@ class TestIO:
         vc0 = scene.geometry["geometry_0"].visual.vertex_colors
         vc1 = scene.geometry["geometry_1"].visual.vertex_colors
         assert not np.all(vc0[0] == vc1[0])
+
+
+def test_natural_sort_key_digits_sort_numerically():
+    """a2 sorts before a10: numeric runs compare as integers."""
+    paths = [Path("a10.tif"), Path("a2.tif"), Path("a1.tif")]
+    assert sorted(paths, key=natural_sort_key) == [
+        Path("a1.tif"),
+        Path("a2.tif"),
+        Path("a10.tif"),
+    ]
+
+
+def test_natural_sort_key_case_insensitive():
+    assert sorted([Path("B.tif"), Path("a.tif")], key=natural_sort_key) == [
+        Path("a.tif"),
+        Path("B.tif"),
+    ]
+
+
+def test_natural_sort_key_mixed_runs():
+    """The key interleaves text and numeric runs: letters compare as text,
+    digits as numbers, position by position."""
+    paths = [Path("img_b2.tif"), Path("img_a10.tif"), Path("img_a2.tif")]
+    assert sorted(paths, key=natural_sort_key) == [
+        Path("img_a2.tif"),
+        Path("img_a10.tif"),
+        Path("img_b2.tif"),
+    ]
 
 
 def test_shape_to_stack_layout_empty():

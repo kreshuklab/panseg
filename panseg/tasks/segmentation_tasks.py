@@ -38,6 +38,9 @@ def dt_watershed_task(
     It handles both standard boundary probability maps and nuclei images, with options for
     various preprocessing and segmentation parameters.
 
+    On timeseries input the task runs per timepoint: label IDs are independent
+    per timepoint, with no correspondence across timepoints.
+
     Args:
         image (PanSegImage): The input image to segment.
         threshold (float, optional): Threshold value for the boundary probability maps.
@@ -123,6 +126,9 @@ def clustering_segmentation_task(
     post_min_size: int = 100,
 ) -> PanSegImage:
     """Agglomerative segmentation task.
+
+    On timeseries input the task runs per timepoint: label IDs are independent
+    per timepoint, with no correspondence across timepoints.
 
     Args:
         image (PanSegImage): input image object
@@ -210,6 +216,9 @@ def lmc_segmentation_task(
             while a high-value bias the segmentation towards the
             over-segmentation. (default: 0.5)
         post_min_size (int): minimal size of the segments after Multicut. (default: 100)
+
+    On timeseries input the task runs per timepoint: label IDs are independent
+    per timepoint, with no correspondence across timepoints.
     """
     if (
         nuclei.semantic_type is SemanticType.PREDICTION
@@ -295,6 +304,9 @@ def aio_watershed_task(
         beta (float, optional): Beta parameter for the agglomeration. Small values steer
             towards under-segmentation, while high values bias towards
             over-segmentation. Defaults to 0.6.
+
+    On timeseries input the task runs per timepoint: label IDs are independent
+    per timepoint, with no correspondence across timepoints.
 
     Returns:
         PanSegImage: The segmented image as a new `PanSegImage` object.

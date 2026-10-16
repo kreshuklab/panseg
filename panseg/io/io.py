@@ -1,4 +1,5 @@
 import logging
+import re
 from pathlib import Path
 
 import numpy as np
@@ -112,6 +113,27 @@ def smart_load_with_vs(path: Path, key: str | None = None, default=load_tiff) ->
             f"No default found for {ext}, reverting to default loader with no voxel size reader."
         )
         return default(path), VoxelSize()
+
+
+def natural_sort_key(path: Path) -> tuple[int | str, ...]:
+    """Alphanumeric (natural) sort key for a file name.
+
+    The file name is split on digit and non-digit runs; digit runs compare
+    as integers, everything else as case-folded text. This is the single
+    authority for the file order of a multi-file time series import:
+    timepoint k is the k-th file in this order (a2.tif sorts before
+    a10.tif).
+
+    Args:
+        path (Path): path whose file name is keyed
+
+    Returns:
+        tuple: comparison key over the alternating text and numeric runs
+    """
+    name = path.name.lower()
+    return tuple(
+        int(run) if run.isdecimal() else run for run in re.split(r"(\d+)", name)
+    )
 
 
 def shape_to_stack_layout(shape) -> str:

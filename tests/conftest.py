@@ -17,6 +17,8 @@ from napari.layers import Image, Labels, Shapes
 
 from panseg.core.image import SemanticType
 from panseg.io.io import smart_load
+from panseg.io.tiff import create_tiff
+from panseg.io.voxelsize import VoxelSize
 
 TEST_FILES = Path(__file__).resolve().parent / "resources"
 VOXEL_SIZE = (0.235, 0.15, 0.15)
@@ -731,3 +733,24 @@ def ome_timeseries_multifile(tmp_path):
     Returns (first_path, second_path, full_timeseries_data).
     """
     return _ome_multifile_chain(tmp_path)
+
+
+def write_still_tiff(
+    path: Path,
+    shape: tuple[int, ...],
+    value: int,
+    voxel_size: VoxelSize | None = None,
+) -> Path:
+    """One independent still file, its voxels filled with ``value``.
+
+    The layout follows the shape: 2D writes YX, 3D writes ZYX. Used by the
+    multi-file import tests to build selections with controlled stems,
+    values and voxel sizes.
+    """
+    create_tiff(
+        path,
+        np.full(shape, value, dtype="uint16"),
+        voxel_size or VoxelSize(),
+        layout="YX" if len(shape) == 2 else "ZYX",
+    )
+    return path
