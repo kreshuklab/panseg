@@ -40,10 +40,6 @@ file to be applied to many images.
 
 Before you can run the batch workflow, you need to set the correct paths to the files
 you want to process, and where you want the results to be saved.
-An `input_path` can be a single file, a directory of files (one run per
-file), a directory of subdirectories (one run per subdirectory, the files in
-it stacked as one time series), or a list of files (stacked as one time
-series).
 PanSeg provides an editor for this; start it from the `Output tab`, or by running:
 
 ```bash

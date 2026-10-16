@@ -333,8 +333,8 @@ def test_headless_dir_of_dirs_stacks_one_series_per_subdirectory(tmp_path):
     results = sorted((tmp_path / "output").glob("*_export.ome.tiff"))
     assert len(results) == 2, results
     assert {path.name for path in results} == {
-        "a1_export.ome.tiff",
-        "b1_export.ome.tiff",
+        "series_a_a1_export.ome.tiff",
+        "series_b_b1_export.ome.tiff",
     }
     for path in results:
         with tifffile.TiffFile(path) as tiff:
