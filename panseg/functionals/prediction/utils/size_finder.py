@@ -54,6 +54,16 @@ def _is_2d_model(model: nn.Module) -> bool:
     return isinstance(model, UNet2D)
 
 
+def _min_input_depth(model: nn.Module) -> int:
+    """Smallest input depth a model accepts: the product of its Z pooling kernels."""
+    depth = 1
+    for module in model.modules():
+        if isinstance(module, (nn.MaxPool3d, nn.AvgPool3d)):
+            kernel = module.kernel_size
+            depth *= kernel[0] if isinstance(kernel, tuple) else kernel
+    return depth
+
+
 def _is_oom_error(error: RuntimeError, device: str) -> bool:
     """Classify a device probe failure as an out-of-memory error.
 
