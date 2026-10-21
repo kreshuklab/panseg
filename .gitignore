@@ -15,9 +15,10 @@ docs/_build/
 
 # Agent issue tracker (local scratch, not part of the site or version control)
 .scratch/
-**/CONTEXT.md
+**/GLOSSARY.md
 
 docs/agents
+docs/adr
 AGENTS.md
 
 # Codecov
