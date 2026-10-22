@@ -1,9 +1,13 @@
 import contextlib
 import logging
+import threading
+from pathlib import Path
 
 import numpy as np
+import psutil
 import torch
 from torch import nn
+from torch.profiler import ProfilerActivity, profile
 
 from panseg.functionals.training.model import UNet2D
 
@@ -12,6 +16,15 @@ logger = logging.getLogger(__name__)
 # Voxel-budget multiplier applied to the probed maximum patch shape whenever a derived
 # patch shape fails the batch-size-1 OOM check (see `find_feasible_patch_and_halo_shapes`).
 FEASIBILITY_SHRINK = 0.75
+
+# Share of the free memory a CPU patch may take: prediction holds more than one forward pass
+CPU_MEMORY_FRACTION = 0.5
+# Input that measures a model's CPU memory per voxel: 16 per axis allows 5 levels of pooling
+CPU_PROBE_SHAPES = {2: (16, 16), 3: (16, 16, 16)}
+# Smallest and largest side of a CPU patch, the largest being the former fixed shapes
+CPU_PATCH_SIDE = {2: (64, 1024), 3: (64, 256)}
+# Floor for the resident-memory fallback, in case reused memory hides the forward pass
+MIN_BYTES_PER_VOXEL = 1024
 
 
 @contextlib.contextmanager
@@ -52,6 +65,146 @@ def _is_2d_model(model: nn.Module) -> bool:
     if isinstance(model, nn.DataParallel):
         model = model.module
     return isinstance(model, UNet2D)
+
+
+def _cgroup_headroom(
+    proc_cgroup: Path = Path("/proc/self/cgroup"), root: Path = Path("/sys/fs/cgroup")
+) -> int | None:
+    """Memory left under this process's cgroup limits, e.g. a Slurm job's, or None.
+
+    A limit set on any ancestor group applies, so the groups are walked up to the root.
+    Handles cgroup v2 (`memory.max`) and v1 (`memory.limit_in_bytes`).
+    """
+    try:
+        lines = proc_cgroup.read_text().splitlines()
+    except OSError:
+        return None
+    headroom = None
+    for line in lines:
+        _, controllers, path = line.split(":", 2)
+        if controllers == "":
+            base, limit_file, usage_file = root, "memory.max", "memory.current"
+        elif "memory" in controllers.split(","):
+            base = root / "memory"
+            limit_file, usage_file = "memory.limit_in_bytes", "memory.usage_in_bytes"
+        else:
+            continue
+        group = base / path.lstrip("/")
+        while True:
+            try:
+                limit = (group / limit_file).read_text().strip()
+                usage = int((group / usage_file).read_text())
+            except (OSError, ValueError):
+                limit = None
+            if (
+                limit not in (None, "max") and int(limit) < 2**60
+            ):  # v1 reports no limit as ~2**63
+                room = int(limit) - usage
+                headroom = room if headroom is None else min(headroom, room)
+            if group == base or group.parent == group:
+                break
+            group = group.parent
+    return headroom
+
+
+def _available_memory() -> int:
+    """Bytes this process can still use: free system memory, capped by a cgroup limit."""
+    available = psutil.virtual_memory().available
+    headroom = _cgroup_headroom()
+    return available if headroom is None else min(available, headroom)
+
+
+def _forward_bytes_per_voxel(
+    model: nn.Module, in_channels: int, shape: tuple[int, ...]
+) -> float | None:
+    """Peak memory held at once by one CPU forward pass, per voxel, or None.
+
+    Read from the profiler's record of every allocation and free, which grows exactly
+    with the voxel count. That record is not public API, so None is returned when it
+    is missing or another profiler is running.
+    """
+    x = torch.randn((1, in_channels) + shape)
+    try:
+        with (
+            torch.no_grad(),
+            profile(activities=[ProfilerActivity.CPU], profile_memory=True) as prof,
+        ):
+            model(x)
+        events = prof.profiler.kineto_results.events()
+        allocations = sorted(
+            (event.start_ns(), event.nbytes())
+            for event in events
+            if event.name() == "[memory]"
+        )
+    except (AttributeError, RuntimeError):
+        return None
+    held = peak = 0
+    for _, nbytes in allocations:
+        held += nbytes
+        peak = max(peak, held)
+    return peak / x.numel() if peak > 0 else None
+
+
+def _forward_memory(model: nn.Module, in_channels: int, shape: tuple[int, ...]) -> int:
+    """Peak growth of this process's resident memory during one CPU forward pass."""
+    process = psutil.Process()
+    baseline = process.memory_info().rss
+    peak = baseline
+    done = threading.Event()
+
+    def sample():
+        nonlocal peak
+        while not done.is_set():
+            peak = max(peak, process.memory_info().rss)
+            done.wait(0.002)
+
+    sampler = threading.Thread(target=sample, daemon=True)
+    sampler.start()
+    try:
+        with torch.no_grad():
+            model(torch.randn((1, in_channels) + shape))
+    finally:
+        done.set()
+        sampler.join()
+    return max(peak, process.memory_info().rss) - baseline
+
+
+def _probe_cpu_patch_shape(
+    model: nn.Module, in_channels: int, nn_dim: int
+) -> tuple[int, int, int]:
+    """Largest CPU patch whose forward pass fits in a share of the free memory.
+
+    CPU allocations do not fail the way CUDA ones do: memory runs into swap or the
+    process is killed. So instead of probing for OOM, the memory per voxel is measured
+    on a tiny input with the profiler. Without the profiler's record, the growth of
+    the resident memory is used, which overestimates it on small inputs.
+    """
+    budget = CPU_MEMORY_FRACTION * _available_memory()
+    model.eval()
+    shape = CPU_PROBE_SHAPES[nn_dim]
+    bytes_per_voxel = _forward_bytes_per_voxel(model, in_channels, shape)
+    if bytes_per_voxel is None:
+        logger.warning(
+            "PyTorch's allocation record is unavailable, so CPU memory is estimated "
+            "from the resident memory, which overestimates it."
+        )
+        resident = _forward_memory(model, in_channels, shape) / np.prod(shape)
+        bytes_per_voxel = max(resident, MIN_BYTES_PER_VOXEL)
+
+    low, high = CPU_PATCH_SIDE[nn_dim]
+    side = int((budget / bytes_per_voxel) ** (1 / nn_dim)) // 16 * 16
+    if side < low:
+        logger.warning(
+            f"Only {budget / 1e9:.1f} GB of memory is free for a CPU patch, which needs "
+            f"{bytes_per_voxel / 1e3:.1f} kB per voxel. Using the smallest patch, "
+            f"{low} per side, which may not fit."
+        )
+    side = min(max(side, low), high)
+    logger.info(
+        f"CPU patch: {bytes_per_voxel / 1e3:.1f} kB per voxel and "
+        f"{budget / 1e9:.1f} GB to use give at most {side} per side"
+    )
+    return (1, side, side) if nn_dim == 2 else (side, side, side)
 
 
 def _is_oom_error(error: RuntimeError, device: str) -> bool:
@@ -160,12 +313,13 @@ def probe_max_patch_shape(
     1. This is merely a good quick guess. However, an exact maximum size causes problems.
     2. If isotropic shape, then the `best_n` is 128 for 2080 Ti, 186 for 3090,
        but for the sake of speed, cap it at 50 and let batch size handle the rest.
+    3. On CPU the shape is sized from the free memory instead, see `_probe_cpu_patch_shape`.
     """
 
     nn_dim = 2 if _is_2d_model(model) else 3
 
     if device == "cpu":
-        return (1, 1024, 1024) if nn_dim == 2 else (256, 256, 256)
+        return _probe_cpu_patch_shape(model, in_channels, nn_dim)
 
     with _quiet_oom_probing(device):
         model = model.to(device)
