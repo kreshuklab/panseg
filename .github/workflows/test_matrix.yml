@@ -23,6 +23,13 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v7.0.1
 
+      # mkl 2026.2.0 lacks libmkl_gf_lp64 on Linux, so numpy aborts on import
+      # (conda-forge/intel_repack-feedstock#145). Remove once that build is marked broken.
+      - name: Pin mkl below 2026.2 on Linux (temporary)
+        if: runner.os == 'Linux'
+        run: |
+          sed -i 's/^dependencies:$/dependencies:\n  - mkl<2026.2/' environment-dev.yaml
+
       - name: Set Up Miniforge
         uses: conda-incubator/setup-miniconda@v4.0.0
         with:
