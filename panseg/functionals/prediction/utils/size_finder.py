@@ -25,6 +25,8 @@ CPU_PROBE_SHAPES = {2: (16, 16), 3: (16, 16, 16)}
 CPU_PATCH_SIDE = {2: (64, 1024), 3: (64, 256)}
 # Floor for the resident-memory fallback, in case reused memory hides the forward pass
 MIN_BYTES_PER_VOXEL = 1024
+# SliceBuilder's smallest patch in Y and X
+MIN_PATCH_YX = 64
 
 
 @contextlib.contextmanager
@@ -288,6 +290,16 @@ def derive_patch_and_halo_shapes(
         adjusted_patch_shape = np.minimum(adjusted_patch_shape, shape_volume)
 
         patch_size = adjusted_patch_shape - halo_shape * 2
+        # Trim the halo rather than let a patch fall below SliceBuilder's minimum in Y and X
+        trim = (patch_size[1:] < MIN_PATCH_YX) & (
+            adjusted_patch_shape[1:] >= MIN_PATCH_YX
+        )
+        if np.any(trim):
+            halo_shape[1:] = np.where(
+                trim, (adjusted_patch_shape[1:] - MIN_PATCH_YX) // 2, halo_shape[1:]
+            )
+            patch_size = adjusted_patch_shape - halo_shape * 2
+            logger.debug(f"Halo trimmed to {tuple(halo_shape)} to keep 64 in Y and X")
         if np.any(patch_size < 1):
             if np.any(adjusted_patch_shape < 1):
                 raise RuntimeError(
