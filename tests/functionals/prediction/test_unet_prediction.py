@@ -78,3 +78,34 @@ def test_unet_prediction_rejects_manual_patch_bigger_than_sample(dummy_model):
             device="cpu",
             disable_tqdm=True,
         )
+
+
+def test_unet_prediction_cpu_patch_follows_free_memory(dummy_model, monkeypatch):
+    # Little free memory gives the smallest CPU patch, not the former fixed 256^3
+    monkeypatch.setattr(size_finder, "_available_memory", lambda: 100_000_000)
+    seen = []
+    derive = size_finder.derive_patch_and_halo_shapes
+
+    def spy(full_volume_shape, max_patch_shape, *args, **kwargs):
+        seen.append(tuple(max_patch_shape))
+        return derive(full_volume_shape, max_patch_shape, *args, **kwargs)
+
+    monkeypatch.setattr(size_finder, "derive_patch_and_halo_shapes", spy)
+    raw = np.random.rand(16, 256, 256).astype("float32")
+
+    pmap = unet_prediction(
+        raw=raw,
+        input_layout="ZYX",
+        model_name=None,
+        model_id=None,
+        patch=None,
+        patch_halo=(0, 0, 0),
+        config_path=dummy_model[0],
+        model_weights_path=dummy_model[1],
+        device="cpu",
+        disable_tqdm=True,
+    )
+
+    assert seen == [(64, 64, 64)]
+    assert pmap.shape[-3:] == raw.shape
+    assert np.all(np.isfinite(pmap))

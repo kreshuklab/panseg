@@ -1,3 +1,6 @@
+import logging
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 import torch
@@ -90,6 +93,35 @@ def test_derive_patch_and_halo_shapes(
         full_volume_shape, max_patch_shape, double_halo_shape, both_sides=True
     )
     assert result == expected
+
+
+@pytest.mark.parametrize(
+    "full_volume_shape, max_patch_shape, min_halo_shape, expected",
+    [  # The halo is trimmed so the patch keeps SliceBuilder's 64 in Y and X
+        (
+            (1000, 1000, 1000),
+            (100, 100, 100),
+            (44, 44, 44),
+            ((12, 64, 64), (44, 18, 18)),
+        ),
+        (
+            (1000, 1000, 1000),
+            (128, 128, 128),
+            (44, 44, 44),
+            ((40, 64, 64), (44, 32, 32)),
+        ),
+        ((1, 3000, 3000), (1, 140, 140), (0, 44, 44), ((1, 64, 64), (0, 38, 38))),
+    ],
+)
+def test_derive_patch_and_halo_shapes_keeps_64_in_yx(
+    full_volume_shape, max_patch_shape, min_halo_shape, expected
+):
+    patch, halo = derive_patch_and_halo_shapes(
+        full_volume_shape, max_patch_shape, min_halo_shape
+    )
+
+    assert (patch, halo) == expected
+    assert np.prod(np.array(patch) + np.array(halo) * 2) <= np.prod(max_patch_shape)
 
 
 class FakeOomProbe:
@@ -452,3 +484,179 @@ def test_quiet_oom_probing_noop_without_cuda(monkeypatch):
 
     with size_finder._quiet_oom_probing("cuda:0"):
         pass
+
+
+class FakeCpuMemory:
+    """Stand-in for the CPU memory readings: fixed free memory and memory per voxel."""
+
+    def __init__(self):
+        self.available = 64e9
+        self.bytes_per_voxel = 10_000
+        self.profiled = True  # False: the profiler's allocation record is missing
+        self.probed_shapes = []
+
+    def profiled_bytes_per_voxel(self, model, in_channels, shape):
+        self.probed_shapes.append(tuple(shape))
+        return self.bytes_per_voxel if self.profiled else None
+
+    def resident_growth(self, model, in_channels, shape):
+        self.probed_shapes.append(tuple(shape))
+        return int(self.bytes_per_voxel * np.prod(shape))
+
+
+@pytest.fixture()
+def fake_cpu_memory(monkeypatch):
+    fake = FakeCpuMemory()
+    monkeypatch.setattr(size_finder, "_available_memory", lambda: fake.available)
+    monkeypatch.setattr(
+        size_finder, "_forward_bytes_per_voxel", fake.profiled_bytes_per_voxel
+    )
+    monkeypatch.setattr(size_finder, "_forward_memory", fake.resident_growth)
+    return fake
+
+
+@pytest.mark.parametrize(
+    ("model_cls", "available", "bytes_per_voxel", "expected"),
+    [
+        (FakeUNet3D, 64e9, 10_000, (144, 144, 144)),
+        (FakeUNet3D, 4e9, 10_000, (64, 64, 64)),  # floored at the smallest side
+        (FakeUNet3D, 1e12, 1_000, (256, 256, 256)),  # the former fixed shape caps it
+        (FakeUNet2D, 64e9, 10_000, (1, 1024, 1024)),
+        (FakeUNet2D, 8e9, 20_000, (1, 432, 432)),
+    ],
+)
+def test_probe_max_patch_shape_cpu_follows_free_memory(
+    fake_cpu_memory, model_cls, available, bytes_per_voxel, expected
+):
+    fake_cpu_memory.available = available
+    fake_cpu_memory.bytes_per_voxel = bytes_per_voxel
+    model = model_cls(failure="forward must not run")
+
+    assert probe_max_patch_shape(model, 1, "cpu") == expected
+    nn_dim = 2 if model_cls is FakeUNet2D else 3
+    assert fake_cpu_memory.probed_shapes == [size_finder.CPU_PROBE_SHAPES[nn_dim]]
+    assert model.seen_input_shapes == []
+
+
+def test_probe_max_patch_shape_cpu_warns_when_memory_is_short(fake_cpu_memory, caplog):
+    fake_cpu_memory.available = 1e9
+
+    with caplog.at_level(logging.WARNING):
+        assert probe_max_patch_shape(FakeUNet3D(), 1, "cpu") == (64, 64, 64)
+    assert "may not fit" in caplog.text
+
+
+def test_probe_max_patch_shape_cpu_falls_back_to_resident_memory(
+    fake_cpu_memory, caplog
+):
+    fake_cpu_memory.profiled = False
+
+    with caplog.at_level(logging.WARNING):
+        assert probe_max_patch_shape(FakeUNet3D(), 1, "cpu") == (144, 144, 144)
+    assert "allocation record is unavailable" in caplog.text
+    assert fake_cpu_memory.probed_shapes == [(16, 16, 16), (16, 16, 16)]
+
+
+def test_probe_max_patch_shape_cpu_floors_hidden_resident_memory(fake_cpu_memory):
+    # Memory freed by an earlier pass can be reused, so the resident growth may be 0
+    fake_cpu_memory.profiled = False
+    fake_cpu_memory.available = 4e9
+    fake_cpu_memory.bytes_per_voxel = 0
+
+    assert probe_max_patch_shape(FakeUNet3D(), 1, "cpu") == (112, 112, 112)
+
+
+def test_forward_bytes_per_voxel_grows_exactly_with_voxels():
+    model = UNet3D(1, 1, f_maps=16, num_levels=2).eval()
+
+    small = size_finder._forward_bytes_per_voxel(model, 1, (16, 16, 16))
+    large = size_finder._forward_bytes_per_voxel(model, 1, (16, 32, 32))
+
+    assert small > 0
+    assert large == pytest.approx(small, rel=0.01)
+
+
+class _ProfileWithoutRecord:
+    """A profiler whose allocation record is missing, as in another PyTorch version."""
+
+    profiler = SimpleNamespace()
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+class _ProfileAlreadyRunning(_ProfileWithoutRecord):
+    def __enter__(self):
+        raise RuntimeError("Can't disable Kineto profiler when it's not running")
+
+
+@pytest.mark.parametrize("profile", [_ProfileWithoutRecord, _ProfileAlreadyRunning])
+def test_forward_bytes_per_voxel_none_without_the_record(monkeypatch, profile):
+    monkeypatch.setattr(size_finder, "profile", profile)
+    model = UNet3D(1, 1, f_maps=16, num_levels=2).eval()
+
+    assert size_finder._forward_bytes_per_voxel(model, 1, (16, 16, 16)) is None
+
+
+def test_forward_memory_measures_a_real_pass():
+    model = UNet3D(1, 1, f_maps=16, num_levels=2).eval()
+
+    assert size_finder._forward_memory(model, 1, (32, 64, 64)) > 0
+
+
+def test_available_memory_takes_the_cgroup_limit(monkeypatch):
+    monkeypatch.setattr(
+        size_finder.psutil, "virtual_memory", lambda: SimpleNamespace(available=32e9)
+    )
+    monkeypatch.setattr(size_finder, "_cgroup_headroom", lambda: 6e9)
+    assert size_finder._available_memory() == 6e9
+
+    monkeypatch.setattr(size_finder, "_cgroup_headroom", lambda: None)
+    assert size_finder._available_memory() == 32e9
+
+
+def _write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+
+
+def test_cgroup_headroom_v2_takes_the_tightest_ancestor(tmp_path):
+    root = tmp_path / "cgroup"
+    _write(root / "slurm/job_1/memory.max", "8000000000\n")
+    _write(root / "slurm/job_1/memory.current", "2000000000\n")
+    _write(root / "slurm/job_1/step_0/memory.max", "max\n")
+    _write(root / "slurm/job_1/step_0/memory.current", "1000000000\n")
+    proc_cgroup = tmp_path / "proc_cgroup"
+    proc_cgroup.write_text("0::/slurm/job_1/step_0\n")
+
+    assert size_finder._cgroup_headroom(proc_cgroup, root) == 6_000_000_000
+
+
+def test_cgroup_headroom_v1(tmp_path):
+    root = tmp_path / "cgroup"
+    group = root / "memory/slurm/uid_1/job_2"
+    _write(group / "memory.limit_in_bytes", "4000000000\n")
+    _write(group / "memory.usage_in_bytes", "1000000000\n")
+    proc_cgroup = tmp_path / "proc_cgroup"
+    proc_cgroup.write_text(
+        "12:memory:/slurm/uid_1/job_2\n3:cpu,cpuacct:/slurm/uid_1/job_2\n"
+    )
+
+    assert size_finder._cgroup_headroom(proc_cgroup, root) == 3_000_000_000
+
+
+def test_cgroup_headroom_none_without_a_limit(tmp_path):
+    root = tmp_path / "cgroup"
+    _write(root / "memory/memory.limit_in_bytes", "9223372036854771712\n")
+    _write(root / "memory/memory.usage_in_bytes", "1000\n")
+    proc_cgroup = tmp_path / "proc_cgroup"
+    proc_cgroup.write_text("12:memory:/\n")
+
+    assert size_finder._cgroup_headroom(proc_cgroup, root) is None
+    assert size_finder._cgroup_headroom(tmp_path / "missing", root) is None
