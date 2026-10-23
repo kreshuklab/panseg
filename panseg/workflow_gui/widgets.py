@@ -126,14 +126,20 @@ class Workflow_widgets:
         """Legacy workflow files stored the inputs as a list of one dict.
 
         The canonical form is a plain dict; convert on load so the file is
-        migrated to the new format when it is saved again.
+        migrated to the new format when it is saved again. A list holding
+        more than one dict is a headless batch configuration, not a single
+        workflow: it is left untouched so validate_config can reject it
+        instead of silently dropping the other input sets here.
         """
         if not isinstance(self.config, dict):
             return
 
         inputs = self.config.get("inputs")
         if isinstance(inputs, list):
-            self.config["inputs"] = inputs[0] if inputs else {}
+            if len(inputs) == 1 and isinstance(inputs[0], dict):
+                self.config["inputs"] = inputs[0]
+            elif not inputs:
+                self.config["inputs"] = {}
 
     def fill_config_c(self):
         """Fills content container with everything about one workflow."""
@@ -291,8 +297,20 @@ class Workflow_widgets:
         mwn.resize(c_size + b_size + QtCore.QSize(0, 80))
 
     @magic_factory(call_button=False)
-    def io_item(self, path: Path):
+    def io_item(self, path: Path | tuple[Path, ...]):
+        """Return the yaml value of a path widget.
+
+        A multi-file FileEdit (mode 'rm') always reports a tuple of paths:
+        a single path is folded back to a plain string (a file, or a
+        directory of files or time series), several paths to a list of
+        strings (the files stacked as one time series by the import task).
+        """
         logger.debug(f"Called io_item {path}")
+        if isinstance(path, tuple):
+            paths = [str(entry) for entry in path]
+            if not paths:
+                return ""
+            return paths[0] if len(paths) == 1 else paths
         return str(path)
 
     @magic_factory(call_button=False)

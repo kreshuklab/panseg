@@ -294,6 +294,22 @@ def workflow_t_spacing_yaml(tmpdir: Path):
 
 
 @pytest.fixture
+def workflow_multifile_yaml(workflow_yaml: Path):
+    """Workflow whose input_path is a list of files.
+
+    The list is the multi-file input shape: the files are stacked as one
+    time series in a single job.
+    """
+    config = yaml.safe_load(workflow_yaml.read_text())
+    config["inputs"]["input_path_2"] = [
+        "/data/series_t000.tif",
+        "/data/series_t001.tif",
+    ]
+    workflow_yaml.write_text(yaml.safe_dump(config))
+    return workflow_yaml
+
+
+@pytest.fixture
 def zarr_file_empty():
     return TEST_FILES / "empty.zarr"
 

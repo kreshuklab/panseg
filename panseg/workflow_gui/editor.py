@@ -96,6 +96,12 @@ class Workflow_gui(Workflow_widgets):
             raise ValueError(
                 "The workflow configuration does not contain an 'inputs' section."
             )
+        if isinstance(self.config["inputs"], list):
+            raise ValueError(
+                "The 'inputs' section is a list of multiple input dicts: a "
+                "headless batch configuration, not a single workflow. Run it "
+                "with `panseg --config` instead of the workflow editor."
+            )
         if "infos" not in self.config:
             raise ValueError(
                 "The workflow configuration does not contain an 'infos' section."

@@ -59,6 +59,10 @@ def test_loading_dialog(gui, workflow_yaml):
             "workflow_t_spacing_yaml",
             "workflow_t_spacing_yaml",
         ),
+        (
+            "workflow_multifile_yaml",
+            "workflow_multifile_yaml",
+        ),
     ],
     indirect=["gui"],
 )
@@ -92,6 +96,128 @@ def test_load_save_unchanged_complete(gui, workflow, tmp_path, request):
             assert v == parsed_out.get(k)
 
     assert parsed_out == parsed_in
+
+
+def _input_path_widget(gui):
+    """The FileEdit widget of the workflow's single input slot."""
+    input_keys = [
+        key for key in gui.changing_fields["inputs"] if key.startswith("input")
+    ]
+    assert len(input_keys) == 1
+    return gui.changing_fields["inputs"][input_keys[0]].path
+
+
+def _save_workflow(gui, tmp_path):
+    out_file = tmp_path / "test_workflow_out.yaml"
+    gui.save_b.native.click()
+    gui.save.path.value = str(out_file)
+    gui.save.call_button.native.click()
+    with open(out_file, "r") as f:
+        return yaml.safe_load(f)
+
+
+@pytest.mark.parametrize("gui", ["workflow_multifile_yaml"], indirect=["gui"])
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Testfiles contain only posix paths"
+)
+def test_multifile_input_renders_selection(gui):
+    """A list-of-files input_path is shown as the multi-path selection."""
+    widget = _input_path_widget(gui)
+    assert widget.value == (
+        Path("/data/series_t000.tif"),
+        Path("/data/series_t001.tif"),
+    )
+
+
+@pytest.mark.parametrize("gui", ["workflow_yaml"], indirect=["gui"])
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Testfiles contain only posix paths"
+)
+def test_multifile_selection_saves_list(gui, tmp_path):
+    """Selecting several files writes a list input_path: the multi-file
+    shape the import task stacks as one time series."""
+    _input_path_widget(gui).value = (Path("/data/b.tif"), Path("/data/a.tif"))
+
+    parsed_out = _save_workflow(gui, tmp_path)
+
+    assert parsed_out["inputs"]["input_path_2"] == ["/data/b.tif", "/data/a.tif"]
+
+
+@pytest.mark.parametrize("value", ["/data/image.h5", "/data/images"])
+@pytest.mark.parametrize("gui", ["workflow_yaml"], indirect=["gui"])
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Testfiles contain only posix paths"
+)
+def test_single_path_selection_saves_string(gui, tmp_path, value):
+    """A one-path selection folds back to a plain string, so single-file
+    and directory inputs keep their yaml shape."""
+    _input_path_widget(gui).value = (Path(value),)
+
+    parsed_out = _save_workflow(gui, tmp_path)
+
+    assert parsed_out["inputs"]["input_path_2"] == value
+
+
+@pytest.mark.parametrize("gui", ["workflow_yaml"], indirect=["gui"])
+def test_batch_config_is_rejected(gui, workflow_yaml, tmp_path):
+    """A headless batch configuration (inputs as a list of input dicts) is
+    not a single workflow: the editor refuses it instead of silently
+    dropping the other input sets."""
+    with open(workflow_yaml, "r") as f:
+        config = yaml.safe_load(f)
+    config["inputs"] = [config["inputs"], deepcopy(config["inputs"])]
+
+    batch_file = tmp_path / "batch_config.yaml"
+    with open(batch_file, "w") as f:
+        yaml.safe_dump(config, f)
+
+    with patch("panseg.workflow_gui.editor.logger") as mock_logger:
+        gui.loader_w.config_path.value = str(batch_file)
+        gui.loader_w.call_button.native.click()
+
+    mock_logger.error.assert_called_once()
+    assert gui.config is None
+
+
+def test_batch_config_is_rejected_on_open(qtbot, workflow_yaml, tmp_path):
+    """`panseg -e batch_config.yaml` opens the editor at the loader with an
+    error, not at a truncated view of the first input set."""
+    with open(workflow_yaml, "r") as f:
+        config = yaml.safe_load(f)
+    config["inputs"] = [config["inputs"], deepcopy(config["inputs"])]
+
+    batch_file = tmp_path / "batch_config.yaml"
+    with open(batch_file, "w") as f:
+        yaml.safe_dump(config, f)
+
+    with patch("panseg.workflow_gui.editor.logger") as mock_logger:
+        gui = Workflow_gui(config_path=batch_file, run=False)
+        qtbot.addWidget(gui.main_window.native)
+
+    mock_logger.error.assert_called_once()
+    assert gui.config is None
+    assert len(list(gui.content)) == 1  # only the loader, no input widgets
+
+
+def test_legacy_single_input_list_is_migrated(qtbot, workflow_yaml, tmp_path):
+    """Workflow files with the inputs section as a list of one dict load as
+    a plain dict, and saving writes the migrated form back."""
+    with open(workflow_yaml, "r") as f:
+        config = yaml.safe_load(f)
+    legacy_inputs = config["inputs"]
+    config["inputs"] = [legacy_inputs]
+
+    legacy_file = tmp_path / "legacy_workflow.yaml"
+    with open(legacy_file, "w") as f:
+        yaml.safe_dump(config, f)
+
+    gui = Workflow_gui(config_path=legacy_file, run=False)
+    qtbot.addWidget(gui.main_window.native)
+
+    assert gui.config["inputs"] == legacy_inputs
+
+    parsed_out = _save_workflow(gui, tmp_path)
+    assert parsed_out["inputs"] == legacy_inputs
 
 
 @pytest.mark.parametrize("gui", ["workflow_yaml"], indirect=["gui"])
