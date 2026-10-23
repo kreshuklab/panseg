@@ -199,7 +199,7 @@ class Workflow_widgets:
         )
 
         for io_type, path in inputs_d:
-            file_mode = "r"
+            file_mode = "rm"
             w = self.io_item(
                 path={
                     "tooltip": self.config["infos"]["inputs_schema"][io_type][
