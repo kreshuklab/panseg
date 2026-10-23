@@ -92,6 +92,51 @@ def test_derive_patch_and_halo_shapes(
     assert result == expected
 
 
+@pytest.mark.parametrize(
+    "full_volume_shape, max_patch_shape, min_halo_shape, expected",
+    [  # 2D models (issue #612): patch depth 1 and no Z halo, the budget goes to Y and X
+        ((20, 512, 512), (1, 3200, 3200), (0, 44, 44), ((1, 512, 512), (0, 0, 0))),
+        ((50, 1024, 1024), (1, 3200, 3200), (0, 44, 44), ((1, 1024, 1024), (0, 0, 0))),
+        ((50, 1024, 1024), (1, 1024, 1024), (0, 44, 44), ((1, 1024, 1024), (0, 0, 0))),
+        (
+            (50, 5000, 5000),
+            (1, 3200, 3200),
+            (0, 44, 44),
+            ((1, 3112, 3112), (0, 44, 44)),
+        ),
+        ((50, 5000, 300), (1, 3200, 3200), (0, 44, 44), ((1, 5000, 300), (0, 0, 0))),
+        ((1, 3000, 800), (1, 1024, 1024), (0, 44, 44), ((1, 1222, 800), (0, 44, 0))),
+        (
+            (1, 20000, 1000),
+            (1, 3200, 3200),
+            (0, 44, 44),
+            ((1, 10152, 1000), (0, 44, 0)),
+        ),
+        ((20, 512, 512), (1, 3200, 3200), (4, 44, 44), ((1, 512, 512), (0, 0, 0))),
+    ],
+)
+def test_derive_patch_and_halo_shapes_2d(
+    full_volume_shape, max_patch_shape, min_halo_shape, expected
+):
+    patch, halo = derive_patch_and_halo_shapes(
+        full_volume_shape, max_patch_shape, min_halo_shape, is_2d=True
+    )
+    assert (patch, halo) == expected
+    assert patch[0] == 1 and halo[0] == 0
+    assert all(p <= s for p, s in zip(patch[1:], full_volume_shape[1:]))
+    assert np.prod(np.array(patch) + np.array(halo) * 2) <= np.prod(max_patch_shape)
+
+    double_halo_shape = tuple(h * 2 for h in min_halo_shape)
+    result = derive_patch_and_halo_shapes(
+        full_volume_shape,
+        max_patch_shape,
+        double_halo_shape,
+        both_sides=True,
+        is_2d=True,
+    )
+    assert result == expected
+
+
 class FakeOomProbe:
     """Stand-in for will_CUDA_OOM: OOMs iff the actual forward shape exceeds `threshold` voxels."""
 
@@ -169,6 +214,41 @@ def test_find_feasible_patch_and_halo_shapes_skips_verification_on_cpu(
 
     assert result == derive_patch_and_halo_shapes(VOL, PROBED_MAX, HALO)
     assert fake_oom_probe.verified_shapes == []
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_find_feasible_patch_and_halo_shapes_2d_model_keeps_depth_1(
+    fake_oom_probe, monkeypatch, device
+):
+    monkeypatch.setattr(
+        size_finder,
+        "probe_max_patch_shape",
+        lambda model, in_channels, device: (1, 3200, 3200),
+    )
+
+    result = find_feasible_patch_and_halo_shapes(FakeUNet2D(), 1, VOL, HALO, device)
+
+    assert result == ((1, 1536, 1536), (0, 0, 0))  # used to be Z = 4
+    if device == "cuda":
+        assert fake_oom_probe.verified_shapes == [(1, 1536, 1536)]
+
+
+def test_find_feasible_patch_and_halo_shapes_2d_model_shrinks_yx_only(
+    fake_oom_probe, monkeypatch
+):
+    monkeypatch.setattr(
+        size_finder,
+        "probe_max_patch_shape",
+        lambda model, in_channels, device: (1, 3200, 3200),
+    )
+    fake_oom_probe.threshold = 9_000_000  # the first attempt (10.24M voxels) OOMs
+
+    result = find_feasible_patch_and_halo_shapes(
+        FakeUNet2D(), 1, (48, 4000, 4000), HALO, device="cuda"
+    )
+
+    assert result == ((1, 2819, 2819), (0, 44, 44))
+    assert fake_oom_probe.verified_shapes == [(1, 3200, 3200), (1, 2907, 2907)]
 
 
 class _FakeDeviceTensor:

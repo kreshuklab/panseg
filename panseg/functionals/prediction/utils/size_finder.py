@@ -54,6 +54,16 @@ def _is_2d_model(model: nn.Module) -> bool:
     return isinstance(model, UNet2D)
 
 
+def _min_input_depth(model: nn.Module) -> int:
+    """Smallest input depth a model accepts: the product of its Z pooling kernels."""
+    depth = 1
+    for module in model.modules():
+        if isinstance(module, (nn.MaxPool3d, nn.AvgPool3d)):
+            kernel = module.kernel_size
+            depth *= kernel[0] if isinstance(kernel, tuple) else kernel
+    return depth
+
+
 def _is_oom_error(error: RuntimeError, device: str) -> bool:
     """Classify a device probe failure as an out-of-memory error.
 
@@ -73,6 +83,7 @@ def derive_patch_and_halo_shapes(
     max_patch_shape: tuple[int, int, int],
     min_halo_shape: tuple[int, int, int],
     both_sides: bool = False,
+    is_2d: bool = False,
 ) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     """
     Recommend an optimal patch shape and halo size for a given 3D sample. Since convolving
@@ -90,6 +101,9 @@ def derive_patch_and_halo_shapes(
         both_sides (bool, optional):
             If True, the `min_halo_shape` is applied symmetrically on both sides of the patch.
             Defaults to False.
+        is_2d (bool, optional):
+            If True, the model is 2D and predicts one Z slice at a time: patch depth 1,
+            Z halo 0, and the voxel budget goes to Y and X only. Defaults to False.
 
     Returns:
         tuple[tuple[int, int, int], tuple[int, int, int]]:
@@ -107,6 +121,8 @@ def derive_patch_and_halo_shapes(
     shape_halo_min = (
         np.array(min_halo_shape) // 2 if both_sides else np.array(min_halo_shape)
     )
+    if is_2d:  # one Z slice per patch
+        shape_volume[0] = shape_patch_max[0] = 1
 
     n_voxels_patch = np.prod(shape_patch_max)
     n_voxels_sample = np.prod(shape_volume)
@@ -115,6 +131,7 @@ def derive_patch_and_halo_shapes(
         return tuple(shape_volume), (0, 0, 0)
     else:  # otherwise at least one dim needs to be tiled, count_shrink < 3.
         dim_shrink = shape_patch_max > shape_volume
+        dim_shrink[0] |= is_2d  # Z is fixed, the budget goes to Y and X
         halo_shape = np.where(dim_shrink, 0, shape_halo_min)
         count_shrink = dim_shrink.sum()
 
@@ -277,15 +294,16 @@ def find_feasible_patch_and_halo_shapes(
         RuntimeError: If no feasible patch shape is found within `max_attempts` attempts.
     """
     max_patch_shape = probe_max_patch_shape(model, in_channels, device)
+    is_2d = _is_2d_model(model)
 
     if device == "cpu":
         return derive_patch_and_halo_shapes(
-            full_volume_shape, max_patch_shape, min_halo_shape, both_sides
+            full_volume_shape, max_patch_shape, min_halo_shape, both_sides, is_2d
         )
     patch, halo = (None, None)
     for attempt in range(max_attempts):
         patch, halo = derive_patch_and_halo_shapes(
-            full_volume_shape, max_patch_shape, min_halo_shape, both_sides
+            full_volume_shape, max_patch_shape, min_halo_shape, both_sides, is_2d
         )
         if not will_CUDA_OOM(
             model, in_channels, patch, halo, batch_size=1, device=device

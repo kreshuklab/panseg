@@ -22,6 +22,8 @@ from panseg.functionals.dataprocessing.dataprocessing import (
 from panseg.functionals.prediction.utils.array_dataset import ArrayDataset
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
 from panseg.functionals.prediction.utils.size_finder import (
+    _is_2d_model,
+    _min_input_depth,
     find_feasible_patch_and_halo_shapes,
 )
 from panseg.functionals.prediction.utils.slice_builder import SliceBuilder
@@ -29,6 +31,37 @@ from panseg.functionals.prediction.utils.utils import get_stride_shape
 from panseg.functionals.training.augs import get_test_augmentations
 
 logger = logging.getLogger(__name__)
+
+
+def _check_patch_depth(model, raw_shape, patch, patch_halo) -> None:
+    """Reject patch depths the model cannot run on, before probing the device."""
+    if _is_2d_model(model):  # 2D models predict one Z slice at a time
+        if patch is None:  # the derived patch has depth 1 and no Z halo
+            return
+        if patch[0] != 1:
+            raise ValueError(
+                f"Patch shape {tuple(patch)} has {patch[0]} Z slices, but 2D models "
+                "predict one Z slice at a time. Set the Z patch size to 1, "
+                "or leave the patch unset to derive a feasible one."
+            )
+        if patch_halo[0] != 0:
+            raise ValueError(
+                f"Halo shape {tuple(patch_halo)} has a Z halo of {patch_halo[0]}, but "
+                "2D models predict one Z slice at a time. Set the Z halo to 0."
+            )
+        return
+    min_depth = _min_input_depth(model)
+    if patch is None and raw_shape[0] < min_depth:  # auto patches fit the image
+        raise ValueError(
+            f"This 3D model needs at least {min_depth} Z slices, but the image has "
+            f"{raw_shape[0]}. Use a 2D model for images with fewer Z slices."
+        )
+    if patch is not None and patch[0] + 2 * patch_halo[0] < min_depth:
+        raise ValueError(
+            f"This 3D model needs at least {min_depth} Z slices per patch including "
+            f"halo, but patch {tuple(patch)} with halo {tuple(patch_halo)} has "
+            f"{patch[0] + 2 * patch_halo[0]}. Increase the Z patch size or halo."
+        )
 
 
 def biio_prediction(
@@ -207,6 +240,7 @@ def unet_prediction(
 
     Raises:
         ValueError: If neither `model_name`, `model_id`, nor `config_path` are provided.
+        ValueError: If the patch or halo shape cannot run on the model.
     """
 
     if config_path is not None:  # Safari mode for custom models outside zoos
@@ -252,6 +286,7 @@ def unet_prediction(
         raw_shape = raw.shape[1:]
 
     assert len(raw_shape) == 3
+    _check_patch_depth(model, raw_shape, patch, patch_halo)
 
     if patch is None:
         patch, patch_halo = find_feasible_patch_and_halo_shapes(

@@ -12,6 +12,7 @@ dependencies:
   - mkdocs-git-committers-plugin-2==2.5.0
   - mkdocs-git-revision-date-localized-plugin==1.2.9
   - mkdocs-material==9.7.7
+  - mkdocstrings==1.0.7
   - mkdocstrings-python
   - napari==0.9.1
   - nifty==1.2.4
@@ -19,6 +20,7 @@ dependencies:
   - pip
   - pre-commit
   - pydantic==2.13.5
+  - pymdown-extensions==12.2
   - pyside6==6.11.2
   - pytest
   - pytest-cov
