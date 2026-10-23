@@ -78,7 +78,54 @@ def test_open_file_accepts_t_layouts(input_tab, mocker, tmp_path, t_layout):
 
     task_kwargs = mocked_scheduler.call_args.kwargs["task_kwargs"]
     assert task_kwargs["stack_layout"] == t_layout
-    assert task_kwargs["input_path"] == path
+    assert task_kwargs["input_path"] == (path,)
+
+
+def test_open_file_multi_selection_passes_natural_sorted_tuple(
+    input_tab, mocker, tmp_path
+):
+    """Multi-select passes the whole selection to the import task, in
+    alphanumeric filename order."""
+    mocked_scheduler = mocker.patch(
+        target="panseg.viewer_napari.widgets.input.schedule_task",
+        autospec=True,
+    )
+    b10 = tmp_path / "b10.tiff"
+    b2 = tmp_path / "b2.tiff"
+    for path in (b10, b2):
+        create_tiff(path, np.empty((16, 16), dtype="float32"), VoxelSize(), layout="YX")
+    input_tab.path_changed_once = True
+    kwargs = {
+        "path_mode": True,
+        "path": (b10, b2),
+        "stack_layout": "TYX",
+        "layer_type": InputType.RAW.value,
+        "new_layer_name": "",
+    }
+    input_tab.widget_open_file(**kwargs)
+
+    task_kwargs = mocked_scheduler.call_args.kwargs["task_kwargs"]
+    assert task_kwargs["input_path"] == (b2, b10)
+
+
+def test_open_file_multi_selection_requires_t_layout(input_tab, mocker, caplog):
+    """A multi-file selection records a time series workflow: a t-less
+    stack layout would run on stacking inputs yet fail on time-series
+    inputs, so the schedule is refused instead of recording the trap."""
+    mocked_scheduler = mocker.patch(
+        target="panseg.viewer_napari.widgets.input.schedule_task",
+        autospec=True,
+    )
+    input_tab.path_changed_once = True
+    input_tab.widget_open_file(
+        path_mode=True,
+        path=(Path("/tmp/a.tiff"), Path("/tmp/b.tiff")),
+        stack_layout="YX",
+        layer_type=InputType.RAW.value,
+        new_layer_name="",
+    )
+    assert mocked_scheduler.call_count == 0
+    assert "must carry the time axis" in caplog.text
 
 
 def test_stack_layout_tooltip_mentions_t(input_tab):
@@ -113,20 +160,37 @@ def test_open_file_passes_stack_layout_with_slice(input_tab, mocker, tmp_path):
 
     task_kwargs = mocked_scheduler.call_args.kwargs["task_kwargs"]
     assert task_kwargs["stack_layout"] == layout
-    assert task_kwargs["input_path"] == path
+    assert task_kwargs["input_path"] == (path,)
 
 
 def test_open_file_widget_path_handling(input_tab):
-    assert input_tab.widget_open_file.path.mode.value == "r"
+    assert input_tab.widget_open_file.path.mode.value == "rm"
     assert input_tab.widget_open_file.path.label == "File path"
 
     input_tab._on_path_mode_changed(PathMode.FILE.value)
-    assert input_tab.widget_open_file.path.mode.value == "r"
+    assert input_tab.widget_open_file.path.mode.value == "rm"
     assert input_tab.widget_open_file.path.label == "File path"
 
     input_tab._on_path_mode_changed(PathMode.DIR.value)
     assert input_tab.widget_open_file.path.mode.value == "d"
     assert input_tab.widget_open_file.path.label == "Zarr path\n(.zarr)"
+
+
+def test_open_file_path_tooltip_mentions_multi_select(input_tab):
+    tooltip = input_tab.widget_open_file.path.tooltip
+    assert "one or more files" in tooltip
+    assert "time series" in tooltip
+
+
+def test_open_file_multi_selection_defaults_layer_name_to_first_stem(
+    input_tab, tmp_path
+):
+    b10 = tmp_path / "b10.tiff"
+    b2 = tmp_path / "b2.tiff"
+    for path in (b10, b2):
+        create_tiff(path, np.empty((16, 16), dtype="float32"), VoxelSize(), layout="YX")
+    input_tab.widget_open_file.path.value = (b10, b2)
+    assert input_tab.widget_open_file.new_layer_name.value == "b2"
 
 
 def test_look_up_dataset_keys_empty(input_tab, zarr_file_empty, mocker):
@@ -357,13 +421,37 @@ def test_path_change_copies_io_guess_into_stack_layout(
     assert input_tab.widget_open_file.stack_layout.value == expected
 
 
-def test_on_path_changed(input_tab, mocker):
+def test_path_change_multi_selection_prefills_from_first_sorted(input_tab, tmp_path):
+    """The stack-layout prefill is driven by the first sorted file: the
+    OME anchor sorts before a plain tiff, so the guess is the anchor's."""
+    plain = tmp_path / "zz.tiff"
+    create_tiff(plain, np.empty((10, 20, 30), dtype="float32"), VoxelSize())
+    anchor = OME_EXAMPLES / "4D-series.ome.tif"
+    input_tab.widget_open_file.path.value = (plain, anchor)
+    assert input_tab.widget_open_file.stack_layout.value == "TZYX"
+
+
+def test_path_change_multi_selection_prefills_stacked_layout(input_tab, tmp_path):
+    """A multi-file selection imports as one time series: the prefilled
+    layout describes the stacked series, so the time axis of the first
+    file's spatial guess is prepended. The exported workflow then records
+    the T-bearing layout and re-runs on any documented input shape."""
+    z1 = tmp_path / "a1.tiff"
+    z2 = tmp_path / "a2.tiff"
+    for path in (z1, z2):
+        create_tiff(path, np.empty((10, 20, 30), dtype="float32"), VoxelSize())
+    input_tab.widget_open_file.path.value = (z1, z2)
+    assert input_tab.widget_open_file.stack_layout.value == "TZYX"
+
+
+def test_on_path_changed(input_tab, mocker, tmp_path):
     mocked_lookup = mocker.patch.object(input_tab, "look_up_dataset_keys")
     assert not input_tab.path_changed_once
-    mock_path = mocker.Mock()
-    input_tab._on_path_changed(mock_path)
+    path = tmp_path / "some.data"
+    path.write_bytes(b"")
+    input_tab.widget_open_file.path.value = path
     assert input_tab.path_changed_once
-    mocked_lookup.assert_called_with(mock_path)
+    mocked_lookup.assert_called_with(path)
 
 
 def test_on_refresh_keys_button(input_tab, mocker):

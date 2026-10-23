@@ -6,6 +6,7 @@ import yaml
 
 from panseg.headless.basic_runner import SerialRunner
 from panseg.io import allowed_data_format
+from panseg.io.io import natural_sort_key
 from panseg.tasks.workflow_handler import RunTimeInputSchema
 
 logger = logging.getLogger(__name__)
@@ -40,30 +41,77 @@ def validate_config(config: dict):
     return config
 
 
-def parse_import_image_task(input_path, allow_dir: bool) -> list[Path]:
+def parse_import_image_task(input_path, allow_dir: bool) -> list[Path | list[Path]]:
     if isinstance(input_path, str):
         input_path = Path(input_path)
+
+    if isinstance(input_path, list):
+        # one atomic job: the files are stacked as one time series. Directories
+        # are not allowed inside a list - a directory of files is its own
+        # multi-job input format.
+        paths = [
+            Path(entry) if isinstance(entry, str) else entry for entry in input_path
+        ]
+        for path in paths:
+            if not path.exists():
+                raise ValueError(f"File {path} does not exist.")
+            if not path.is_file():
+                raise ValueError(
+                    f"{path} is not a file, a list input must contain files only."
+                )
+        return [sorted(paths, key=natural_sort_key)]
 
     if not input_path.exists():
         raise FileNotFoundError(f"File {input_path} does not exist.")
 
     if input_path.is_file():
-        list_files = [input_path]
-    elif input_path.is_dir():
-        if not allow_dir:
-            raise ValueError(
-                f"Directory {input_path} is not allowed when multiple input files are expected."
-            )
+        if input_path.suffix.lower() not in allowed_data_format:
+            raise ValueError(f"No valid files found in {input_path}.")
+        return [input_path]
 
-        list_files = list(input_path.glob("*"))
-    else:
+    if not input_path.is_dir():
         raise ValueError(f"Path {input_path} is not a file or a directory.")
 
-    list_files = [f for f in list_files if f.suffix.lower() in allowed_data_format]
-    if not list_files:
+    if not allow_dir:
+        raise ValueError(
+            f"Directory {input_path} is not allowed when multiple input files are expected."
+        )
+
+    entries = list(input_path.glob("*"))
+    # a .zarr dataset is a directory but counts as a file
+    files: list[Path | list[Path]] = [
+        entry for entry in entries if entry.suffix.lower() in allowed_data_format
+    ]
+    if files:
+        # one job per file, as before
+        return files
+
+    # directory of subdirectories: one stacked job per subdirectory
+    jobs: list[Path | list[Path]] = []
+    for subdirectory in sorted(
+        (
+            entry
+            for entry in entries
+            if entry.is_dir() and entry.suffix.lower() not in allowed_data_format
+        ),
+        key=natural_sort_key,
+    ):
+        series_files = sorted(
+            (
+                entry
+                for entry in subdirectory.glob("*")
+                if entry.suffix.lower() in allowed_data_format
+            ),
+            key=natural_sort_key,
+        )
+        if not series_files:
+            raise ValueError(f"No valid files found in {subdirectory}.")
+        jobs.append(series_files)
+
+    if not jobs:
         raise ValueError(f"No valid files found in {input_path}.")
 
-    return list_files
+    return jobs
 
 
 def collect_jobs_list(
@@ -89,7 +137,8 @@ def collect_jobs_list(
     else:
         allow_dir = True
 
-    all_jobs = []
+    all_jobs = []  # disconnected graphs go here
+    # inputs: disconnected from the beginning, not by subdirectory
     for input_dict in inputs:
         if not isinstance(input_dict, dict):
             raise ValueError(f"Input {input_dict} should be a dictionary.")
@@ -114,11 +163,29 @@ def collect_jobs_list(
         list_keys = list(inputs_files.keys())
         list_jobs = [dict(zip(list_keys, files)) for files in list_files]
 
+        # each job = one subdirectory or input file
         for job in list_jobs:
             for key, value in input_dict.items():
                 if key not in job:
                     job[key] = value
+
+            # avoid name collision from subdirs
+            if (
+                len(list_jobs) > 1
+                and isinstance(job[list_keys[0]], list)
+                and "name_pattern" in job
+            ):
+                subdirs = ""
+                for input_key in list_keys:
+                    subdir = job[input_key][0].parent.name
+                    subdirs = subdirs + subdir
+                npat: str = job["name_pattern"]
+                job["name_pattern"] = npat.replace(
+                    "{file_name}", subdirs + "_{file_name}"
+                )
+
             all_jobs.append(job)
+
     return all_jobs
 
 

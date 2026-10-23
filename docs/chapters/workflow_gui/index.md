@@ -29,8 +29,16 @@ panseg --editor [workflow.yaml]
 ### Input/Output
 
 On the left, the input/output section is shown.
-You can specify a directory as `input_path` to use all images in this
-directory, or just a single image.
+The `input_path` field accepts the same shapes as the [batch
+processing](../panseg_interactive_napari/batch.md) runner: a single file,
+a directory of files (one job per file), a directory of subdirectories
+(one job per subdirectory), or a list of files (stacked as one time
+series). Pick several files at once in the `Select files` dialog, or type
+a directory path into the field.
+
+A workflow file whose `inputs` section holds a list of several input sets
+is a headless batch configuration. The editor does not open those; run
+them with `panseg --config`.
 
 The name_pattern defines how the exported images are named.
 You can use the placeholders `{file_name}` to reference the input file's name,

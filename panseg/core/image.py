@@ -3,7 +3,7 @@ import re
 import time
 from enum import Enum
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, Sequence
 from uuid import UUID, uuid4
 
 import h5py
@@ -14,7 +14,7 @@ from pydantic import BaseModel, model_validator
 
 import panseg.functionals.dataprocessing as dp
 from panseg.io.h5 import H5_EXTENSIONS, create_h5, read_h5_time_spacing
-from panseg.io.io import smart_load_with_vs
+from panseg.io.io import natural_sort_key, smart_load_with_vs
 from panseg.io.mesh import create_mesh
 from panseg.io.tiff import (
     TIFF_EXTENSIONS,
@@ -27,6 +27,11 @@ from panseg.io.zarr import ZARR_EXTENSIONS, create_zarr, read_zarr_time_spacing
 
 logger = logging.getLogger(__name__)
 last_warning = 0.0
+
+# The default image_name of import_image: in the multi-file branch it is
+# the "not provided" sentinel, and the result is named after the first
+# sorted stem instead.
+_DEFAULT_IMAGE_NAME = "image"
 
 # Conversion factors from source time units to the canonical unit, seconds.
 _TIME_UNITS_TO_SECONDS = {
@@ -296,6 +301,10 @@ class PanSegImage:
         Returns:
             PanSegImage: New image
         """
+
+        # Dump every key, including None-valued ones: a derived image may
+        # explicitly set a property to None (e.g. t_spacing on a timepoint),
+        # and dropping the key here would reject the kwarg below.
         property_dict = self._properties.model_dump()
 
         if name == self.name:
@@ -1014,18 +1023,201 @@ def crop_to_stack_layout(
     return stack_layout, data
 
 
+def _strip_stacked_time_axis(stack_layout: str) -> str:
+    """Drop the time axis from a stack layout for a multi-file import.
+
+    The reconciliation is keyed on the job shape: a selection of files is
+    one stacked series, so the layout's `t` describes the series the job
+    produces and stacking supplies that axis - the spatial remainder is
+    what applies to every file. This is what lets one exported workflow -
+    whose stack_layout is one value for all jobs - take its input as a
+    single T-bearing file (the layout matches the file exactly) or as a
+    selection of files (the t is stripped and stacking adds the axis). A
+    single-file job, by contrast, imports through the exact-match path: a
+    still file into a time series workflow errors instead of losing its t.
+
+    A slice entry on the time axis is rejected outright: the time axis of
+    a selection exists only after stacking, so there is no per-file meaning
+    to preserve - not even for a bare ":". Slicing entries that sit before
+    the time axis are kept: their axes keep their positions when the time
+    axis is dropped, so they apply to every file unchanged.
+
+    Args:
+        stack_layout (str): layout spec, letters with an optional slice
+
+    Returns:
+        str: the spatial layout spec to apply to every file
+
+    Raises:
+        ValueError: if the layout slices the time axis at all, carries the
+            time axis twice, or has no spatial axes left without it
+    """
+    letters, slicing = split_stack_layout(stack_layout)
+    tokens = _layout_tokens(letters)
+    t_positions = [i for i, (char, _) in enumerate(tokens) if char.upper() == "T"]
+    if not t_positions:
+        return stack_layout
+    if len(t_positions) > 1:
+        raise ValueError(
+            f"Stack layout {stack_layout!r} carries the time axis more than once."
+        )
+    t_position = t_positions[0]
+    if slicing is not None:
+        entries = _parse_slicing(slicing)
+        if len(entries) > t_position:
+            raise ValueError(
+                f"Stack layout {stack_layout!r} slices the time axis, but a "
+                "multi-file import gets the time axis from stacking: the "
+                "spatial entries apply to every file, and the stacked "
+                "series cannot be truncated through the layout."
+            )
+    spatial = "".join(
+        f"{'-' if inverted else ''}{char}"
+        for i, (char, inverted) in enumerate(tokens)
+        if i != t_position
+    )
+    if not spatial:
+        raise ValueError(
+            f"Stack layout {stack_layout!r} has no spatial axes left without "
+            "the time axis: a multi-file import stacks the files along time "
+            "and every file needs at least one spatial axis."
+        )
+    if slicing is not None:
+        spatial = f"{spatial}[{slicing}]"
+    return spatial
+
+
+def _import_image_sequence(
+    paths: Sequence[Path],
+    key: str | None,
+    image_name: str,
+    semantic_type: str,
+    stack_layout: str,
+) -> PanSegImage | list[PanSegImage]:
+    """Import a selection of independent files as one time series.
+
+    Every file is one timepoint: the files are ordered by alphanumeric
+    (natural) file name, each is imported through the single-file path with
+    the same key, semantic type and stack layout, and the results are
+    restacked per channel index with restack_timepoints. A t in the layout
+    describes the stacked series; the spatial axes without t are applied to
+    every file (_strip_stacked_time_axis). The result is one PanSegImage
+    for single-channel selections, a list of one PanSegImage per channel
+    otherwise - the same shape the channel-split single-file path returns.
+
+    Args:
+        paths (Sequence[Path]): the selected file paths; str entries are
+            coerced to Path
+        key (str | None): key for h5/zarr files, forwarded to every file
+        image_name (str): name of the result; the default sentinel names it
+            after the first file in natural order
+        semantic_type (str): semantic type of the image
+        stack_layout (str): spatial stack layout applied to every file
+
+    Returns:
+        PanSegImage | list[PanSegImage]: the stacked time series, one image
+            per channel
+    """
+    paths = [Path(entry) if isinstance(entry, str) else entry for entry in paths]
+    if not paths:
+        raise ValueError(
+            "Importing a time series needs at least one file, got an empty selection"
+        )
+    if len(paths) == 1:
+        # a one-file selection imports exactly as a single path: no
+        # sorting and no selection guard
+        return import_image(
+            path=paths[0],
+            key=key,
+            image_name=image_name,
+            semantic_type=semantic_type,
+            stack_layout=stack_layout,
+        )
+
+    missing = [entry for entry in paths if not entry.exists()]
+    if missing:
+        raise ValueError(
+            f"All selected files must exist, missing: {sorted(map(str, missing))}"
+        )
+
+    paths = sorted(paths, key=natural_sort_key)
+    # a member of a multifile OME-TIFF chain (or a BinaryOnly placeholder)
+    # is rejected by the per-file check during the first file's import,
+    # before any pixel data is read
+
+    # the layout may carry T: it describes the stacked series, so the
+    # spatial remainder is what applies to every file
+    per_file_stack_layout = _strip_stacked_time_axis(stack_layout)
+
+    per_file = [
+        import_image(
+            path=entry,
+            key=key,
+            image_name=entry.stem,
+            semantic_type=semantic_type,
+            stack_layout=per_file_stack_layout,
+        )
+        for entry in paths
+    ]
+
+    counts = [
+        1 if isinstance(result, PanSegImage) else len(result) for result in per_file
+    ]
+    if len(set(counts)) > 1:
+        raise ValueError(
+            "The selected files have different channel counts: "
+            + ", ".join(
+                f"{entry.stem} ({count})" for entry, count in zip(paths, counts)
+            )
+            + "; one time series is stacked per channel, so the counts must "
+            "be equal"
+        )
+
+    if image_name and image_name != _DEFAULT_IMAGE_NAME:
+        result_name = image_name
+    else:
+        result_name = paths[0].stem
+
+    stacked = []
+    n_channels = counts[0]
+    for index in range(n_channels):
+        images_at_index = [
+            result if isinstance(result, PanSegImage) else result[index]
+            for result in per_file
+        ]
+        stacked.append(
+            restack_timepoints(
+                images_at_index,
+                t_spacing=None,
+                t_unit="s",
+                name=result_name if n_channels == 1 else f"{result_name}_{index}",
+            )
+        )
+    return stacked[0] if len(stacked) == 1 else stacked
+
+
 def import_image(
-    path: Path,
+    path: Path | Sequence[Path],
     key: str | None = None,
-    image_name: str = "image",
+    image_name: str = _DEFAULT_IMAGE_NAME,
     semantic_type: str = "raw",
     stack_layout: str = "YX",
 ) -> PanSegImage | list[PanSegImage]:
     """
     Open an image file and create a PanSegImage object.
 
+    A sequence of paths (multi-file import) is stacked as one time series:
+    each file is one timepoint, the files are ordered by alphanumeric
+    (natural) file name, and the stack layout applies to every file. The
+    layout may carry a t, and the reconciliation is keyed on the job shape:
+    a selection is one stacked series, so its t is stripped and stacking
+    adds the time axis; a single file imports through the exact-match path,
+    where the layout must match the file's own axes - a still file into a
+    time series workflow errors.
+
     Args:
-        path (Path): Path to the image file
+        path (Path | Sequence[Path]): path to the image file, or a
+            selection of paths to stack as one time series
         key (Optional[str]): Key to load data from h5 or zarr files
         image_name (str): Name of the image (a unique name to identify the image)
         semantic_type (str): Semantic type of the image, should be raw,
@@ -1036,6 +1228,16 @@ def import_image(
             data before the axes are reordered.
     """
     global last_warning
+    if isinstance(path, str):
+        path = Path(path)
+    if not isinstance(path, Path):
+        return _import_image_sequence(
+            path,
+            key=key,
+            image_name=image_name,
+            semantic_type=semantic_type,
+            stack_layout=stack_layout,
+        )
     stack_layout, slicing = split_stack_layout(stack_layout.upper())
     is_tiff = path.suffix.lower() in TIFF_EXTENSIONS
     if is_tiff:

@@ -583,7 +583,7 @@ def _set_tiff_data_uuid(path, uuid_text, file_name=None):
 
 
 def test_check_ome_single_file_rejects_multifile(ome_timeseries_multifile):
-    first, second, _ = ome_timeseries_multifile
+    first, _, _ = ome_timeseries_multifile
     with pytest.raises(ValueError, match="Multi-file OME-TIFF"):
         check_ome_single_file(first)
 

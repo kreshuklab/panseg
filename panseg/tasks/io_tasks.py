@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Optional
 
 from panseg.core.image import PanSegImage, import_image, save_image
+from panseg.io.io import natural_sort_key
 from panseg.tasks import task_tracker
 from panseg.tasks.workflow_handler import RunTimeInputSchema, Task_message
 
@@ -11,14 +12,19 @@ from panseg.tasks.workflow_handler import RunTimeInputSchema, Task_message
     stack_level=True,
     list_inputs={
         "input_path": RunTimeInputSchema(
-            description="Path to a file, or a directory containing files (all files will be imported) or list of paths.",
+            description=(
+                "Path to a file, a directory of files (one job per file), a "
+                "directory of subdirectories (one job per subdirectory, the "
+                "files stacked as one time series), or a list of paths "
+                "(stacked as one time series)."
+            ),
             required=True,
             is_input_file=True,
         ),
     },
 )
 def import_image_task(
-    input_path: Path,
+    input_path: Path | list[Path],
     semantic_type: str,
     stack_layout: str,
     image_name: str | None = None,
@@ -27,19 +33,31 @@ def import_image_task(
     """
     Task wrapper creating a PanSegImage object from an image file.
 
+    A list of paths (multi-file import) is stacked as one time series, in
+    alphanumeric filename order: each file is one timepoint and the stack
+    layout applies spatially to every file.
+
     Args:
-        input_path (Path): path to the image file
+        input_path (Path | list[Path]): path to the image file, or a
+            selection of paths to stack as one time series
         semantic_type (str): semantic type of the image (raw, segmentation, prediction)
         stack_layout (str): stack layout of the image
             (any of the letters tczyx), optionally followed by a slice to
             truncate before importing, e.g. "TYXC[:3,:,:,:]"
+            Multi-file imports can not be sliced.
         image_name (str): name of the image, if None the name will be the
             same as the file name.
         key (str | None): key for the image (used only for h5 and zarr formats)
     """
 
     if image_name is None:
-        image_name = input_path.stem
+        if isinstance(input_path, Path):
+            image_name = input_path.stem
+        elif input_path:
+            image_name = min(input_path, key=natural_sort_key).stem
+        else:
+            # a placeholder name: import_image rejects the empty selection
+            image_name = "image"
 
     return import_image(
         path=input_path,

@@ -17,6 +17,8 @@ from napari.layers import Image, Labels, Shapes
 
 from panseg.core.image import SemanticType
 from panseg.io.io import smart_load
+from panseg.io.tiff import create_tiff
+from panseg.io.voxelsize import VoxelSize
 
 TEST_FILES = Path(__file__).resolve().parent / "resources"
 VOXEL_SIZE = (0.235, 0.15, 0.15)
@@ -289,6 +291,22 @@ def workflow_aio_yaml(tmpdir: Path):
 @pytest.fixture
 def workflow_t_spacing_yaml(tmpdir: Path):
     return Path(shutil.copy2(TEST_FILES / "test_workflow_t_spacing.yaml", tmpdir))
+
+
+@pytest.fixture
+def workflow_multifile_yaml(workflow_yaml: Path):
+    """Workflow whose input_path is a list of files.
+
+    The list is the multi-file input shape: the files are stacked as one
+    time series in a single job.
+    """
+    config = yaml.safe_load(workflow_yaml.read_text())
+    config["inputs"]["input_path_2"] = [
+        "/data/series_t000.tif",
+        "/data/series_t001.tif",
+    ]
+    workflow_yaml.write_text(yaml.safe_dump(config))
+    return workflow_yaml
 
 
 @pytest.fixture
@@ -731,3 +749,24 @@ def ome_timeseries_multifile(tmp_path):
     Returns (first_path, second_path, full_timeseries_data).
     """
     return _ome_multifile_chain(tmp_path)
+
+
+def write_still_tiff(
+    path: Path,
+    shape: tuple[int, ...],
+    value: int,
+    voxel_size: VoxelSize | None = None,
+) -> Path:
+    """One independent still file, its voxels filled with ``value``.
+
+    The layout follows the shape: 2D writes YX, 3D writes ZYX. Used by the
+    multi-file import tests to build selections with controlled stems,
+    values and voxel sizes.
+    """
+    create_tiff(
+        path,
+        np.full(shape, value, dtype="uint16"),
+        voxel_size or VoxelSize(),
+        layout="YX" if len(shape) == 2 else "ZYX",
+    )
+    return path

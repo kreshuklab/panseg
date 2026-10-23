@@ -19,6 +19,20 @@ Read more about [batch workflows in this chapter](../workflow_gui/index.md).
 !!! warning
     Some interactive steps can't be recorded into workflows, especially **cropping** and **proofreading**
 
+## Input paths
+
+The `input_path` of a workflow accepts four shapes:
+
+| `input_path` | What runs |
+| --- | --- |
+| a file | one job, one image |
+| a directory of files | one job per file |
+| a directory of subdirectories | one job per subdirectory, each is a time series (alphanumeric filename order) |
+| a list of files | one job, the files stacked as one time series |
+
+If files and subdirectories are mixed in the same directory, the files
+are imported and the subdirectories are ignored.
+
 ## Widget: Export Batch Workflow
 
 ```python exec="1" html="1"
