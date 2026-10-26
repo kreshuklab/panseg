@@ -1,9 +1,9 @@
 # Time Series
 
 PanSeg imports, processes, and exports time series data.
-In the current version Panseg does not take any advantage of the time data,
+In the current version PanSeg does not take any advantage of the time data,
 it only processes the data frame-by-frame. Tracking and other processing
-across timepoints will be added in a future version.
+across time points will be added in a future version.
 
 ## Supported layouts and formats
 
@@ -14,6 +14,7 @@ Import supports OME-TIFF, h5, and zarr.
 For OME-TIFF, the input tab prefills the stack layout from
 the file's OME-XML, and it reads the time spacing from the timing metadata
 (`TimeIncrement` or `Plane.DeltaT`) if the file carries it.
+OME-ZARR support is planned (#622)
 
 ## From multiple files
 
