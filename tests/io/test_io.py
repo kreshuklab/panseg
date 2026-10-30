@@ -16,6 +16,7 @@ from panseg.io.mesh import create_mesh
 from panseg.io.tiff import create_tiff
 from panseg.io.voxelsize import VoxelSize
 from panseg.io.zarr import create_zarr, list_zarr_keys
+from tests.conftest import requires_clearscale
 
 OME_EXAMPLES = (
     Path(__file__).resolve().parent.parent / "resources" / "ome_tiff_examples"
@@ -68,6 +69,7 @@ class TestIO:
             "Data read from HDF5 file is not equal to the original data"
         )
 
+    @requires_clearscale
     def test_create_read_zarr(self, path_zarr):
         from panseg.io.zarr import (
             create_zarr,
@@ -78,13 +80,21 @@ class TestIO:
 
         # Create a Zarr file
         data = np.random.rand(10, 10, 10)
-        create_zarr(path_zarr, data, "raw", voxel_size=self.voxel_size)
+        create_zarr(
+            path_zarr, data, "raw", voxel_size=self.voxel_size, axis_order="ZYX"
+        )
 
-        # Create a Zarr file with empty name causes an error
-        with pytest.raises(ValueError):
-            create_zarr(path_zarr, data, "", voxel_size=self.voxel_size)
-        with pytest.raises(ValueError):
-            create_zarr(path_zarr, data, None, voxel_size=self.voxel_size)
+        # the key is required: PanSeg writes never put the image at the
+        # store root
+        for empty_key in ("", None):
+            with pytest.raises(ValueError, match="Key is required for zarr format"):
+                create_zarr(
+                    path_zarr,
+                    data,
+                    empty_key,
+                    voxel_size=self.voxel_size,
+                    axis_order="ZYX",
+                )
 
         # Read the Zarr file
         data_read = load_zarr(path_zarr, "raw")
@@ -288,21 +298,29 @@ def test_guess_stack_layout_h5_old_file_shape_heuristic(tmp_path):
 
 
 def test_guess_stack_layout_zarr_axis_order(tmp_path):
+    # pre-NGFF PanSeg stores carry the layout as a dataset attribute
     path = tmp_path / "out.zarr"
-    create_zarr(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
-    zarr_file = zarr.open_group(store=str(path), mode="a")
-    zarr_file["raw"].attrs["axis_order"] = "TZYX"
+    group = zarr.open_group(store=str(path), mode="w")
+    array = group.create_array(name="raw", shape=(4, 5, 16, 16), dtype="float32")
+    array[:] = 0
+    array.attrs["axis_order"] = "TZYX"
     assert guess_stack_layout(path, key="raw") == "TZYX"
     assert guess_stack_layout(path) == "TZYX"
 
 
 def test_guess_stack_layout_zarr_old_file_shape_heuristic(tmp_path):
+    # old PanSeg stores without an axis_order attribute fall back to the
+    # shape heuristic
     path = tmp_path / "timeseries.zarr"
-    create_zarr(path, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
+    group = zarr.open_group(store=str(path), mode="w")
+    array = group.create_array(name="raw", shape=(4, 5, 16, 16), dtype="float32")
+    array[:] = 0
     assert guess_stack_layout(path, key="raw") == ""
 
     path = tmp_path / "volume.zarr"
-    create_zarr(path, np.empty((10, 20, 30), dtype="float32"), "raw", VoxelSize())
+    group = zarr.open_group(store=str(path), mode="w")
+    array = group.create_array(name="raw", shape=(10, 20, 30), dtype="float32")
+    array[:] = 0
     assert guess_stack_layout(path, key="raw") == "ZYX"
 
 

@@ -3,6 +3,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pytest
+import zarr
 
 from panseg.core.image import TIME_UNIT_CHOICES
 from panseg.io.h5 import create_h5
@@ -15,6 +16,7 @@ from panseg.viewer_napari.widgets.input import (
     InputType,
     PathMode,
 )
+from tests.conftest import requires_clearscale
 
 OME_EXAMPLES = (
     Path(__file__).resolve().parent.parent / "resources" / "ome_tiff_examples"
@@ -25,6 +27,24 @@ OME_EXAMPLES = (
 def input_tab():
     """Fixture to create an Input_Tab instance for testing"""
     yield Input_Tab()
+
+
+@pytest.fixture
+def ome_zarr_root_image(tmp_path):
+    """An OME-Zarr store whose root is the image group (imported with key=None)."""
+    from clearscale import Multiscale, OmeZarrGroup, Scale
+
+    path = tmp_path / "root_image.zarr"
+    group = zarr.open_group(store=str(path), mode="w", zarr_format=3)
+    shape = (4, 8, 8)
+    group.create_array("s0", data=np.zeros(shape, dtype="float32"))
+    scale = Scale.from_lists("zyx", shape)
+    group.attrs.update(
+        OmeZarrGroup.from_single(
+            Multiscale.from_single(scale, scale_key="s0")
+        ).to_attrs(version="0.5")
+    )
+    return path
 
 
 def test_input_tab_initialization(input_tab):
@@ -193,12 +213,30 @@ def test_open_file_multi_selection_defaults_layer_name_to_first_stem(
     assert input_tab.widget_open_file.new_layer_name.value == "b2"
 
 
-def test_look_up_dataset_keys_empty(input_tab, zarr_file_empty, mocker):
-    mock_gen_name = mocker.patch(
-        "panseg.viewer_napari.widgets.input.Input_Tab.generate_layer_name"
-    )
+def test_look_up_dataset_keys_empty(input_tab, zarr_file_3d, zarr_file_empty):
+    """An empty store hides the key combo as before, but must still reset
+    the key and regenerate the layer name: no stale values from a
+    previously loaded file."""
+    input_tab.look_up_dataset_keys(zarr_file_3d)
+    assert input_tab.dataset_key.value is not None
+
     input_tab.look_up_dataset_keys(zarr_file_empty)
-    mock_gen_name.assert_not_called()
+    assert input_tab.dataset_key.value is None
+    assert input_tab.widget_open_file.new_layer_name.value == "empty"
+    assert not input_tab.widget_open_file.key_combo.visible
+
+
+def test_look_up_dataset_keys_none_key_list(input_tab, zarr_file_3d, mocker):
+    """A [None] key listing is handled like an empty one: cleared key and
+    a fresh layer name."""
+    input_tab.look_up_dataset_keys(zarr_file_3d)
+    mocker.patch(
+        "panseg.viewer_napari.widgets.input.list_zarr_keys", return_value=[None]
+    )
+    input_tab.look_up_dataset_keys(zarr_file_3d)
+    assert input_tab.dataset_key.value is None
+    assert input_tab.widget_open_file.new_layer_name.value == "3d"
+    assert not input_tab.widget_open_file.key_combo.visible
 
 
 def test_look_up_dataset_keys_3d(input_tab, zarr_file_3d, mocker):
@@ -221,6 +259,49 @@ def test_look_up_dataset_keys_h5(input_tab, h5_file, mocker):
     assert input_tab.dataset_key.value in ("/label", "/raw")
     assert all(n in ("/label", "/raw") for n in input_tab.dataset_key.choices)
     assert mock_gen_name.call_count == 2
+
+
+@requires_clearscale
+def test_look_up_dataset_keys_ome_zarr_root_image(
+    input_tab, zarr_file_3d, ome_zarr_root_image
+):
+    """A root-image OME-Zarr store (image group at the store root) is
+    imported with key=None: after a previously loaded file, the key must
+    be cleared and the layer name regenerated."""
+    input_tab.look_up_dataset_keys(zarr_file_3d)
+    assert input_tab.dataset_key.value is not None
+
+    input_tab.look_up_dataset_keys(ome_zarr_root_image)
+    assert input_tab.dataset_key.value is None
+    assert input_tab.widget_open_file.new_layer_name.value == "root_image"
+    assert not input_tab.widget_open_file.key_combo.visible
+
+
+@requires_clearscale
+def test_open_file_ome_zarr_root_image_passes_key_none(
+    input_tab, zarr_file_3d, ome_zarr_root_image, mocker
+):
+    """The cleared key flows into the import task as key=None, so the OME
+    reader auto-resolves the root image group instead of failing on a
+    stale key from a previously loaded file."""
+    mocked_scheduler = mocker.patch(
+        target="panseg.viewer_napari.widgets.input.schedule_task",
+        autospec=True,
+    )
+    input_tab.look_up_dataset_keys(zarr_file_3d)
+    input_tab.look_up_dataset_keys(ome_zarr_root_image)
+
+    input_tab.path_changed_once = True
+    input_tab.widget_open_file(
+        path_mode=True,
+        path=ome_zarr_root_image,
+        stack_layout="ZYX",
+        layer_type=InputType.RAW.value,
+        new_layer_name="root_image",
+    )
+    task_kwargs = mocked_scheduler.call_args.kwargs["task_kwargs"]
+    assert task_kwargs["key"] is None
+    assert task_kwargs["input_path"] == (ome_zarr_root_image,)
 
 
 def test_set_voxel_size(input_tab, napari_raw, mocker):

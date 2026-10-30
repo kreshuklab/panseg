@@ -29,6 +29,7 @@ from panseg.io.voxelsize import VoxelSize
 from tests.conftest import (
     TIMESERIES_PROPS_KNOWN_T_SPACING,
     TIMESERIES_PROPS_UNKNOWN_T_SPACING,
+    requires_clearscale,
     write_still_tiff,
 )
 
@@ -1808,7 +1809,9 @@ def test_timeseries_segmentation_fixture(timeseries_segmentation):
         ("TZYX", None),
     ],
 )
-@pytest.mark.parametrize("export_format", ["tiff", "h5", "zarr"])
+@pytest.mark.parametrize(
+    "export_format", ["tiff", "h5", pytest.param("zarr", marks=requires_clearscale)]
+)
 def test_save_image_timeseries_roundtrip(
     tmp_path, timeseries_segmentation, layout, t_spacing, export_format
 ):
@@ -1819,28 +1822,33 @@ def test_save_image_timeseries_roundtrip(
     image = _timeseries_ps_image(
         data, layout, t_spacing=t_spacing, semantic_type=SemanticType.SEGMENTATION
     )
+    if export_format == "tiff":
+        path, save_key, load_key = tmp_path / "seg.ome.tiff", "segmentation", None
+    elif export_format == "h5":
+        path, save_key, load_key = tmp_path / "seg.h5", "segmentation", "segmentation"
+    else:
+        # a segmentation exports as a label image below its parent image
+        # group, and is read back from there
+        path, save_key, load_key = (
+            tmp_path / "seg.ome.zarr",
+            "raw",
+            "raw/labels/segmentation",
+        )
     save_image(
         image,
         tmp_path,
         "seg",
-        key="segmentation",
+        key=save_key,
         export_format=export_format,
         data_type="uint16",
     )
 
-    if export_format == "tiff":
-        path, key = tmp_path / "seg.ome.tiff", None
-    elif export_format == "h5":
-        path, key = tmp_path / "seg.h5", "segmentation"
-    else:
-        path, key = tmp_path / "seg.zarr", "segmentation"
-
     # the format metadata prefills the original layout
-    assert guess_stack_layout(path, key) == layout
+    assert guess_stack_layout(path, load_key) == layout
 
     imported = import_image(
         path=path,
-        key=key,
+        key=load_key,
         image_name="reimported",
         semantic_type="segmentation",
         stack_layout=layout,

@@ -3,6 +3,7 @@ from uuid import uuid4
 import numpy as np
 import pytest
 from napari.layers import Image
+from qtpy.QtWidgets import QMessageBox
 
 from panseg.core.image import ImageLayout, SemanticType
 from panseg.viewer_napari.widgets.output import Output_Tab
@@ -125,3 +126,86 @@ def test_export_image_merges_timeseries_channels(
     assert exported.image_layout == expected_layout
     assert exported.shape == expected_shape
     assert exported.properties.t_spacing == 10.0
+
+
+def test_export_image_mismatched_channels_do_not_export(output_tab, mocker):
+    """A failed channel merge is logged instead of crashing the export."""
+    mocked_export = mocker.patch(
+        "panseg.viewer_napari.widgets.output.export_image_task"
+    )
+    mocked_log = mocker.patch("panseg.viewer_napari.widgets.output.log")
+    first = _timeseries_layer("channel_1", seed=1, layout="TZYX")
+    second = _timeseries_layer("channel_2", seed=2, layout="TYX")
+
+    output_tab.widget_export_image.image.choices = [first, second]
+    output_tab.widget_export_image.image.value = first
+    output_tab.widget_export_image.n_channels.value = 1
+    output_tab.widget_export_image.n_channels.value = 2
+    output_tab.additional_layers[0].value = second
+
+    output_tab.widget_export_image(image=first, n_channels=2)
+
+    mocked_export.assert_not_called()
+    mocked_log.assert_called_once()
+
+
+def test_on_images_changed_prefills_export_key(
+    output_tab, napari_raw, napari_prediction, napari_segmentation
+):
+    output_tab._on_images_changed(image=napari_raw)
+    assert output_tab.widget_export_image.key.value == "image"
+
+
+@pytest.mark.parametrize(
+    "answer, expect_export, expected_overwrite",
+    [
+        (QMessageBox.Yes, True, True),
+        (QMessageBox.No, False, None),
+    ],
+)
+def test_export_zarr_occupied_slot_confirms_overwrite(
+    output_tab, mocker, napari_raw, tmp_path, answer, expect_export, expected_overwrite
+):
+    mocked_export = mocker.patch(
+        "panseg.viewer_napari.widgets.output.export_image_task"
+    )
+    mocker.patch(
+        "panseg.viewer_napari.widgets.output.ome_zarr_slot_occupied", return_value=True
+    )
+    mocked_question = mocker.patch(
+        "panseg.viewer_napari.widgets.output.QMessageBox.question",
+        return_value=answer,
+    )
+    output_tab.widget_export_image.n_channels.value = 1
+
+    output_tab.widget_export_image(
+        image=napari_raw, directory=tmp_path, export_format="zarr"
+    )
+
+    mocked_question.assert_called_once()
+    if expect_export:
+        assert mocked_export.call_args.kwargs["overwrite"] is expected_overwrite
+    else:
+        mocked_export.assert_not_called()
+
+
+def test_export_zarr_free_slot_exports_without_dialog(
+    output_tab, mocker, napari_raw, tmp_path
+):
+    mocked_export = mocker.patch(
+        "panseg.viewer_napari.widgets.output.export_image_task"
+    )
+    mocker.patch(
+        "panseg.viewer_napari.widgets.output.ome_zarr_slot_occupied", return_value=False
+    )
+    mocked_question = mocker.patch(
+        "panseg.viewer_napari.widgets.output.QMessageBox.question"
+    )
+    output_tab.widget_export_image.n_channels.value = 1
+
+    output_tab.widget_export_image(
+        image=napari_raw, directory=tmp_path, export_format="zarr"
+    )
+
+    mocked_question.assert_not_called()
+    assert mocked_export.call_args.kwargs["overwrite"] is False

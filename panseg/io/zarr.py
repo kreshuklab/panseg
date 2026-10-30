@@ -14,6 +14,16 @@ import numpy as np
 import zarr
 from packaging.version import parse as parse_version
 
+from panseg.io.ome_zarr import (
+    create_ome_zarr,
+    is_ome_zarr,
+    list_ome_zarr_keys,
+    load_ome_zarr,
+    read_ome_zarr_axis_order,
+    read_ome_zarr_shape,
+    read_ome_zarr_time_spacing,
+    read_ome_zarr_voxel_size,
+)
 from panseg.io.voxelsize import VoxelSize
 
 ZARR_VERSION = parse_version(zarr.__version__)
@@ -88,14 +98,21 @@ def load_zarr(
 ) -> np.ndarray:
     """Load a dataset from a Zarr file and return it or its meta-information.
 
+    OME-Zarr stores resolve their base level through the NGFF
+    metadata. PanSeg-native stores use the pre-NGFF flat-dataset readers.
+
     Args:
         path (Path): The path to the Zarr file.
-        key (str | None): The internal key of the desired dataset.
+        key (str | None): The internal key of the desired dataset. For an
+            OME-Zarr store, the path of the image group.
         slices (slice | None, optional): Slice to load. Defaults to None.
 
     Returns:
         np.ndarray: The dataset as a NumPy array.
     """
+    if is_ome_zarr(path):
+        return load_ome_zarr(path, key, slices)
+
     _validate_zarr_file(path)
     data = _get_zarr_dataset(path, key)
     data = data[...] if slices is None else data[slices]
@@ -112,6 +129,9 @@ def read_zarr_shape(path: Path, key: str | None = None) -> tuple[int, ...]:
     Returns:
         tuple[int, ...]: The shape of the dataset.
     """
+    if is_ome_zarr(path):
+        return read_ome_zarr_shape(path, key)
+
     _validate_zarr_file(path)
     data = _get_zarr_dataset(path, key)
     return data.shape
@@ -128,6 +148,9 @@ def read_zarr_axis_order(path: Path, key: str | None = None) -> str | None:
         str | None: The axis order string, or None when the attribute is
         absent (older files).
     """
+    if is_ome_zarr(path):
+        return read_ome_zarr_axis_order(path, key)
+
     _validate_zarr_file(path)
     data = _get_zarr_dataset(path, key)
     axis_order = data.attrs.get("axis_order", None)
@@ -144,6 +167,9 @@ def read_zarr_voxel_size(path: Path, key: str | None) -> VoxelSize:
     Returns:
         VoxelSize: The voxel size of the dataset.
     """
+    if is_ome_zarr(path):
+        return read_ome_zarr_voxel_size(path, key)
+
     _validate_zarr_file(path)
     data = _get_zarr_dataset(path, key)
 
@@ -172,6 +198,9 @@ def read_zarr_time_spacing(
     Returns:
         tuple: (time spacing value or None, unit string)
     """
+    if is_ome_zarr(path):
+        return read_ome_zarr_time_spacing(path, key)
+
     _validate_zarr_file(path)
     data = _get_zarr_dataset(path, key)
     t_spacing = data.attrs.get("t_spacing", None)
@@ -183,56 +212,66 @@ def read_zarr_time_spacing(
 def create_zarr(
     path: Path,
     stack: np.ndarray,
-    key: str,
+    key: str | None,
     voxel_size: VoxelSize,
     mode: str = "a",
     axis_order: str | None = None,
     t_spacing: float | None = None,
     t_spacing_unit: str = "s",
+    label_name: str | None = None,
+    overwrite: bool = False,
 ) -> None:
     """
     Create a Zarr array from a NumPy array.
 
+    Zarr export writes an OME-NGFF image: the store
+    carries an image group with clearscale-built multiscale metadata instead
+    of PanSeg dataset attributes. The image group is written to the path
+    given by ``key`` (required, e.g. "raw"); with ``label_name`` the stack is
+    written as a label image below the parent image group's labels container
+    (``<key>/labels/<label_name>``), which is how segmentations are exported.
+
     Args:
         path (Path): The path to the Zarr file.
         stack (np.ndarray): The NumPy array to save as a dataset.
-        key (str): The internal key of the desired dataset.
+        key (str | None): The path of the image group; for a label image,
+            the path of its parent image group. Required.
         voxel_size (VoxelSize): The voxel size of the dataset.
         mode (str): The mode to open the Zarr file ['w', 'a'].
         axis_order (str | None): Layout string of the stack (e.g. "TZYX"),
-            written as the dataset attr ``axis_order``. Written on every
-            PanSeg export; old readers ignore it.
+            defining the NGFF axes of the image.
         t_spacing (float | None): Time spacing between timepoints in
-            seconds, written as the dataset attr ``t_spacing`` when the axis
-            order carries a time axis. None (unknown) writes no time attrs.
-        t_spacing_unit (str): Unit of the time spacing, written as the
-            dataset attr ``t_spacing_unit``.
+            ``t_spacing_unit``, written as the NGFF time-axis scale and unit. None
+            (unknown) writes no time unit.
+        t_spacing_unit (str): Unit of the time spacing.
+        label_name (str | None): Name of the label image below
+            ``<key>/labels/`` (e.g. "segmentation"); None writes an image
+            group at ``key``.
+        overwrite (bool): Replace an image or label already present at the
+            target slot; without it, writing into an occupied slot raises a
+            ValueError.
     """
-    if not key:
-        raise ValueError("Key cannot be None or empty.")
-
-    zarr_file = zarr.open_group(store=str(path), mode=mode)
-
-    if IS_ZARR_V3:
-        # v3 requires explicit `create_array`, and write manually
-        assert isinstance(zarr_file, zarr.Group), f"Invalid Zarr file: {path}"
-        zarr_file.create_array(name=key, shape=stack.shape, dtype=stack.dtype)
-        zarr_file[key][:] = stack
-    else:
-        # v2 allows `create_dataset` with `overwrite`
-        zarr_file.create_dataset(key, data=stack, compression="gzip", overwrite=True)
-
-    zarr_file[key].attrs["element_size_um"] = voxel_size.voxels_size
-    if axis_order is not None:
-        zarr_file[key].attrs["axis_order"] = axis_order
-        if "T" in axis_order and t_spacing is not None:
-            zarr_file[key].attrs["t_spacing"] = t_spacing
-            zarr_file[key].attrs["t_spacing_unit"] = t_spacing_unit
+    create_ome_zarr(
+        path=path,
+        stack=stack,
+        key=key if key else None,
+        voxel_size=voxel_size,
+        mode=mode,
+        axis_order=axis_order,
+        t_spacing=t_spacing,
+        t_spacing_unit=t_spacing_unit,
+        label_name=label_name,
+        overwrite=overwrite,
+    )
 
 
 def list_zarr_keys(path: Path) -> list[str]:
     """
     List all keys in a Zarr file.
+
+    For an OME-Zarr store, the keys are the paths of the image groups; a
+    store whose root is an image group returns an empty list (the image is
+    addressed without a key).
 
     Args:
         path (Path): The path to the Zarr file.
@@ -240,6 +279,8 @@ def list_zarr_keys(path: Path) -> list[str]:
     Returns:
         list[str]: A list of keys in the Zarr file.
     """
+    if is_ome_zarr(path):
+        return list_ome_zarr_keys(path)
 
     def _recursive_find_keys(
         zarr_group: zarr.Group, base: Path = Path("")
