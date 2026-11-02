@@ -14,6 +14,7 @@ training:
   sparse: false # true for affinity/sparse target training
   device: cuda # 'cuda' or 'cpu'
   # Optional:
+  # amp: auto # training precision: 'auto' = bf16 autocast on supported CUDA devices (fp32 otherwise), 'off' = always fp32
   # modality: '' # microscopy modality of the model, e.g. confocal
   # output_type: '' # prediction type, e.g. cell boundaries
   # description: '' # model description saved alongside the model

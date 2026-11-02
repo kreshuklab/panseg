@@ -20,6 +20,9 @@ AMP_MODES: tuple[str, ...] = ("auto", "off")
 def validate_amp(amp: str) -> AmpMode:
     """Check that `amp` is a supported mode and return it typed.
 
+    YAML parses the bare mode names as booleans (``off`` -> False, ``on`` ->
+    True); those spellings map to ``"off"`` and ``"auto"`` respectively.
+
     Args:
         amp: the configured precision mode.
 
@@ -29,6 +32,10 @@ def validate_amp(amp: str) -> AmpMode:
     Raises:
         ValueError: if `amp` is not one of `AMP_MODES`.
     """
+    if amp is False:  # YAML reads a bare `off` as a boolean
+        amp = "off"
+    elif amp is True:  # ... and a bare `on` likewise
+        amp = "auto"
     if amp not in AMP_MODES:
         raise ValueError(f"Unknown amp mode {amp!r}. Valid modes: {AMP_MODES}.")
     return cast(AmpMode, amp)
@@ -43,7 +50,9 @@ def amp_context(amp: str, device: str | torch.device) -> AbstractContextManager:
 
     ``"auto"`` runs bf16 autocast on CUDA devices with bf16 support and
     silently falls back to plain fp32 everywhere else (CPU, MPS, older CUDA
-    hardware). ``"off"`` always runs fp32.
+    hardware). ``"off"`` always runs fp32. YAML booleans are accepted for the
+    bare spellings (``off`` -> ``"off"``, ``on`` -> ``"auto"``, see
+    `validate_amp`).
 
     Args:
         amp: the configured precision mode, ``"auto"`` or ``"off"``.

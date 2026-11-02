@@ -20,6 +20,7 @@ from panseg import (
 )
 from panseg.core.zoo import model_zoo
 from panseg.functionals.prediction.utils.size_finder import find_batch_size
+from panseg.functionals.precision import validate_amp
 from panseg.functionals.training.augs import Augmenter
 from panseg.functionals.training.biio import make_model_description
 from panseg.functionals.training.h5dataset import HDF5Dataset
@@ -150,6 +151,7 @@ def unet_training(
     additional_citations: list[str] | None = None,
     license: str | None = None,
     documentation: str | None = None,
+    amp: str = "auto",
 ) -> None:
     """Train a new UNet model; the main entrypoint behind ``panseg --train``.
 
@@ -209,7 +211,12 @@ def unet_training(
         license: license under which the packaged model is published.
         documentation: markdown text packaged as the model's README
             documentation.
+        amp: training precision mode: ``"auto"`` runs bf16 autocast on CUDA
+            devices with bf16 support (loss reductions, weights, checkpoints,
+            and exported tensors stay fp32) and silently falls back to fp32
+            elsewhere; ``"off"`` always trains in fp32.
     """
+    amp = validate_amp(amp)
     if dimensionality in ["2D", "2d", "2"] and patch_size[0] != 1:
         raise ValueError(
             "2D models train per z-slice; patch z-extent must be 1, "
@@ -241,6 +248,7 @@ def unet_training(
         patch_halo=(4, 4, 4),  # some slack
         device=device,
         for_training=True,  # backward passes need ~2-3x the memory of a forward
+        amp=amp,  # probe in the precision training will run in
     )
 
     if torch.cuda.device_count() > 1 and device != "cpu":
@@ -323,6 +331,7 @@ def unet_training(
         checkpoint_dir=checkpoint_dir,
         max_num_iterations=max_num_iters,
         device=device,
+        amp=amp,
     )
 
     trainer.train()
