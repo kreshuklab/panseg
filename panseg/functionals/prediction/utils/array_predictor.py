@@ -16,6 +16,7 @@ from panseg.functionals.prediction.utils.size_finder import (
     find_batch_size,
     will_CUDA_OOM,
 )
+from panseg.functionals.precision import validate_amp
 from panseg.functionals.training.embeddings import embeddings_to_affinities
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,9 @@ class ArrayPredictor:
         is_embedding (bool, optional): If True, convert model output to embeddings. Defaults to False.
         verbose_logging (bool, optional): If True, enable verbose logging. Defaults to False.
         disable_tqdm (bool, optional): If True, disable tqdm progress bars. Defaults to False.
+        amp (str, optional): precision mode (``"auto"``: bf16 autocast on
+            supported CUDA devices, else fp32; ``"off"``: always fp32). The
+            memory probes run in the same mode. Defaults to "auto".
 
     Attributes:
         batch_size (int): Calculated batch size based on device capabilities and model requirements.
@@ -71,21 +75,23 @@ class ArrayPredictor:
         verbose_logging: bool = False,
         disable_tqdm: bool = False,
         tracker=None,
+        amp: str = "auto",
     ):
         self.device = device
         self.tracker = tracker
+        self.amp = validate_amp(amp)
 
         if single_batch_mode:  # then check if OOM happens at batch size 1
             self.batch_size = 1
             if device != "cpu" and will_CUDA_OOM(
-                model, in_channels, patch, patch_halo, self.batch_size, device
+                model, in_channels, patch, patch_halo, self.batch_size, device, amp=amp
             ):
                 raise RuntimeError(
                     "OOM error will happen. Please reduce the patch size/halo."
                 )
         else:  # find the max batch size without causing OOM, may be [0, 1, 2, 4, 8, 16, 32, 64, 128]
             self.batch_size = find_batch_size(
-                model, in_channels, patch, patch_halo, device
+                model, in_channels, patch, patch_halo, device, amp=amp
             )
             if self.batch_size < 1:
                 raise RuntimeError(
