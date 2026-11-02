@@ -9,7 +9,7 @@ execution can never run in different precisions.
 import pytest
 import torch
 
-from panseg.functionals.precision import amp_context, cudnn_benchmark
+from panseg.functionals.precision import amp_context, cudnn_benchmark, validate_amp
 
 requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="CUDA required for AMP tests"
@@ -45,6 +45,15 @@ def test_amp_auto_accepts_plain_cuda_device_string():
 def test_amp_rejects_unknown_modes(device):
     with pytest.raises(ValueError, match="amp"):
         amp_context("sometimes", device)
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [("auto", "auto"), ("off", "off"), (False, "off"), (True, "auto")],
+)
+def test_amp_accepts_yaml_boolean_spellings(configured, expected):
+    """YAML reads a bare `off`/`on` as a boolean; both spellings must resolve."""
+    assert validate_amp(configured) == expected
 
 
 def test_cudnn_benchmark_enabled_only_within_context():

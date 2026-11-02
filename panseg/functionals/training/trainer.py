@@ -111,9 +111,7 @@ class UNetTrainer:
                 eval_loss = self.validate()
                 logger.info(f"Val Loss: {eval_loss}.")
                 if self.writer is not None:
-                    self.writer.add_scalar(
-                        "Loss/val", eval_loss, self.num_iterations
-                    )
+                    self.writer.add_scalar("Loss/val", eval_loss, self.num_iterations)
                 # set the model back to training mode
                 self.model.train()
 
@@ -131,9 +129,7 @@ class UNetTrainer:
                 self._save_checkpoint(is_best)
 
                 if should_terminate:
-                    logger.info(
-                        "Stopping criterion is satisfied. Finishing training"
-                    )
+                    logger.info("Stopping criterion is satisfied. Finishing training")
                     return
 
         logger.info(

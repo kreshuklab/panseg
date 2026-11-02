@@ -145,7 +145,14 @@ class FakeOomProbe:
         self.verified_shapes = []
 
     def __call__(
-        self, model, in_channels, patch_shape, patch_halo, batch_size, device, amp="auto"
+        self,
+        model,
+        in_channels,
+        patch_shape,
+        patch_halo,
+        batch_size,
+        device,
+        amp="auto",
     ):
         actual = tuple(patch_shape[i] + 2 * patch_halo[i] for i in range(3))
         self.verified_shapes.append(actual)

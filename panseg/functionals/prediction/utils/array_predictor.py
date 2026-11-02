@@ -6,6 +6,7 @@ import tqdm
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
+from panseg.functionals.precision import amp_context, cudnn_benchmark, validate_amp
 from panseg.functionals.prediction.utils.array_dataset import (
     ArrayDataset,
     default_prediction_collate,
@@ -16,7 +17,6 @@ from panseg.functionals.prediction.utils.size_finder import (
     find_batch_size,
     will_CUDA_OOM,
 )
-from panseg.functionals.precision import amp_context, cudnn_benchmark, validate_amp
 from panseg.functionals.training.embeddings import embeddings_to_affinities
 
 logger = logging.getLogger(__name__)

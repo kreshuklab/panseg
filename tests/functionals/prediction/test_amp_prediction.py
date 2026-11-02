@@ -37,7 +37,9 @@ MODEL_CONFIG = """model:
 
 
 def _tiny_3d_model() -> UNet3D:
-    return UNet3D(in_channels=1, out_channels=1, final_sigmoid=True, f_maps=8, num_levels=2)
+    return UNet3D(
+        in_channels=1, out_channels=1, final_sigmoid=True, f_maps=8, num_levels=2
+    )
 
 
 def _make_dataset(raw: np.ndarray, patch, halo) -> ArrayDataset:
@@ -131,9 +133,7 @@ def test_array_predictor_outputs_close_between_amp_modes():
 def dummy_model_files(tmp_path: Path):
     """Small local UNet3D saved like a zoo model (config + weights)."""
     torch.manual_seed(0)
-    model = UNet3D(
-        in_channels=1, out_channels=1, final_sigmoid=True, f_maps=[8, 16]
-    )
+    model = UNet3D(in_channels=1, out_channels=1, final_sigmoid=True, f_maps=[8, 16])
     weights_path = tmp_path / "best_checkpoint.pytorch"
     torch.save(model.state_dict(), weights_path)
     config_path = tmp_path / "config_train.yml"

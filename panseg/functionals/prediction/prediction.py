@@ -19,6 +19,7 @@ from panseg.functionals.dataprocessing.dataprocessing import (
     fix_layout_to_CZYX,
     fix_layout_to_ZYX,
 )
+from panseg.functionals.precision import validate_amp
 from panseg.functionals.prediction.utils.array_dataset import ArrayDataset
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
 from panseg.functionals.prediction.utils.size_finder import (
@@ -28,7 +29,6 @@ from panseg.functionals.prediction.utils.size_finder import (
 )
 from panseg.functionals.prediction.utils.slice_builder import SliceBuilder
 from panseg.functionals.prediction.utils.utils import get_stride_shape
-from panseg.functionals.precision import validate_amp
 from panseg.functionals.training.augs import get_test_augmentations
 
 logger = logging.getLogger(__name__)

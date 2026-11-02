@@ -68,9 +68,7 @@ def test_find_batch_size_probes_in_the_resolved_precision_mode(amp, enabled):
 
 @requires_cuda
 @pytest.mark.parametrize("amp, enabled", [("auto", True), ("off", False)])
-def test_find_batch_size_training_probe_in_the_resolved_precision_mode(
-    amp, enabled
-):
+def test_find_batch_size_training_probe_in_the_resolved_precision_mode(amp, enabled):
     from panseg.functionals.prediction.utils.size_finder import find_batch_size
 
     model = _tiny_3d_model()

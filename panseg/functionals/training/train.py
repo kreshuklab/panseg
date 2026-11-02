@@ -19,8 +19,8 @@ from panseg import (
     PATH_TRAIN_TEMPLATE,
 )
 from panseg.core.zoo import model_zoo
-from panseg.functionals.prediction.utils.size_finder import find_batch_size
 from panseg.functionals.precision import validate_amp
+from panseg.functionals.prediction.utils.size_finder import find_batch_size
 from panseg.functionals.training.augs import Augmenter
 from panseg.functionals.training.biio import make_model_description
 from panseg.functionals.training.h5dataset import HDF5Dataset
