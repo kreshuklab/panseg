@@ -53,7 +53,9 @@ def test_amp_context_accepts_yaml_boolean_spellings():
 @pytest.mark.parametrize("device", ["cuda", "cpu", "mps"])
 def test_amp_rejects_unknown_modes(device):
     with pytest.raises(ValueError, match="amp"):
-        amp_context("sometimes", device)
+        amp_context(
+            "sometimes", device  # pyright: ignore[reportArgumentType] -- deliberately invalid
+        )
 
 
 @pytest.mark.parametrize(

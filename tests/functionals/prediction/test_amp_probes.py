@@ -20,22 +20,14 @@ from panseg.functionals.prediction.utils.size_finder import (
     probe_max_patch_shape,
     will_CUDA_OOM,
 )
-from panseg.functionals.training.model import UNet2D, UNet3D
-
-requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA required for AMP tests"
+from tests.functionals.prediction.conftest import (
+    requires_cuda,
+    tiny_2d_model,
+    tiny_3d_model,
 )
 
 VOL = (48, 1536, 1536)
 HALO = (0, 44, 44)
-
-
-def _tiny_3d_model() -> UNet3D:
-    return UNet3D(in_channels=1, out_channels=1, f_maps=8, num_levels=2)
-
-
-def _tiny_2d_model() -> UNet2D:
-    return UNet2D(in_channels=1, out_channels=1, f_maps=8, num_levels=2)
 
 
 def _record_autocast(model: nn.Module) -> list[tuple[bool, torch.dtype]]:
@@ -54,7 +46,7 @@ def _record_autocast(model: nn.Module) -> list[tuple[bool, torch.dtype]]:
 def test_find_batch_size_probes_in_the_resolved_precision_mode(amp, enabled):
     from panseg.functionals.prediction.utils.size_finder import find_batch_size
 
-    model = _tiny_3d_model()
+    model = tiny_3d_model()
     seen = _record_autocast(model)
 
     find_batch_size(model, 1, (8, 8, 8), (0, 0, 0), "cuda", amp=amp)
@@ -71,7 +63,7 @@ def test_find_batch_size_probes_in_the_resolved_precision_mode(amp, enabled):
 def test_find_batch_size_training_probe_in_the_resolved_precision_mode(amp, enabled):
     from panseg.functionals.prediction.utils.size_finder import find_batch_size
 
-    model = _tiny_3d_model()
+    model = tiny_3d_model()
     seen = _record_autocast(model)
 
     find_batch_size(model, 1, (8, 8, 8), (0, 0, 0), "cuda", for_training=True, amp=amp)
@@ -84,7 +76,7 @@ def test_find_batch_size_training_probe_in_the_resolved_precision_mode(amp, enab
 @requires_cuda
 @pytest.mark.parametrize("amp, enabled", [("auto", True), ("off", False)])
 def test_will_cuda_oom_probes_in_the_resolved_precision_mode(amp, enabled):
-    model = _tiny_3d_model()
+    model = tiny_3d_model()
     seen = _record_autocast(model)
 
     will_CUDA_OOM(model, 1, (8, 8, 8), (0, 0, 0), 1, "cuda", amp=amp)
@@ -99,7 +91,7 @@ def test_will_cuda_oom_probes_in_the_resolved_precision_mode(amp, enabled):
 def test_probe_max_patch_shape_runs_in_the_resolved_precision_mode(amp, enabled):
     # 2D models take the linear search, which starts right at the top and is
     # therefore the fastest probe path to observe on a real GPU
-    model = _tiny_2d_model()
+    model = tiny_2d_model()
     seen = _record_autocast(model)
 
     probe_max_patch_shape(model, 1, "cuda", amp=amp)
@@ -160,7 +152,7 @@ def test_array_predictor_probes_in_the_configured_mode(monkeypatch):
     monkeypatch.setattr(array_predictor, "find_batch_size", fake_find_batch)
 
     ArrayPredictor(
-        model=_tiny_3d_model(),
+        model=tiny_3d_model(),
         in_channels=1,
         out_channels=1,
         device="cpu",

@@ -13,65 +13,30 @@ import numpy as np
 import pytest
 import torch
 
+from panseg.functionals.precision import AmpMode
 from panseg.functionals.prediction import prediction as prediction_module
 from panseg.functionals.prediction import unet_prediction
-from panseg.functionals.prediction.utils.array_dataset import ArrayDataset
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
-from panseg.functionals.prediction.utils.slice_builder import SliceBuilder
-from panseg.functionals.training.augs import get_test_augmentations
 from panseg.functionals.training.model import UNet3D
-
-requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA required for AMP tests"
+from tests.functionals.prediction.conftest import (
+    MODEL_CONFIG,
+    make_dataset,
+    raw_volume,
+    requires_cuda,
+    tiny_3d_model,
 )
-
-MODEL_CONFIG = """model:
-  name: UNet3D
-  in_channels: 1
-  out_channels: 1
-  final_sigmoid: true
-  layer_order: gcr
-  f_maps: [8, 16]
-  num_groups: 4
-"""
-
-
-def _tiny_3d_model() -> UNet3D:
-    return UNet3D(
-        in_channels=1, out_channels=1, final_sigmoid=True, f_maps=8, num_levels=2
-    )
-
-
-def _make_dataset(raw: np.ndarray, patch, halo) -> ArrayDataset:
-    """Raw ZYX array -> ArrayDataset with overlapping patches (exercises stitching)."""
-    stride = tuple(max(p // 2, 1) for p in patch)
-    slice_builder = SliceBuilder(
-        raw, label_dataset=None, patch_shape=patch, stride_shape=stride
-    )
-    return ArrayDataset(
-        raw,
-        slice_builder,
-        get_test_augmentations(raw),
-        halo_shape=halo,
-        multichannel=False,
-        verbose_logging=False,
-    )
-
-
-def _raw_volume() -> np.ndarray:
-    return np.random.default_rng(0).random((16, 96, 96)).astype("float32")
 
 
 @requires_cuda
 @pytest.mark.parametrize("amp, enabled", [("auto", True), ("off", False)])
 def test_array_predictor_runs_in_the_resolved_precision_mode(amp, enabled):
     """Sizing probe and prediction loop run under the configured mode."""
-    model = _tiny_3d_model()
+    model = tiny_3d_model()
     seen: list[bool] = []
     model.register_forward_hook(
         lambda module, inputs, output: seen.append(torch.is_autocast_enabled("cuda"))
     )
-    dataset = _make_dataset(_raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
+    dataset = make_dataset(raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
 
     predictor = ArrayPredictor(
         model=model,
@@ -99,13 +64,13 @@ def test_array_predictor_outputs_close_between_amp_modes():
     The prediction uses overlapping patches (stride = patch // 2) and a halo,
     so this also pins the halo removal and patch stitching under autocast.
     """
-    raw = _raw_volume()
+    raw = raw_volume()
     patch, halo = (8, 64, 64), (2, 8, 8)
-    dataset = _make_dataset(raw, patch=patch, halo=halo)
-    state = _tiny_3d_model().state_dict()
+    dataset = make_dataset(raw, patch=patch, halo=halo)
+    state = tiny_3d_model().state_dict()
 
-    def _predict(amp: str) -> np.ndarray:
-        model = _tiny_3d_model()
+    def _predict(amp: AmpMode) -> np.ndarray:
+        model = tiny_3d_model()
         model.load_state_dict(state)
         predictor = ArrayPredictor(
             model=model,
@@ -159,7 +124,7 @@ def _predict_unet(model_files, raw, amp):
 
 def test_unet_prediction_amp_modes_agree_on_cpu(dummy_model_files):
     """On CPU both modes resolve to fp32 and must agree exactly; output is fp32."""
-    raw = _raw_volume()
+    raw = raw_volume()
 
     pmaps_off = _predict_unet(dummy_model_files, raw, amp="off")
     pmaps_auto = _predict_unet(dummy_model_files, raw, amp="auto")
@@ -201,7 +166,7 @@ def test_unet_prediction_flows_amp_to_sizing_and_predictor(
     monkeypatch.setattr(prediction_module, "ArrayPredictor", FakePredictor)
 
     pmaps = unet_prediction(
-        raw=_raw_volume(),
+        raw=raw_volume(),
         input_layout="ZYX",
         model_name=None,
         model_id=None,

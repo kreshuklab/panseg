@@ -18,55 +18,14 @@ from panseg.functionals.prediction import prediction as prediction_module
 from panseg.functionals.prediction import unet_prediction
 from panseg.functionals.prediction.utils.array_dataset import ArrayDataset
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
-from panseg.functionals.prediction.utils.slice_builder import SliceBuilder
-from panseg.functionals.training.augs import get_test_augmentations
 from panseg.functionals.training.model import UNet3D
-
-requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA required for AMP tests"
+from tests.functionals.prediction.conftest import (
+    MODEL_CONFIG,
+    make_dataset,
+    raw_volume,
+    requires_cuda,
+    tiny_3d_model,
 )
-
-MODEL_CONFIG = """model:
-  name: UNet3D
-  in_channels: 1
-  out_channels: 1
-  final_sigmoid: true
-  layer_order: gcr
-  f_maps: [8, 16]
-  num_groups: 4
-"""
-
-
-def _tiny_3d_model(in_channels: int = 1) -> UNet3D:
-    return UNet3D(
-        in_channels=in_channels,
-        out_channels=1,
-        final_sigmoid=True,
-        f_maps=8,
-        num_levels=2,
-    )
-
-
-def _make_dataset(
-    raw: np.ndarray, patch, halo, multichannel: bool = False
-) -> ArrayDataset:
-    """Raw ZYX/CZYX array -> ArrayDataset with overlapping patches (exercises stitching)."""
-    stride = tuple(max(p // 2, 1) for p in patch)
-    slice_builder = SliceBuilder(
-        raw, label_dataset=None, patch_shape=patch, stride_shape=stride
-    )
-    return ArrayDataset(
-        raw,
-        slice_builder,
-        get_test_augmentations(raw),
-        halo_shape=halo,
-        multichannel=multichannel,
-        verbose_logging=False,
-    )
-
-
-def _raw_volume() -> np.ndarray:
-    return np.random.default_rng(0).random((16, 96, 96)).astype("float32")
 
 
 def _predict(model, dataset, device: str, in_channels: int = 1, **kwargs) -> np.ndarray:
@@ -110,11 +69,11 @@ def _record_memory_format(model: torch.nn.Module) -> list[tuple[bool, bool]]:
 @requires_cuda
 def test_channels_last_3d_outputs_match_plain_layout():
     """The layout change must not change the math (tight tolerance)."""
-    dataset = _make_dataset(_raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
-    state = _tiny_3d_model().state_dict()
+    dataset = make_dataset(raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
+    state = tiny_3d_model().state_dict()
 
     def _run(channels_last_3d: bool) -> np.ndarray:
-        model = _tiny_3d_model()
+        model = tiny_3d_model()
         model.load_state_dict(state)
         return _predict(
             model,
@@ -140,12 +99,12 @@ def _multichannel_dataset() -> ArrayDataset:
     """Two-channel input: with C=1 the channel stride is layout-agnostic and a
     plain contiguous input would trivially count as channels_last_3d."""
     raw = np.random.default_rng(0).random((2, 16, 96, 96)).astype("float32")
-    return _make_dataset(raw, patch=(8, 64, 64), halo=(2, 8, 8), multichannel=True)
+    return make_dataset(raw, patch=(8, 64, 64), halo=(2, 8, 8), multichannel=True)
 
 
 @requires_cuda
 def test_channels_last_3d_engaged_on_cuda():
-    model = _tiny_3d_model(in_channels=2)
+    model = tiny_3d_model(in_channels=2)
     seen = _record_memory_format(model)
 
     predictor = _make_predictor(model, "cuda", in_channels=2, amp="off")
@@ -159,7 +118,7 @@ def test_channels_last_3d_engaged_on_cuda():
 
 @requires_cuda
 def test_channels_last_3d_disabled_on_request():
-    model = _tiny_3d_model(in_channels=2)
+    model = tiny_3d_model(in_channels=2)
     seen = _record_memory_format(model)
 
     _predict(
@@ -176,7 +135,7 @@ def test_channels_last_3d_disabled_on_request():
 
 
 def test_channels_last_3d_stays_off_on_cpu():
-    model = _tiny_3d_model(in_channels=2)
+    model = tiny_3d_model(in_channels=2)
     seen = _record_memory_format(model)
 
     # default channels_last_3d=True must not engage on CPU
@@ -191,9 +150,9 @@ def test_compile_defaults_to_off(monkeypatch):
         raise AssertionError("torch.compile must not run when compile is off")
 
     monkeypatch.setattr(torch, "compile", fail_if_called)
-    dataset = _make_dataset(_raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
+    dataset = make_dataset(raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
 
-    pmaps = _predict(_tiny_3d_model(), dataset, "cpu")
+    pmaps = _predict(tiny_3d_model(), dataset, "cpu")
 
     assert pmaps.shape == (1, 16, 96, 96)
 
@@ -208,11 +167,11 @@ def test_compile_wraps_model_and_matches_eager(monkeypatch):
         return real_compile(model, *args, **kwargs)
 
     monkeypatch.setattr(torch, "compile", recording_compile)
-    dataset = _make_dataset(_raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
-    state = _tiny_3d_model().state_dict()
+    dataset = make_dataset(raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
+    state = tiny_3d_model().state_dict()
 
     def _run(compile: bool) -> np.ndarray:
-        model = _tiny_3d_model()
+        model = tiny_3d_model()
         model.load_state_dict(state)
         return _predict(model, dataset, "cuda", amp="off", compile=compile)
 
@@ -239,10 +198,10 @@ def test_compile_degrades_gracefully_on_first_forward_failure(monkeypatch, caplo
     monkeypatch.setattr(
         torch, "compile", lambda model, **kwargs: FailingCompiled(model)
     )
-    dataset = _make_dataset(_raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
+    dataset = make_dataset(raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
 
     with caplog.at_level("WARNING"):
-        pmaps = _predict(_tiny_3d_model(), dataset, "cpu", compile=True)
+        pmaps = _predict(tiny_3d_model(), dataset, "cpu", compile=True)
 
     assert pmaps.shape == (1, 16, 96, 96)
     assert np.isfinite(pmaps).all()
@@ -277,7 +236,7 @@ def test_unet_prediction_forwards_optimization_flags(tmp_path, monkeypatch):
     config_path.write_text(MODEL_CONFIG)
 
     unet_prediction(
-        raw=_raw_volume(),
+        raw=raw_volume(),
         input_layout="ZYX",
         model_name=None,
         model_id=None,

@@ -333,7 +333,7 @@ class FakeUNet3D(UNet3D):
 
 
 class FakeUNet2D(UNet2D):
-    """2D variant of `FakeUNet3D` so that `_is_2d_model` routes to the 2D code paths."""
+    """2D variant of `FakeUNet3D` so that `is_2d_model` routes to the 2D code paths."""
 
     def __init__(
         self,
@@ -422,7 +422,7 @@ def test_probe_max_patch_shape_3d_reraises_buffer_size_error_on_cuda(fake_cuda):
     ],
 )
 def test_is_oom_error(message, device, expected):
-    assert size_finder._is_oom_error(RuntimeError(message), device) is expected
+    assert size_finder.is_oom_error(RuntimeError(message), device) is expected
 
 
 def test_probe_max_patch_shape_2d_returns_max_on_first_fit(fake_cuda):

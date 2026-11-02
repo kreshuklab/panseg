@@ -14,6 +14,7 @@ import pytest
 import torch
 
 from panseg.core.zoo import model_zoo
+from panseg.functionals.precision import AmpMode
 from panseg.functionals.training.losses import DiceLoss
 from panseg.functionals.training.model import UNet3D
 from panseg.functionals.training.train import unet_training
@@ -48,7 +49,7 @@ def _fixed_batch(seed: int = 0):
     return inp, target
 
 
-def _run_training(amp: str, checkpoint_dir: Path, steps: int = 3) -> _RecordingLoss:
+def _run_training(amp: AmpMode, checkpoint_dir: Path, steps: int = 3) -> _RecordingLoss:
     """Run a few real trainer steps on a fixed batch; returns the loss recorder."""
     torch.manual_seed(7)
     torch.cuda.manual_seed_all(7)
@@ -95,7 +96,7 @@ class TestUNetTrainingAmpOption:
                 dimensionality="2D",
                 sparse=False,
                 device="cpu",
-                amp="sometimes",
+                amp="sometimes",  # pyright: ignore[reportArgumentType] -- deliberately invalid
             )
 
     @staticmethod
@@ -111,7 +112,7 @@ class TestUNetTrainingAmpOption:
 
         mock_trainer_class.return_value.train.side_effect = _train
 
-    def _run_mocked_unet_training(self, tmp_path, model_name: str, amp: str):
+    def _run_mocked_unet_training(self, tmp_path, model_name: str, amp: AmpMode):
         """Run `unet_training` with mocked training internals; returns the mocks."""
         mock_dataset = MagicMock()
         mock_dataset.__len__.return_value = 10
@@ -187,10 +188,11 @@ class TestUNetTrainerAmp:
     """Real trainer steps on CUDA: autocast engaged, exports fp32, losses close."""
 
     def test_trainer_forward_runs_in_the_resolved_precision_mode(self, tmp_path):
-        for amp, expected_dtype in [
+        cases: list[tuple[AmpMode, torch.dtype]] = [
             ("auto", torch.bfloat16),
             ("off", torch.float32),
-        ]:
+        ]
+        for amp, expected_dtype in cases:
             recorder = _run_training(amp, tmp_path / amp, steps=1)
             assert recorder.output_dtypes[0] == expected_dtype, amp
 
@@ -215,7 +217,7 @@ class TestUNetTrainerAmp:
     def test_validation_loss_close_between_amp_auto_and_off(self, tmp_path):
         """The val loop shares the training precision mode (via _forward_pass)."""
 
-        def _run_with_val(amp: str, checkpoint_dir: Path) -> float:
+        def _run_with_val(amp: AmpMode, checkpoint_dir: Path) -> float:
             torch.manual_seed(7)
             torch.cuda.manual_seed_all(7)
             model = UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4]).to(DEVICE)
