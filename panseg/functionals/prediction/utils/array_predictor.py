@@ -7,6 +7,7 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
 from panseg.functionals.precision import (
+    AmpMode,
     AmpSetting,
     amp_context,
     cudnn_benchmark,
@@ -18,9 +19,9 @@ from panseg.functionals.prediction.utils.array_dataset import (
     remove_padding,
 )
 from panseg.functionals.prediction.utils.size_finder import (
-    _is_2d_model,
-    _is_oom_error,
     find_batch_size,
+    is_2d_model,
+    is_oom_error,
     will_CUDA_OOM,
 )
 from panseg.functionals.training.embeddings import embeddings_to_affinities
@@ -51,19 +52,11 @@ class ArrayPredictor:
         is_embedding (bool, optional): If True, convert model output to embeddings. Defaults to False.
         verbose_logging (bool, optional): If True, enable verbose logging. Defaults to False.
         disable_tqdm (bool, optional): If True, disable tqdm progress bars. Defaults to False.
-        amp (str, optional): precision mode (``"auto"``: bf16 autocast on
-            supported CUDA devices, else fp32; ``"off"``: always fp32). The
-            memory probes run in the same mode. Defaults to "auto".
-        channels_last_3d (bool, optional): run 3D models on CUDA in the
-            channels_last_3d memory format (measured faster and leaner for
-            inference; kept off on CPU and for 2D models). Outputs are
-            unaffected. Defaults to True.
-        compile (bool, optional): wrap the inference model in `torch.compile`
-            (measured 1.28x faster, -36% peak memory; one-time compile cost per
-            patch shape). If compilation fails at the first forward (e.g. triton
-            cannot find cuda.h; in some environments it needs
-            ``C_INCLUDE_PATH=/usr/local/cuda/include``), prediction degrades to
-            eager with a warning. Defaults to False.
+        amp (AmpSetting, optional): precision mode, see `unet_prediction`.
+        channels_last_3d (bool, optional): channels_last_3d memory format for
+            3D models on CUDA, see `unet_prediction`.
+        compile (bool, optional): opt-in `torch.compile`, see `unet_prediction`
+            (including the triton environment caveat).
 
     Attributes:
         batch_size (int): Calculated batch size based on device capabilities and model requirements.
@@ -97,7 +90,7 @@ class ArrayPredictor:
     ):
         self.device = device
         self.tracker = tracker
-        self.amp = validate_amp(amp)
+        self.amp: AmpMode = validate_amp(amp)
 
         if single_batch_mode:  # then check if OOM happens at batch size 1
             self.batch_size = 1
@@ -147,7 +140,7 @@ class ArrayPredictor:
         self.channels_last_3d = (
             channels_last_3d
             and torch.device(self.device).type == "cuda"
-            and not _is_2d_model(model)
+            and not is_2d_model(model)
         )
         if self.channels_last_3d:
             self.model = self.model.to(memory_format=torch.channels_last_3d)
@@ -160,11 +153,7 @@ class ArrayPredictor:
                 self.model = torch.compile(self.model)
                 self._compiled = True
             except Exception as e:
-                logger.warning(
-                    "torch.compile is unavailable (%s); running eager. In some "
-                    "environments triton needs C_INCLUDE_PATH=/usr/local/cuda/include.",
-                    e,
-                )
+                logger.warning("torch.compile is unavailable (%s); running eager.", e)
 
     def _forward(self, input_: torch.Tensor) -> torch.Tensor:
         """Model forward, degrading `torch.compile` to eager on first-forward failure.
@@ -177,7 +166,7 @@ class ArrayPredictor:
         try:
             return self.model(input_)
         except RuntimeError as e:
-            if not self._compiled or _is_oom_error(e, self.device):
+            if not self._compiled or is_oom_error(e, self.device):
                 raise
             logger.warning(
                 "torch.compile failed at inference (%s); falling back to eager. "
@@ -208,9 +197,9 @@ class ArrayPredictor:
 
         # dimensionality of the output prediction
         volume_shape = self.volume_shape(test_dataset)
-        is_2d_model = _is_2d_model(self.model)
+        model_is_2d = is_2d_model(self.model)
         if self.is_embedding:
-            if is_2d_model:
+            if model_is_2d:
                 # outputs 1-affinities in XY
                 out_channels = 2
             else:
@@ -253,7 +242,7 @@ class ArrayPredictor:
                 if self.channels_last_3d:
                     input_ = input_.to(memory_format=torch.channels_last_3d)
                 # forward pass
-                if is_2d_model:
+                if model_is_2d:
                     # remove the singleton z-dimension from the input
                     input_ = torch.squeeze(input_, dim=-3)
                     prediction = self._forward(input_)
@@ -263,7 +252,7 @@ class ArrayPredictor:
                     prediction = self._forward(input_)
 
                 if self.is_embedding:
-                    if is_2d_model:
+                    if model_is_2d:
                         offsets = [[-1, 0], [0, -1]]
                     else:
                         offsets = [[-1, 0, 0], [0, -1, 0], [0, 0, -1]]

@@ -10,6 +10,7 @@ from torch.utils.tensorboard.writer import SummaryWriter
 from tqdm import tqdm
 
 from panseg.functionals.precision import (
+    AmpMode,
     AmpSetting,
     amp_context,
     cudnn_benchmark,
@@ -92,7 +93,7 @@ class UNetTrainer:
         self.max_num_epochs = max_num_iterations // len(loaders["train"]) + 1
         self.device = device
         self.log_after_iters = log_after_iters
-        self.amp = validate_amp(amp)
+        self.amp: AmpMode = validate_amp(amp)
         self.best_eval_loss = float("+inf")
 
         self.num_iterations = 1

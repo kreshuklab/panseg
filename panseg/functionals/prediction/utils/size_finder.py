@@ -49,7 +49,7 @@ def _quiet_oom_probing(device: str):
         torch.cuda.memory.set_per_process_memory_fraction(previous, index)
 
 
-def _is_2d_model(model: nn.Module) -> bool:
+def is_2d_model(model: nn.Module) -> bool:
     while True:
         if isinstance(model, nn.DataParallel):
             model = model.module
@@ -59,7 +59,7 @@ def _is_2d_model(model: nn.Module) -> bool:
             return isinstance(model, UNet2D)
 
 
-def _min_input_depth(model: nn.Module) -> int:
+def min_input_depth(model: nn.Module) -> int:
     """Smallest input depth a model accepts: the product of its Z pooling kernels."""
     depth = 1
     for module in model.modules():
@@ -69,7 +69,7 @@ def _min_input_depth(model: nn.Module) -> int:
     return depth
 
 
-def _is_oom_error(error: RuntimeError, device: str) -> bool:
+def is_oom_error(error: RuntimeError, device: str) -> bool:
     """Classify a device probe failure as an out-of-memory error.
 
     CUDA reports "CUDA out of memory", but Apple MPS reports memory failures
@@ -189,7 +189,7 @@ def probe_max_patch_shape(
        but for the sake of speed, cap it at 50 and let batch size handle the rest.
     """
 
-    nn_dim = 2 if _is_2d_model(model) else 3
+    nn_dim = 2 if is_2d_model(model) else 3
 
     if device == "cpu":
         return (1, 1024, 1024) if nn_dim == 2 else (256, 256, 256)
@@ -213,7 +213,7 @@ def probe_max_patch_shape(
                         best_n = mid  # Update best_n if successful
                         low = mid + 1  # Try larger patches
                     except RuntimeError as e:
-                        if _is_oom_error(e, device):
+                        if is_oom_error(e, device):
                             errs = str(e).split(".", maxsplit=1)
                             logger.info(
                                 f"Encountered '{errs[0]}' at patch shape {patch_shape}, "
@@ -241,7 +241,7 @@ def probe_max_patch_shape(
                         _ = model(x)
                         break
                     except RuntimeError as e:
-                        if _is_oom_error(e, device):
+                        if is_oom_error(e, device):
                             best_n -= 20
                         else:
                             del model
@@ -308,7 +308,7 @@ def find_feasible_patch_and_halo_shapes(
         RuntimeError: If no feasible patch shape is found within `max_attempts` attempts.
     """
     max_patch_shape = probe_max_patch_shape(model, in_channels, device, amp=amp)
-    is_2d = _is_2d_model(model)
+    is_2d = is_2d_model(model)
 
     if device == "cpu":
         return derive_patch_and_halo_shapes(
@@ -406,7 +406,7 @@ def find_batch_size(
                 )
                 _probe_batch(model, x, for_training, amp, device)
             except RuntimeError as e:
-                if _is_oom_error(e, device):
+                if is_oom_error(e, device):
                     errs = str(e).split(".", maxsplit=1)
                     logger.info(
                         f"Encountered '{errs[0]}' at batch size {batch_size}, halving it."
@@ -488,7 +488,7 @@ def will_CUDA_OOM(
                 )
                 _ = model(x)
         except RuntimeError as e:
-            if _is_oom_error(e, device):
+            if is_oom_error(e, device):
                 OOM_error = True
                 logger.info(
                     f"Using patch shape {patch_shape}, halo {patch_halo}, "
