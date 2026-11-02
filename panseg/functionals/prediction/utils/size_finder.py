@@ -50,9 +50,13 @@ def _quiet_oom_probing(device: str):
 
 
 def _is_2d_model(model: nn.Module) -> bool:
-    if isinstance(model, nn.DataParallel):
-        model = model.module
-    return isinstance(model, UNet2D)
+    while True:
+        if isinstance(model, nn.DataParallel):
+            model = model.module
+        elif hasattr(model, "_orig_mod"):  # torch.compile's OptimizedModule
+            model = model._orig_mod
+        else:
+            return isinstance(model, UNet2D)
 
 
 def _min_input_depth(model: nn.Module) -> int:
