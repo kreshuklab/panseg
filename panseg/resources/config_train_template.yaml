@@ -35,6 +35,7 @@ trainer:
   log_after_iters: 500
   # max number of iterations
   max_num_iterations: 50000
+  # amp: auto # training precision: 'auto' = bf16 autocast on supported CUDA devices (fp32 otherwise), 'off' = always fp32
 # Configure training and validation loaders
 loaders:
   # how many subprocesses to use for data loading
