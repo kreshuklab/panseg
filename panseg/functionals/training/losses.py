@@ -36,6 +36,10 @@ def compute_per_channel_dice(input, target, epsilon=1e-6, weight=None):
 
     input = flatten(input)
     target = flatten(target)
+    # the reductions must accumulate in float32: bf16 sums over many thousand
+    # voxels lose far more precision than the input rounding (AMP training
+    # delivers bf16 activations here)
+    input = input.float()
     target = target.float()
 
     # compute per channel Dice Coefficient
@@ -74,8 +78,10 @@ class _AbstractDiceLoss(nn.Module):
         raise NotImplementedError
 
     def forward(self, input, target):
-        # get probabilities from logits
-        input = self.normalization(input)
+        # get probabilities from logits; cast to float32 first so the
+        # normalization and the reductions below compute in fp32 even when the
+        # model runs under bf16 autocast
+        input = self.normalization(input.float())
 
         # compute per channel Dice coefficient
         per_channel_dice = self.dice(input, target, weight=self.weight)
