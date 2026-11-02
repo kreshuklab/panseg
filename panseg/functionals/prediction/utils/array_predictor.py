@@ -16,7 +16,7 @@ from panseg.functionals.prediction.utils.size_finder import (
     find_batch_size,
     will_CUDA_OOM,
 )
-from panseg.functionals.precision import validate_amp
+from panseg.functionals.precision import amp_context, cudnn_benchmark, validate_amp
 from panseg.functionals.training.embeddings import embeddings_to_affinities
 
 logger = logging.getLogger(__name__)
@@ -84,14 +84,20 @@ class ArrayPredictor:
         if single_batch_mode:  # then check if OOM happens at batch size 1
             self.batch_size = 1
             if device != "cpu" and will_CUDA_OOM(
-                model, in_channels, patch, patch_halo, self.batch_size, device, amp=amp
+                model,
+                in_channels,
+                patch,
+                patch_halo,
+                self.batch_size,
+                device,
+                amp=self.amp,
             ):
                 raise RuntimeError(
                     "OOM error will happen. Please reduce the patch size/halo."
                 )
         else:  # find the max batch size without causing OOM, may be [0, 1, 2, 4, 8, 16, 32, 64, 128]
             self.batch_size = find_batch_size(
-                model, in_channels, patch, patch_halo, device, amp=amp
+                model, in_channels, patch, patch_halo, device, amp=self.amp
             )
             if self.batch_size < 1:
                 raise RuntimeError(
@@ -170,7 +176,9 @@ class ArrayPredictor:
         # Run prediction on the entire input dataset
         if self.tracker is not None:
             self.tracker.total = len(test_loader)
-        with torch.no_grad():
+        # every patch has the same shape, so cuDNN autotuning pays off; the
+        # forward passes run in the same precision mode as the memory probes
+        with cudnn_benchmark(), amp_context(self.amp, self.device), torch.no_grad():
             for input_, indices in tqdm.tqdm(test_loader, disable=self.disable_tqdm):
                 if self.tracker is not None:
                     self.tracker.progress += 1
@@ -200,8 +208,9 @@ class ArrayPredictor:
                     prediction = 1 - prediction.mean(dim=1)
                 # removing halo from the prediction
                 prediction = remove_padding(prediction, self.patch_halo)
-                # convert to numpy array
-                prediction = prediction.cpu().numpy()
+                # convert to numpy array; the accumulated maps are float32
+                # whatever the compute precision (bf16 cannot convert to numpy)
+                prediction = prediction.float().cpu().numpy()
 
                 channel_slice = slice(0, out_channels)
                 # for each batch sample

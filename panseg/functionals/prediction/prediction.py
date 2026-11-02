@@ -28,6 +28,7 @@ from panseg.functionals.prediction.utils.size_finder import (
 )
 from panseg.functionals.prediction.utils.slice_builder import SliceBuilder
 from panseg.functionals.prediction.utils.utils import get_stride_shape
+from panseg.functionals.precision import validate_amp
 from panseg.functionals.training.augs import get_test_augmentations
 
 logger = logging.getLogger(__name__)
@@ -211,6 +212,7 @@ def unet_prediction(
     config_path: Path | None = None,
     model_weights_path: Path | None = None,
     tracker=None,
+    amp: str = "auto",
 ) -> np.ndarray:
     """Generate prediction from raw data using a specified 3D U-Net model.
 
@@ -234,6 +236,10 @@ def unet_prediction(
         disable_tqdm (bool, optional): If True, disables the tqdm progress bar. Defaults to False.
         config_path (Path | None, optional): Path to the model configuration file. Defaults to None.
         model_weights_path (Path | None, optional): Path to the model weights file. Defaults to None.
+        amp (str, optional): precision mode (``"auto"``: bf16 autocast on
+            supported CUDA devices, else fp32; ``"off"``: always fp32). The
+            memory probes size patches in the same mode. Outputs are fp32 in
+            either mode. Defaults to "auto".
 
     Returns:
         np.ndarray: The predicted boundaries as a 3D (Z, Y, X) or 4D (C, Z, Y, X) array, normalized between 0 and 1.
@@ -242,7 +248,7 @@ def unet_prediction(
         ValueError: If neither `model_name`, `model_id`, nor `config_path` are provided.
         ValueError: If the patch or halo shape cannot run on the model.
     """
-
+    amp = validate_amp(amp)
     if config_path is not None:  # Safari mode for custom models outside zoos
         logger.info("Safari prediction: Running model from custom config path.")
         model, model_config, model_path = model_zoo.get_model_by_config_path(
@@ -296,6 +302,7 @@ def unet_prediction(
             patch_halo,
             device,
             both_sides=False,
+            amp=amp,
         )
 
     oversized_dims = [
@@ -326,6 +333,7 @@ def unet_prediction(
         verbose_logging=False,
         disable_tqdm=disable_tqdm,
         tracker=tracker,
+        amp=amp,
     )
 
     if int(model_config["in_channels"]) > 1:  # if multi-channel input
