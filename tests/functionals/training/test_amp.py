@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 import torch
 
+from panseg.core.zoo import model_zoo
 from panseg.functionals.training.losses import DiceLoss
 from panseg.functionals.training.model import UNet3D
 from panseg.functionals.training.train import unet_training
@@ -110,13 +111,12 @@ class TestUNetTrainingAmpOption:
 
         mock_trainer_class.return_value.train.side_effect = _train
 
-    def _run_mocked_unet_training(self, tmp_path, amp: str):
+    def _run_mocked_unet_training(self, tmp_path, model_name: str, amp: str):
         """Run `unet_training` with mocked training internals; returns the mocks."""
         mock_dataset = MagicMock()
         mock_dataset.__len__.return_value = 10
         batch = torch.from_numpy(np.random.rand(1, 1, 1, 64, 64).astype("float32"))
 
-        model_name = "test_model_amp"
         dataset_dir = tmp_path / "dataset"
         (dataset_dir / "train").mkdir(parents=True)
         (dataset_dir / "val").mkdir()
@@ -140,6 +140,12 @@ class TestUNetTrainingAmpOption:
             patch("panseg.functionals.training.train.ConcatDataset"),
             patch("panseg.functionals.training.train.PATH_PANSEG_MODELS", tmp_path),
             patch("panseg.core.zoo.PATH_PANSEG_MODELS", tmp_path),
+            # keep the zoo records of this run out of the user's custom zoo
+            patch.multiple(
+                model_zoo,
+                path_zoo=tmp_path / "models_zoo.yaml",
+                path_zoo_custom=tmp_path / "custom_zoo.yaml",
+            ),
         ):
             self._write_checkpoints(mock_trainer, tmp_path / model_name)
             unet_training(
@@ -160,7 +166,7 @@ class TestUNetTrainingAmpOption:
     def test_unet_training_flows_amp_to_batch_probe_and_trainer(self, tmp_path):
         """The batch-size probe and the trainer must share the configured mode."""
         mock_trainer, mock_find_batch_size, _ = self._run_mocked_unet_training(
-            tmp_path, amp="off"
+            tmp_path, model_name="test_model_amp_flow", amp="off"
         )
 
         assert mock_find_batch_size.call_args.kwargs["amp"] == "off"
@@ -168,7 +174,9 @@ class TestUNetTrainingAmpOption:
 
     def test_unet_training_test_tensors_stay_fp32_with_amp(self, tmp_path):
         """The packaged bioimageIO test tensors are fp32 whatever the amp mode."""
-        _, _, checkpoint_dir = self._run_mocked_unet_training(tmp_path, amp="auto")
+        _, _, checkpoint_dir = self._run_mocked_unet_training(
+            tmp_path, model_name="test_model_amp_export", amp="auto"
+        )
 
         assert np.load(checkpoint_dir / "test_in.npy").dtype == np.float32
         assert np.load(checkpoint_dir / "test_out.npy").dtype == np.float32

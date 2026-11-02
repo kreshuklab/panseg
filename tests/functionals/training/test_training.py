@@ -12,6 +12,7 @@ import torch
 import yaml
 
 from panseg import FILE_CONFIG_TRAIN_YAML
+from panseg.core.zoo import model_zoo
 from panseg.functionals.training.augs import Augmenter
 from panseg.functionals.training.h5dataset import HDF5Dataset, resolve_dataset_layouts
 from panseg.functionals.training.losses import DiceLoss
@@ -24,6 +25,24 @@ from panseg.functionals.training.train import (
     zero_mean_unit_variance,
 )
 from panseg.functionals.training.trainer import UNetTrainer, load_pretrained_weights
+
+
+@pytest.fixture(autouse=True)
+def _isolate_model_zoo(tmp_path_factory):
+    """Keep the zoo records of test trainings out of the user's custom zoo.
+
+    `unet_training` registers every trained model via `model_zoo.add_custom_model`,
+    which writes `model_zoo.path_zoo_custom` and appends to its DataFrame. With
+    the user's real zoo those records persist across runs and later duplicate
+    the zoo index (`test_dimensionality_filter_is_spatial_only`).
+    """
+    root = tmp_path_factory.mktemp("model_zoo")
+    with patch.multiple(
+        model_zoo,
+        path_zoo=root / "models_zoo.yaml",
+        path_zoo_custom=root / "custom_zoo.yaml",
+    ):
+        yield
 
 
 def _write_checkpoints(mock_trainer_class, checkpoint_dir, make_states=None):
