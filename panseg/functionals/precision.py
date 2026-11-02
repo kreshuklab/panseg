@@ -64,7 +64,7 @@ def amp_context(amp: str, device: str | torch.device) -> AbstractContextManager:
     Raises:
         ValueError: if `amp` is not a supported mode.
     """
-    validate_amp(amp)
+    amp = validate_amp(amp)
     if (
         amp == "auto"
         and _is_cuda_device(device)

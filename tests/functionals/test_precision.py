@@ -41,6 +41,15 @@ def test_amp_auto_accepts_plain_cuda_device_string():
         assert torch.is_autocast_enabled("cuda")
 
 
+@requires_cuda
+def test_amp_context_accepts_yaml_boolean_spellings():
+    """A bare `on`/`off` parsed as a boolean must resolve like "auto"/"off"."""
+    with amp_context(True, "cuda"):
+        assert torch.is_autocast_enabled("cuda")
+    with amp_context(False, "cuda"):
+        assert not torch.is_autocast_enabled("cuda")
+
+
 @pytest.mark.parametrize("device", ["cuda", "cpu", "mps"])
 def test_amp_rejects_unknown_modes(device):
     with pytest.raises(ValueError, match="amp"):
