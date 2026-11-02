@@ -17,7 +17,7 @@ AmpMode = Literal["auto", "off"]
 AMP_MODES: tuple[str, ...] = ("auto", "off")
 
 
-def validate_amp(amp: str) -> AmpMode:
+def validate_amp(amp: str | bool) -> AmpMode:
     """Check that `amp` is a supported mode and return it typed.
 
     YAML parses the bare mode names as booleans (``off`` -> False, ``on`` ->
@@ -45,7 +45,7 @@ def _is_cuda_device(device: str | torch.device) -> bool:
     return torch.device(device).type == "cuda"
 
 
-def amp_context(amp: str, device: str | torch.device) -> AbstractContextManager:
+def amp_context(amp: str | bool, device: str | torch.device) -> AbstractContextManager:
     """Resolve ``amp: auto|off`` to the torch context manager for `device`.
 
     ``"auto"`` runs bf16 autocast on CUDA devices with bf16 support and
@@ -55,7 +55,8 @@ def amp_context(amp: str, device: str | torch.device) -> AbstractContextManager:
     `validate_amp`).
 
     Args:
-        amp: the configured precision mode, ``"auto"`` or ``"off"``.
+        amp: the configured precision mode (``str | bool``: YAML parses bare
+            ``off``/``on`` spellings as booleans).
         device: device the compute will run on.
 
     Returns:
