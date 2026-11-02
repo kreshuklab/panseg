@@ -6,7 +6,12 @@ import tqdm
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from panseg.functionals.precision import amp_context, cudnn_benchmark, validate_amp
+from panseg.functionals.precision import (
+    AmpSetting,
+    amp_context,
+    cudnn_benchmark,
+    validate_amp,
+)
 from panseg.functionals.prediction.utils.array_dataset import (
     ArrayDataset,
     default_prediction_collate,
@@ -86,7 +91,7 @@ class ArrayPredictor:
         verbose_logging: bool = False,
         disable_tqdm: bool = False,
         tracker=None,
-        amp: str = "auto",
+        amp: AmpSetting = "auto",
         channels_last_3d: bool = True,
         compile: bool = False,
     ):

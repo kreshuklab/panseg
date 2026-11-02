@@ -14,23 +14,29 @@ from typing import Literal, cast
 import torch
 
 AmpMode = Literal["auto", "off"]
+AmpSetting = AmpMode | bool
+"""Accepted `amp` spellings at API boundaries: the modes `AmpMode` plus the
+YAML-boolean aliases that `validate_amp` resolves (a bare ``on``/``true`` reads
+as True -> ``"auto"``, a bare ``off``/``false`` as False -> ``"off"``)."""
 AMP_MODES: tuple[str, ...] = ("auto", "off")
 
 
-def validate_amp(amp: str | bool) -> AmpMode:
-    """Check that `amp` is a supported mode and return it typed.
+def validate_amp(amp: AmpSetting) -> AmpMode:
+    """Check that `amp` is a supported mode and return it resolved.
 
-    YAML parses the bare mode names as booleans (``off`` -> False, ``on`` ->
-    True); those spellings map to ``"off"`` and ``"auto"`` respectively.
+    Accepted spellings: the strings ``"auto"`` and ``"off"``, plus the
+    YAML-boolean aliases — YAML parses a bare ``on``/``true`` as True and a bare
+    ``off``/``false`` as False, which resolve to ``"auto"`` and ``"off"``
+    respectively.
 
     Args:
-        amp: the configured precision mode.
+        amp: the configured precision mode (see the accepted spellings above).
 
     Returns:
-        The mode, narrowed to `AmpMode`.
+        The resolved mode, narrowed to `AmpMode`.
 
     Raises:
-        ValueError: if `amp` is not one of `AMP_MODES`.
+        ValueError: if `amp` is not one of the accepted spellings.
     """
     if amp is False:  # YAML reads a bare `off` as a boolean
         amp = "off"
@@ -45,18 +51,17 @@ def _is_cuda_device(device: str | torch.device) -> bool:
     return torch.device(device).type == "cuda"
 
 
-def amp_context(amp: str | bool, device: str | torch.device) -> AbstractContextManager:
+def amp_context(amp: AmpSetting, device: str | torch.device) -> AbstractContextManager:
     """Resolve ``amp: auto|off`` to the torch context manager for `device`.
 
     ``"auto"`` runs bf16 autocast on CUDA devices with bf16 support and
     silently falls back to plain fp32 everywhere else (CPU, MPS, older CUDA
-    hardware). ``"off"`` always runs fp32. YAML booleans are accepted for the
-    bare spellings (``off`` -> ``"off"``, ``on`` -> ``"auto"``, see
-    `validate_amp`).
+    hardware). ``"off"`` always runs fp32. All spellings accepted by
+    `validate_amp` (including the YAML-boolean aliases) work here.
 
     Args:
-        amp: the configured precision mode (``str | bool``: YAML parses bare
-            ``off``/``on`` spellings as booleans).
+        amp: the configured precision mode (see `validate_amp` for the
+            accepted spellings).
         device: device the compute will run on.
 
     Returns:

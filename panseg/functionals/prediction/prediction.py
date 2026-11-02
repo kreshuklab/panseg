@@ -19,7 +19,7 @@ from panseg.functionals.dataprocessing.dataprocessing import (
     fix_layout_to_CZYX,
     fix_layout_to_ZYX,
 )
-from panseg.functionals.precision import validate_amp
+from panseg.functionals.precision import AmpSetting, validate_amp
 from panseg.functionals.prediction.utils.array_dataset import ArrayDataset
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
 from panseg.functionals.prediction.utils.size_finder import (
@@ -212,7 +212,7 @@ def unet_prediction(
     config_path: Path | None = None,
     model_weights_path: Path | None = None,
     tracker=None,
-    amp: str = "auto",
+    amp: AmpSetting = "auto",
     channels_last_3d: bool = True,
     compile: bool = False,
 ) -> np.ndarray:

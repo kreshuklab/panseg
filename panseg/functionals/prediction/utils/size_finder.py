@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from panseg.functionals.precision import amp_context
+from panseg.functionals.precision import AmpSetting, amp_context
 from panseg.functionals.training.model import UNet2D
 
 logger = logging.getLogger(__name__)
@@ -174,7 +174,7 @@ def probe_max_patch_shape(
     model: nn.Module,
     in_channels: int,
     device: str,
-    amp: str = "auto",
+    amp: AmpSetting = "auto",
     # ) -> tuple[int, int, int] | tuple[int, int]:
 ) -> tuple[int, int, int]:
     """Determine the maximum feasible patch shape for a given model based on
@@ -268,7 +268,7 @@ def find_feasible_patch_and_halo_shapes(
     device: str,
     max_attempts: int = 5,
     both_sides: bool = False,
-    amp: str = "auto",
+    amp: AmpSetting = "auto",
 ) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     """Recommend a patch shape and halo size that is verified to fit on the device.
 
@@ -344,7 +344,7 @@ def find_feasible_patch_and_halo_shapes(
 
 
 def _probe_batch(
-    model: nn.Module, x: torch.Tensor, for_training: bool, amp: str, device: str
+    model: nn.Module, x: torch.Tensor, for_training: bool, amp: AmpSetting, device: str
 ) -> None:
     """Run one forward (inference) or forward+backward (training) probe.
 
@@ -366,7 +366,7 @@ def find_batch_size(
     patch_halo: tuple[int, int, int],
     device: str,
     for_training: bool = False,
-    amp: str = "auto",
+    amp: AmpSetting = "auto",
 ) -> int:
     """Determine the maximum feasible batch size for a given model based on available GPU memory.
 
@@ -445,7 +445,7 @@ def will_CUDA_OOM(
     patch_halo: tuple[int, int, int],
     batch_size: int,
     device: str,
-    amp: str = "auto",
+    amp: AmpSetting = "auto",
 ) -> bool:
     """Determine if a given batch size will cause an out-of-memory (OOM)
     error on the specified device.

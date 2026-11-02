@@ -9,7 +9,12 @@ from torch.optim.optimizer import Optimizer
 from torch.utils.tensorboard.writer import SummaryWriter
 from tqdm import tqdm
 
-from panseg.functionals.precision import amp_context, cudnn_benchmark, validate_amp
+from panseg.functionals.precision import (
+    AmpSetting,
+    amp_context,
+    cudnn_benchmark,
+    validate_amp,
+)
 from panseg.functionals.training.model import UNet2D
 from panseg.functionals.training.utils import RunningAverage
 
@@ -75,7 +80,7 @@ class UNetTrainer:
         max_num_iterations: int,
         device: str = "cuda",
         log_after_iters: int = 100,
-        amp: str = "auto",
+        amp: AmpSetting = "auto",
     ):
         self.model = model
         self.optimizer = optimizer
@@ -153,10 +158,13 @@ class UNetTrainer:
 
             train_losses.update(loss.item(), self._batch_size(_input))
 
-            # compute gradients and update parameters
+            # compute gradients and update parameters; the autocast context
+            # covers backward and the step too (per the AMP contract; gradients
+            # follow the dtypes recorded during the forward pass)
             self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+            with amp_context(self.amp, self.device):
+                loss.backward()
+                self.optimizer.step()
 
             if self.num_iterations % self.log_after_iters == 0:
                 # log stats, params and images

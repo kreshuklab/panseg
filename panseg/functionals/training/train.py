@@ -19,7 +19,7 @@ from panseg import (
     PATH_TRAIN_TEMPLATE,
 )
 from panseg.core.zoo import model_zoo
-from panseg.functionals.precision import validate_amp
+from panseg.functionals.precision import AmpSetting, validate_amp
 from panseg.functionals.prediction.utils.size_finder import find_batch_size
 from panseg.functionals.training.augs import Augmenter
 from panseg.functionals.training.biio import make_model_description
@@ -151,7 +151,7 @@ def unet_training(
     additional_citations: list[str] | None = None,
     license: str | None = None,
     documentation: str | None = None,
-    amp: str = "auto",
+    amp: AmpSetting = "auto",
 ) -> None:
     """Train a new UNet model; the main entrypoint behind ``panseg --train``.
 
