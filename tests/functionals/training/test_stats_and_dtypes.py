@@ -56,8 +56,10 @@ class TestCalculateStats:
         for images in (raw_u16, raw_u16.astype(np.float32)):
             stats = calculate_stats(images)
             for key in ("pmin", "pmax", "mean", "std"):
+                value = stats[key]
+                assert value is not None, key
                 np.testing.assert_allclose(
-                    stats[key], reference[key], rtol=1e-6, err_msg=key
+                    value, reference[key], rtol=1e-6, err_msg=key
                 )
 
     @pytest.mark.parametrize(
@@ -106,9 +108,9 @@ class TestCalculateStats:
         stats = calculate_stats([chunk.astype(np.float32) for chunk in chunks])
 
         for key in ("pmin", "pmax", "mean", "std"):
-            np.testing.assert_allclose(
-                stats[key], reference[key], rtol=1e-6, err_msg=key
-            )
+            value = stats[key]
+            assert value is not None, key
+            np.testing.assert_allclose(value, reference[key], rtol=1e-6, err_msg=key)
 
     def test_global_normalization_off_returns_nones(self):
         assert calculate_stats(np.zeros((2, 2)), global_normalization=False) == {
