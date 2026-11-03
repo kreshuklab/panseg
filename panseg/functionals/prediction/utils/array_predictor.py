@@ -1,4 +1,5 @@
 import logging
+from typing import Callable
 
 import numpy as np
 import torch
@@ -92,6 +93,14 @@ class ArrayPredictor:
         self.tracker = tracker
         self.amp: AmpMode = validate_amp(amp)
 
+        # explicit logits -> probabilities entry of the model (see
+        # `AbstractUNet.activate`), captured before any DataParallel/compile
+        # wrapping; models without a configured final activation (e.g. SpocoNet)
+        # pass through unchanged
+        self._activate: Callable[[torch.Tensor], torch.Tensor] | None = getattr(
+            model, "activate", None
+        )
+
         if single_batch_mode:  # then check if OOM happens at batch size 1
             self.batch_size = 1
             if device != "cpu" and will_CUDA_OOM(
@@ -177,6 +186,17 @@ class ArrayPredictor:
             self._compiled = False
             return self.model(input_)
 
+    def _to_probabilities(self, logits: torch.Tensor) -> torch.Tensor:
+        """Map the model's forward logits to its output probabilities.
+
+        Delegates to the model's explicit activation entry and is a no-op for
+        models without one. The activation runs outside the (possibly compiled)
+        forward graph, on fp32 tensors after the `.float()` cast in the loop.
+        """
+        if self._activate is None:
+            return logits
+        return self._activate(logits)
+
     def __call__(self, test_dataset: Dataset) -> np.ndarray:
         assert isinstance(test_dataset, ArrayDataset), (
             "Dataset must be an instance of ArrayDataset"
@@ -225,7 +245,8 @@ class ArrayPredictor:
 
         # run prediction
         # Sets the module in evaluation mode explicitly
-        # It is necessary for batchnorm/dropout layers if present as well as final Sigmoid/Softmax to be applied
+        # It is necessary for batchnorm/dropout layers if present (the final
+        # activation is applied explicitly, see `_to_probabilities`)
         self.model.eval()
         # Run prediction on the entire input dataset
         if self.tracker is not None:
@@ -260,6 +281,11 @@ class ArrayPredictor:
                         offsets = [[-1, 0], [0, -1]]
                     else:
                         offsets = [[-1, 0, 0], [0, -1, 0], [0, 0, -1]]
+                    # keep today's numbers: this branch consumes the model's
+                    # activated output (Softmax for sparse models), not raw
+                    # embeddings; the semantics are undecided, see
+                    # KRiedmiller/panseg#5
+                    prediction = self._to_probabilities(prediction)
                     # convert embeddings to affinities
                     prediction = embeddings_to_affinities(
                         prediction, offsets, delta=0.5
@@ -271,7 +297,13 @@ class ArrayPredictor:
                 # convert to numpy array; the accumulated maps are float32
                 # whatever the compute precision (bf16 cannot convert to numpy),
                 # and contiguous whatever the channels_last_3d input layout
-                prediction = prediction.float().contiguous().cpu().numpy()
+                prediction = prediction.float()
+                if not self.is_embedding:
+                    # logits -> probabilities per patch, before the
+                    # overlap-averaging below, in fp32 after the cast above (the
+                    # torch.compile forward graph stays activation-free)
+                    prediction = self._to_probabilities(prediction)
+                prediction = prediction.contiguous().cpu().numpy()
 
                 channel_slice = slice(0, out_channels)
                 # for each batch sample

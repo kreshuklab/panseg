@@ -412,7 +412,9 @@ def unet_training(
         test_in = torch.squeeze(test_in, dim=-3)
 
     with torch.no_grad():
-        test_out = net(zero_mean_unit_variance(test_in))
+        # probabilities: `test_out` must match the output of the exported
+        # model, whose forward applies the final activation
+        test_out = net.predict(zero_mean_unit_variance(test_in))
 
     np.save(checkpoint_dir / "test_in.npy", test_in.numpy())
     np.save(checkpoint_dir / "test_out.npy", test_out.detach().cpu().numpy())

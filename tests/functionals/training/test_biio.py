@@ -106,15 +106,22 @@ def test_make_model_description_defaults(model_dir):
     assert (model_dir / "cover.png").exists()
 
 
-def test_make_model_description_final_sigmoid_kwarg(model_dir):
-    """The exported architecture must reproduce the trained model's final activation."""
+def test_make_model_description_final_activation_plumbing(model_dir):
+    """The exported architecture must reproduce the trained model's output contract.
+
+    The exported callable is the probabilities subclass (`forward` applies the
+    final activation), state-dict compatible with `UNet3D`, and `final_sigmoid`
+    still selects *which* activation.
+    """
     desc = make_description(model_dir, final_sigmoid=False)
-    kwargs = desc.weights.pytorch_state_dict.architecture.kwargs
-    assert kwargs["final_sigmoid"] is False
+    arch = desc.weights.pytorch_state_dict.architecture
+    assert str(arch.callable) == "UNet3DProbabilities"
+    assert arch.kwargs["final_sigmoid"] is False
 
     desc = make_description(model_dir, final_sigmoid=True)
-    kwargs = desc.weights.pytorch_state_dict.architecture.kwargs
-    assert kwargs["final_sigmoid"] is True
+    arch = desc.weights.pytorch_state_dict.architecture
+    assert str(arch.callable) == "UNet3DProbabilities"
+    assert arch.kwargs["final_sigmoid"] is True
 
 
 def test_axes_use_exactly_representable_scales(model_dir):

@@ -20,7 +20,7 @@ import torch
 
 from panseg.functionals.prediction import unet_prediction
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
-from panseg.functionals.training.model import UNet2D, UNet3D
+from panseg.functionals.training.model import UNet2D, UNet3D, UNet3DProbabilities
 from tests.functionals.prediction.conftest import MODEL_CONFIG, make_dataset
 
 GOLDEN_PATH = (
@@ -59,8 +59,12 @@ def make_2d() -> UNet2D:
     )
 
 
-def test_train_forward_matches_golden_logits(golden):
-    """The training path must keep seeing exactly its old logits."""
+def test_forward_matches_golden_logits_in_train_and_eval(golden):
+    """forward() returns the old train-mode logits in *every* mode.
+
+    This is the flipped pin: pre-change, eval-mode forward returned the golden
+    probabilities (the double-sigmoid contract).
+    """
     for make, state_key, input_key, logits_key in [
         (lambda: make_3d(True), "state_unet3d", "input_3d", "gold_logits_3d"),
         (
@@ -73,16 +77,17 @@ def test_train_forward_matches_golden_logits(golden):
     ]:
         model = make()
         model.load_state_dict(golden[state_key])
-        model.train()
-        with torch.no_grad():
-            out = model(golden[input_key])
-        np.testing.assert_allclose(
-            out.numpy(), golden[logits_key].numpy(), rtol=RTOL, atol=ATOL
-        )
+        for mode in ("train", "eval"):
+            model.train(mode == "train")
+            with torch.no_grad():
+                out = model(golden[input_key])
+            np.testing.assert_allclose(
+                out.numpy(), golden[logits_key].numpy(), rtol=RTOL, atol=ATOL
+            )
 
 
-def test_eval_forward_matches_golden_probabilities(golden):
-    """Pins the pre-change eval-mode contract: probabilities out of forward()."""
+def test_predict_matches_golden_probabilities(golden):
+    """predict() must reproduce exactly the old eval-mode probabilities."""
     for make, state_key, input_key, probs_key in [
         (lambda: make_3d(True), "state_unet3d", "input_3d", "gold_probs_3d"),
         (
@@ -97,7 +102,7 @@ def test_eval_forward_matches_golden_probabilities(golden):
         model.load_state_dict(golden[state_key])
         model.eval()
         with torch.no_grad():
-            out = model(golden[input_key])
+            out = model.predict(golden[input_key])
         np.testing.assert_allclose(
             out.numpy(), golden[probs_key].numpy(), rtol=RTOL, atol=ATOL
         )
@@ -161,4 +166,32 @@ def test_embedding_path_matches_golden(golden):
 
     np.testing.assert_allclose(
         embeddings, golden["gold_embed_3d"].numpy(), rtol=RTOL, atol=ATOL
+    )
+
+
+def test_export_subclass_matches_golden_probabilities(golden):
+    """The BioImage.IO export callable must emit exactly the old probabilities.
+
+    `biio.py` exports `UNet3DProbabilities`/`UNet2DProbabilities`, whose
+    `forward` applies the final activation: published models keep their
+    documented [0, 1] output contract. `predict()` must not double-activate.
+    """
+    model = UNet3DProbabilities(
+        in_channels=1,
+        out_channels=1,
+        final_sigmoid=True,
+        f_maps=[8, 16],
+        num_groups=4,
+        layer_order="gcr",
+    )
+    model.load_state_dict(golden["state_unet3d"])
+    model.eval()
+    with torch.no_grad():
+        out = model(golden["input_3d"])
+        pred = model.predict(golden["input_3d"])
+    np.testing.assert_allclose(
+        out.numpy(), golden["gold_probs_3d"].numpy(), rtol=RTOL, atol=ATOL
+    )
+    np.testing.assert_allclose(
+        pred.numpy(), golden["gold_probs_3d"].numpy(), rtol=RTOL, atol=ATOL
     )

@@ -665,6 +665,8 @@ class TestUnetTraining:
 
         # test_in is stored as produced by the loader, un-normalized
         assert np.array_equal(test_in, loader_batch.squeeze(dim=-3).numpy())
+        # test_out is a probability map (the activation is applied explicitly)
+        assert test_out.min() >= 0 and test_out.max() <= 1
 
         def _predict(state):
             model = UNet2D(
@@ -677,7 +679,7 @@ class TestUnetTraining:
             model.load_state_dict(state)
             model.eval()
             with torch.no_grad():
-                out = model(zero_mean_unit_variance(torch.from_numpy(test_in)))
+                out = model.predict(zero_mean_unit_variance(torch.from_numpy(test_in)))
             return out.numpy()
 
         best_out = _predict(torch.load(weights, map_location="cpu"))
