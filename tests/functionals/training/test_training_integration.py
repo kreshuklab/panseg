@@ -1,6 +1,5 @@
 """Integration tests for training."""
 
-import h5py
 import numpy as np
 import pytest
 import torch
@@ -9,6 +8,7 @@ import yaml
 from panseg import FILE_CONFIG_TRAIN_YAML, FILE_MODEL_ZOO_CUSTOM, PATH_PANSEG_MODELS
 from panseg.core.zoo import model_zoo
 from panseg.functionals.training.train import unet_training
+from tests.functionals.training.helpers import write_h5
 
 
 def _write_h5_dataset(
@@ -49,10 +49,7 @@ def _write_h5_dataset(
             continue
         label[ellipsoid] = instance_id
         instance_id += 1
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    with h5py.File(file_path, "w") as f:
-        f.create_dataset("raw", data=raw)
-        f.create_dataset("label", data=label)
+    write_h5(file_path, raw, label)
 
 
 @pytest.fixture

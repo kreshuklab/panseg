@@ -10,7 +10,6 @@ threshold-filtered).
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import h5py
 import numpy as np
 import pytest
 import torch
@@ -18,6 +17,7 @@ import yaml
 
 from panseg.core.zoo import model_zoo
 from panseg.functionals.training.train import create_datasets, unet_training
+from tests.functionals.training.helpers import write_h5
 
 # The example volume from the analysis: 64x256x256 with patch 32x128x128.
 # The train grid (stride patch // 2) yields 3x3x3 = 27 patches; the
@@ -28,17 +28,9 @@ TRAIN_PATCH_COUNT = 27
 VAL_PATCH_COUNT = 8
 
 
-def _write_h5(
-    file_path: Path,
-    raw: np.ndarray,
-    label: np.ndarray,
-    raw_dtype="uint16",
-    label_dtype="uint8",
-):
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    with h5py.File(file_path, "w") as f:
-        f.create_dataset("raw", data=raw.astype(raw_dtype))
-        f.create_dataset("label", data=label.astype(label_dtype))
+def _write_h5(file_path: Path, raw: np.ndarray, label: np.ndarray):
+    """Write a training H5 file with the analysis' dtypes (uint16 raw, uint8 label)."""
+    write_h5(file_path, raw, label, raw_dtype="uint16", label_dtype="uint8")
 
 
 def _dense_label(shape):
