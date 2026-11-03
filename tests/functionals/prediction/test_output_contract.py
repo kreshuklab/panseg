@@ -169,6 +169,15 @@ def test_embedding_path_matches_golden(golden):
     )
 
 
+def test_state_dict_keys_are_unchanged(golden):
+    """Old checkpoints stay loadable: no parameter or buffer renames/additions.
+
+    The golden file captured the state-dict keys before the contract change.
+    """
+    assert set(make_3d(True).state_dict()) == set(golden["state_keys_unet3d"])
+    assert set(make_2d().state_dict()) == set(golden["state_keys_unet2d"])
+
+
 def test_export_subclass_matches_golden_probabilities(golden):
     """The BioImage.IO export callable must emit exactly the old probabilities.
 
