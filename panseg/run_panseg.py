@@ -118,8 +118,14 @@ def _translate_loaders(config: dict, path: Path) -> None:
     if not isinstance(loaders, dict):
         raise ValueError(f"`loaders` must be a mapping in training config {path}.")
 
-    val = loaders.get("val") or {}
-    slice_builder = (val if isinstance(val, dict) else {}).get("slice_builder") or {}
+    val = loaders.get("val")
+    if val is None:
+        return
+    if not isinstance(val, dict):
+        raise ValueError(f"`loaders.val` must be a mapping in training config {path}.")
+    slice_builder = val.get("slice_builder")
+    if slice_builder is None:
+        return
     if not isinstance(slice_builder, dict):
         raise ValueError(
             f"`loaders.val.slice_builder` must be a mapping in training config {path}."
@@ -129,8 +135,8 @@ def _translate_loaders(config: dict, path: Path) -> None:
     if unknown:
         raise ValueError(
             f"Unsupported keys in `loaders.val.slice_builder` of {path}: {unknown}. "
-            "Validation patches are built unfiltered on the training patch shape, "
-            "so only `stride_shape` is configurable there."
+            "Validation patches are built unfiltered on the training patch shape, so "
+            "only `stride_shape` changes the grid (a `threshold` would be a no-op)."
         )
     name = slice_builder.get("name", "SliceBuilder")
     if name != "SliceBuilder":
@@ -138,18 +144,15 @@ def _translate_loaders(config: dict, path: Path) -> None:
             f"`loaders.val.slice_builder.name` must be 'SliceBuilder' in {path}, "
             f"got {name!r}: validation patches are never threshold-filtered."
         )
-    patch_shape = config.get("patch_size")
+    patch_size = config.get("patch_size")
     configured_patch_shape = slice_builder.get("patch_shape")
-    if (
-        patch_shape is not None
-        and configured_patch_shape is not None
-        and list(configured_patch_shape) != list(patch_shape)
-    ):
-        raise ValueError(
-            f"`loaders.val.slice_builder.patch_shape` ({configured_patch_shape}) must "
-            f"match `patch_size` ({patch_shape}) in {path}: the validation loader is "
-            "built from the training patch size."
-        )
+    if patch_size is not None and configured_patch_shape is not None:
+        if list(configured_patch_shape) != list(patch_size):
+            raise ValueError(
+                f"`loaders.val.slice_builder.patch_shape` ({configured_patch_shape}) "
+                f"must match `patch_size` ({patch_size}) in {path}: the validation "
+                "loader is built from the training patch size."
+            )
 
     stride_shape = slice_builder.get("stride_shape")
     if stride_shape is None:
