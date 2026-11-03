@@ -29,3 +29,27 @@ def write_h5(file_path: Path, raw, label, raw_dtype=None, label_dtype=None) -> P
         f.create_dataset("raw", data=raw)
         f.create_dataset("label", data=label)
     return file_path
+
+
+def model_dir_patches(root: Path) -> list[tuple[object, str, object]]:
+    """``(target, attribute, value)`` triples redirecting model-zoo writes to `root`.
+
+    Every module that holds its own reference to a model path must be
+    redirected: `unet_training` writes the checkpoints to the training module's
+    `PATH_PANSEG_MODELS`, while `model_zoo.add_custom_model` copies the packaged
+    files into its own `PATH_PANSEG_MODELS` and appends the record to the custom
+    zoo file. Missing one of them writes into the user's `~/.panseg_models`.
+    """
+    import panseg.core.zoo as zoo_module
+    from panseg import FILE_MODEL_ZOO_CUSTOM
+    from panseg.core.zoo import model_zoo
+    from panseg.functionals.training import train as train_module
+
+    custom_zoo = root / FILE_MODEL_ZOO_CUSTOM
+    return [
+        (train_module, "PATH_PANSEG_MODELS", root),
+        (zoo_module, "PATH_PANSEG_MODELS", root),
+        (zoo_module, "PATH_MODEL_ZOO_CUSTOM", custom_zoo),
+        (model_zoo, "path_zoo", root),
+        (model_zoo, "path_zoo_custom", custom_zoo),
+    ]

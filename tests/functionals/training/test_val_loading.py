@@ -17,7 +17,7 @@ import yaml
 
 from panseg.core.zoo import model_zoo
 from panseg.functionals.training.train import create_datasets, unet_training
-from tests.functionals.training.helpers import write_h5
+from tests.functionals.training.helpers import model_dir_patches, write_h5
 
 # The example volume from the analysis: 64x256x256 with patch 32x128x128.
 # The train grid (stride patch // 2) yields 3x3x3 = 27 patches; the
@@ -279,14 +279,14 @@ class TestLaunchTrainingValStride:
         _write_h5(data_dir / "val" / "vol.h5", raw, label)
         return data_dir
 
-    def _run(self, tmp_path, monkeypatch, **config_extra) -> list[int]:
+    def _run(self, tmp_path, monkeypatch, model_name: str, **config_extra) -> list[int]:
         from panseg.functionals.training import train as train_module
         from panseg.run_panseg import main
 
         data_dir = self._write_dataset(tmp_path)
         config = {
             "dataset_dir": str(data_dir),
-            "model_name": "test_launch_val_stride",
+            "model_name": model_name,
             "in_channels": 1,
             "out_channels": 1,
             "feature_maps": [2, 2],
@@ -309,20 +309,11 @@ class TestLaunchTrainingValStride:
             return datasets
 
         monkeypatch.setattr(train_module, "create_datasets", spy)
-        monkeypatch.setattr(train_module, "PATH_PANSEG_MODELS", tmp_path)
         monkeypatch.setattr(train_module, "test_model", MagicMock())
         monkeypatch.setattr(train_module, "make_model_description", MagicMock())
         monkeypatch.setattr("panseg.run_panseg.check_version", MagicMock())
-        monkeypatch.setattr(
-            model_zoo,
-            "path_zoo",
-            tmp_path / "models_zoo.yaml",
-        )
-        monkeypatch.setattr(
-            model_zoo,
-            "path_zoo_custom",
-            tmp_path / "custom_zoo.yaml",
-        )
+        for target, attribute, value in model_dir_patches(tmp_path):
+            monkeypatch.setattr(target, attribute, value)
 
         monkeypatch.setattr("sys.argv", ["panseg", "--train", str(config_path)])
         main()
@@ -335,6 +326,7 @@ class TestLaunchTrainingValStride:
         patch_counts = self._run(
             tmp_path,
             monkeypatch,
+            model_name="test_launch_val_stride_cfg",
             loaders={
                 "val": {
                     "slice_builder": {
@@ -352,7 +344,9 @@ class TestLaunchTrainingValStride:
     def test_omitted_val_stride_runs_the_non_overlapping_grid(
         self, tmp_path, monkeypatch
     ):
-        patch_counts = self._run(tmp_path, monkeypatch)
+        patch_counts = self._run(
+            tmp_path, monkeypatch, model_name="test_launch_val_stride_default"
+        )
 
         # 64 / 16 == 4 non-overlapping z patches
         assert patch_counts[1] == 4
