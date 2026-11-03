@@ -248,7 +248,7 @@ def unet_training(
         patch_halo=(4, 4, 4),  # some slack
         device=device,
         for_training=True,  # backward passes need ~2-3x the memory of a forward
-        amp=amp,  # probe in the precision training will run in
+        amp=amp,
     )
 
     if torch.cuda.device_count() > 1 and device != "cpu":

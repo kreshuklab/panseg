@@ -36,9 +36,7 @@ def compute_per_channel_dice(input, target, epsilon=1e-6, weight=None):
 
     input = flatten(input)
     target = flatten(target)
-    # the reductions must accumulate in float32: bf16 sums over many thousand
-    # voxels lose far more precision than the input rounding (AMP training
-    # delivers bf16 activations here)
+    # AMP training delivers bf16 activations here
     input = input.float()
     target = target.float()
 

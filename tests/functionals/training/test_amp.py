@@ -20,10 +20,10 @@ from panseg.functionals.training.model import UNet3D
 from panseg.functionals.training.train import unet_training
 from panseg.functionals.training.trainer import UNetTrainer
 
-requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA required for AMP tests"
-)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+requires_cuda = pytest.mark.skipif(
+    DEVICE != "cuda", reason="CUDA required for AMP tests"
+)
 
 
 class _RecordingLoss(torch.nn.Module):

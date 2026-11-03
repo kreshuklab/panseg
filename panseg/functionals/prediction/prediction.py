@@ -214,7 +214,7 @@ def unet_prediction(
     tracker=None,
     amp: AmpSetting = "auto",
     channels_last_3d: bool = True,
-    compile: bool = False,
+    compile: bool = True,
 ) -> np.ndarray:
     """Generate prediction from raw data using a specified 3D U-Net model.
 
@@ -253,7 +253,7 @@ def unet_prediction(
             environments triton additionally needs
             ``C_INCLUDE_PATH=/usr/local/cuda/include`` (no cuda.h on the default
             include path). If compilation fails at the first forward, prediction
-            degrades to eager with a warning. Defaults to False.
+            degrades to eager with a warning. Defaults to True.
 
     Returns:
         np.ndarray: The predicted boundaries as a 3D (Z, Y, X) or 4D (C, Z, Y, X) array, normalized between 0 and 1.
