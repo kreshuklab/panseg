@@ -5,12 +5,16 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
+from bioimageio.core import test_model as biio_test_model
 from bioimageio.spec.model.v0_5 import AxisId, TensorId
 
 from panseg.functionals.training.biio import (
     PANSEG_CITATION,
     make_model_description,
 )
+from panseg.functionals.training.model import UNet3D
+from panseg.functionals.training.train import zero_mean_unit_variance
 
 WEIGHTS = (
     Path(__file__).parent.parent.parent
@@ -214,3 +218,43 @@ def test_package_includes_cover(model_dir):
     with zipfile.ZipFile(zip_path) as zf:
         names = zf.namelist()
     assert "cover.png" in names
+
+
+def test_packaged_model_reproduces_probability_test_out(model_dir):
+    """End-to-end export fence: the packaged callable emits the test_out tensor.
+
+    `bioimageio.core.test_model` loads the frozen `model.py` from the package
+    and calls the exported callable's `forward`, which must apply the final
+    activation: published models keep their [0, 1] output contract and are
+    validated against probability test tensors. Runs fully offline.
+    """
+    torch.manual_seed(0)
+    model = UNet3D(
+        in_channels=1,
+        out_channels=1,
+        f_maps=(8, 16),
+        layer_order="gcr",
+        final_sigmoid=True,
+    )
+    torch.save(model.state_dict(), model_dir / "best_checkpoint.pytorch")
+    model.eval()
+
+    # the training loader stores float32 test tensors
+    test_in = np.load(model_dir / "inputs.npy").astype("float32")
+    np.save(model_dir / "inputs.npy", test_in)
+    with torch.no_grad():
+        logits = model(zero_mean_unit_variance(torch.from_numpy(test_in)))
+        test_out = model.predict(zero_mean_unit_variance(torch.from_numpy(test_in)))
+    assert (logits < 0).any(), "the fixture must produce a non-trivial logit map"
+    np.save(model_dir / "outputs.npy", test_out.numpy())
+
+    desc = make_description(
+        model_dir,
+        feature_maps=(8, 16),
+        layer_order="gcr",
+        axis_min_sizes=(16, 50, 64),
+        resolution=(1.0, 1.0, 1.0),
+    )
+    summary = biio_test_model(desc, devices=["cpu"])
+
+    assert summary.status == "passed"
