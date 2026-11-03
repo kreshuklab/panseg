@@ -1,0 +1,164 @@
+"""Golden fence for the logits/probabilities output contract (WP1 double sigmoid).
+
+`tests/resources/output_contract_golden.pt` holds the externally visible
+outputs captured from the code *before* `forward()` started returning logits
+(generator: `/tmp/opencode/gen_golden_output_contract.py` at the time). They
+pin the numerical fence of the output-contract change: whatever happens
+internally, `unet_prediction` probability maps, the embedding path and the
+model's probabilities output must reproduce those values, and the training
+path must see exactly the logits it saw before.
+
+A tolerance of 1e-5 relative guards against benign float drift across torch
+builds; the double-sigmoid bug itself moves outputs by ~0.3 absolute.
+"""
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+import torch
+
+from panseg.functionals.prediction import unet_prediction
+from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
+from panseg.functionals.training.model import UNet2D, UNet3D
+from tests.functionals.prediction.conftest import MODEL_CONFIG, make_dataset
+
+GOLDEN_PATH = (
+    Path(__file__).resolve().parents[2] / "resources" / "output_contract_golden.pt"
+)
+RTOL = 1e-5
+ATOL = 1e-6
+
+
+@pytest.fixture(scope="module")
+def golden():
+    return torch.load(GOLDEN_PATH, map_location="cpu", weights_only=True)
+
+
+def make_3d(final_sigmoid: bool, out_channels: int = 1) -> UNet3D:
+    """The exact architecture the golden values were generated with."""
+    return UNet3D(
+        in_channels=1,
+        out_channels=out_channels,
+        final_sigmoid=final_sigmoid,
+        f_maps=[8, 16],
+        num_groups=4,
+        layer_order="gcr",
+    )
+
+
+def make_2d() -> UNet2D:
+    """The exact 2D architecture the golden values were generated with."""
+    return UNet2D(
+        in_channels=1,
+        out_channels=2,
+        final_sigmoid=True,
+        f_maps=[8, 16],
+        num_groups=4,
+        layer_order="gcr",
+    )
+
+
+def test_train_forward_matches_golden_logits(golden):
+    """The training path must keep seeing exactly its old logits."""
+    for make, state_key, input_key, logits_key in [
+        (lambda: make_3d(True), "state_unet3d", "input_3d", "gold_logits_3d"),
+        (
+            lambda: make_3d(False, out_channels=2),
+            "state_unet3d_softmax",
+            "input_3d",
+            "gold_logits_softmax_3d",
+        ),
+        (make_2d, "state_unet2d", "input_2d", "gold_logits_2d"),
+    ]:
+        model = make()
+        model.load_state_dict(golden[state_key])
+        model.train()
+        with torch.no_grad():
+            out = model(golden[input_key])
+        np.testing.assert_allclose(
+            out.numpy(), golden[logits_key].numpy(), rtol=RTOL, atol=ATOL
+        )
+
+
+def test_eval_forward_matches_golden_probabilities(golden):
+    """Pins the pre-change eval-mode contract: probabilities out of forward()."""
+    for make, state_key, input_key, probs_key in [
+        (lambda: make_3d(True), "state_unet3d", "input_3d", "gold_probs_3d"),
+        (
+            lambda: make_3d(False, out_channels=2),
+            "state_unet3d_softmax",
+            "input_3d",
+            "gold_softmax_3d",
+        ),
+        (make_2d, "state_unet2d", "input_2d", "gold_probs_2d"),
+    ]:
+        model = make()
+        model.load_state_dict(golden[state_key])
+        model.eval()
+        with torch.no_grad():
+            out = model(golden[input_key])
+        np.testing.assert_allclose(
+            out.numpy(), golden[probs_key].numpy(), rtol=RTOL, atol=ATOL
+        )
+
+
+def test_unet_prediction_matches_golden(golden, tmp_path):
+    """`unet_prediction` maps must be numerically unchanged and in [0, 1]."""
+    torch.save(golden["state_unet3d"], tmp_path / "best_checkpoint.pytorch")
+    (tmp_path / "config_train.yml").write_text(MODEL_CONFIG)
+    patch = tuple(golden["patch"].tolist())
+    halo = tuple(golden["halo"].tolist())
+
+    pmaps = unet_prediction(
+        raw=golden["raw_3d"].numpy(),
+        input_layout="ZYX",
+        model_name=None,
+        model_id=None,
+        patch=patch,
+        patch_halo=halo,
+        config_path=tmp_path / "config_train.yml",
+        model_weights_path=tmp_path / "best_checkpoint.pytorch",
+        device="cpu",
+        disable_tqdm=True,
+    )
+
+    assert pmaps.dtype == np.float32
+    assert pmaps.min() >= 0 and pmaps.max() <= 1
+    np.testing.assert_allclose(
+        pmaps, golden["gold_infer_3d"].numpy(), rtol=RTOL, atol=ATOL
+    )
+
+
+def test_embedding_path_matches_golden(golden):
+    """The embedding path must keep today's numbers.
+
+    The `is_embedding` branch historically consumes the model's *activated*
+    output (Softmax for sparse models) rather than raw embeddings; whether that
+    is the right semantics is undecided (KRiedmiller/panseg#5). Until that is
+    settled the branch must produce exactly the values it produces today.
+    """
+    patch = tuple(golden["patch"].tolist())
+    halo = tuple(golden["halo"].tolist())
+    raw = golden["raw_3d"].numpy()
+    model = make_3d(False, out_channels=2)
+    model.load_state_dict(golden["state_unet3d_softmax"])
+
+    dataset = make_dataset(raw, patch=patch, halo=halo)
+    predictor = ArrayPredictor(
+        model=model,
+        in_channels=1,
+        out_channels=1,
+        device="cpu",
+        patch=patch,
+        patch_halo=halo,
+        single_batch_mode=True,
+        headless=False,
+        is_embedding=True,
+        disable_tqdm=True,
+    )
+    embeddings = predictor(dataset)
+
+    np.testing.assert_allclose(
+        embeddings, golden["gold_embed_3d"].numpy(), rtol=RTOL, atol=ATOL
+    )
