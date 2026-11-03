@@ -175,10 +175,12 @@ class UNetTrainer:
                         "Loss/train", train_losses.avg, self.num_iterations
                     )
 
-                if self.should_stop():
-                    return True
-
             self.num_iterations += 1
+
+            # evaluated every iteration (not just at the logging cadence), so
+            # max_num_iterations is not overrun by up to an epoch
+            if self.should_stop():
+                return True
 
         return False
 
