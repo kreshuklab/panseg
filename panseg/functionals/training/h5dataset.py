@@ -247,8 +247,17 @@ class HDF5Dataset(Dataset):
                     f"2D training on volumetric data in {file_path}: "
                     "training per z-slice."
                 )
-            self.raw = _apply_layout(raw_ds[:], raw_layout, ensure_channel=True)
-            stats = calculate_stats(self.raw, global_normalization)
+            # keep the raw volume float32 end-to-end: the augmenter works in
+            # float32 and the old uint16 -> float64 -> float32 churn cost two
+            # extra full copies per patch. The statistics are computed from the
+            # on-disk values (before the cast) and stored as float32.
+            raw_values = raw_ds[:]
+            stats = calculate_stats(raw_values, global_normalization)
+            self.raw = _apply_layout(
+                raw_values.astype(np.float32, copy=False),
+                raw_layout,
+                ensure_channel=True,
+            )
             self.augmenter = augmenter
             self.raw_transform = self.augmenter.raw_transform(stats)
 
@@ -326,18 +335,67 @@ class HDF5Dataset(Dataset):
         )
 
 
+_HISTOGRAM_MAX_RANGE = 2**20
+"""Largest value range the histogram percentile path handles (1M bins max)."""
+
+
+def _percentiles(flat: np.ndarray, qs: tuple[float, ...]) -> np.ndarray:
+    """Percentiles of `flat` at `qs` (percent units), numpy's 'linear' method.
+
+    Integer data with a bounded value range gets an exact O(n) histogram pass
+    (a single count scan plus a tiny cumulative histogram; no partition and no
+    copy of the data). Everything else falls back to one combined
+    `np.percentile` call, i.e. a single partition for all quantiles instead of
+    one per quantile.
+    """
+    if np.issubdtype(flat.dtype, np.integer) and flat.size > 0:
+        lo = int(flat.min())
+        hi = int(flat.max())
+        if hi - lo <= _HISTOGRAM_MAX_RANGE:
+            counts = np.bincount(flat - lo, minlength=hi - lo + 1)
+            cum = np.cumsum(counts)  # cum[i] == #{elements <= lo + i}
+            n = flat.size
+            result = np.empty(len(qs), dtype=np.float64)
+            for i, q in enumerate(qs):
+                # numpy's 'linear' method: virtual index q/100 * (n - 1),
+                # interpolated between the neighboring order statistics
+                virtual = (q / 100.0) * (n - 1)
+                k = int(np.floor(virtual))
+                gamma = virtual - k
+                a = lo + int(np.searchsorted(cum, k + 1))
+                b = lo + min(int(np.searchsorted(cum, k + 2)), hi - lo)
+                # same two branches as numpy's _lerp (exactness)
+                if gamma >= 0.5:
+                    result[i] = b - (b - a) * (1 - gamma)
+                else:
+                    result[i] = a + (b - a) * gamma
+            return result
+    return np.percentile(flat, qs)
+
+
 def calculate_stats(images, global_normalization=True):
     """
-    Calculates min, max, mean, std given a list of nd-arrays
+    Calculates min, max, mean, std given a list of nd-arrays (or a single one).
+
+    The percentiles are computed in one pass over the flattened data (no
+    materialized concatenation copy, no per-quantile sort -- see `_percentiles`)
+    and the moments accumulate in float64. The results are stored as float32:
+    that is the precision the raw patches are kept in, and the stats must match
+    them without up-casting the transform pipeline.
     """
     if global_normalization:
-        # flatten first since the images might not be the same size
-        flat = np.concatenate([img.ravel() for img in images])
+        if isinstance(images, np.ndarray):
+            flat = images.reshape(-1)  # a view; no concatenated copy
+        else:
+            flat = np.concatenate([img.reshape(-1) for img in images])
+        pmin, pmax = _percentiles(flat, (1, 99.6))
+        mean = flat.mean(dtype=np.float64)
+        std = flat.std(dtype=np.float64)
         pmin, pmax, mean, std = (
-            np.percentile(flat, 1),
-            np.percentile(flat, 99.6),
-            np.mean(flat),
-            np.std(flat),
+            np.float32(pmin),
+            np.float32(pmax),
+            np.float32(mean),
+            np.float32(std),
         )
     else:
         pmin, pmax, mean, std = None, None, None, None

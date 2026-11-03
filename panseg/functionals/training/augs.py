@@ -397,6 +397,12 @@ class Standardize:
                 mean = np.mean(m)
                 std = np.std(m)
 
+        if np.issubdtype(np.asarray(m).dtype, np.floating):
+            # keep floating inputs in their own precision: float64 stats would
+            # otherwise up-cast float32 patches (an extra full copy per patch)
+            mean = np.asarray(mean, dtype=np.asarray(m).dtype)
+            std = np.asarray(std, dtype=np.asarray(m).dtype)
+
         return (m - mean) / np.clip(std, a_min=self.eps, a_max=None)
 
 
@@ -448,6 +454,10 @@ class AdditiveGaussianNoise:
         if self.random_state.uniform() < self.execution_probability:
             std = self.random_state.uniform(self.scale[0], self.scale[1])
             gaussian_noise = self.random_state.normal(0, std, size=m.shape)
+            if np.issubdtype(np.asarray(m).dtype, np.floating):
+                # keep floating patches in their own precision: the float64
+                # noise would otherwise up-cast float32 data
+                gaussian_noise = gaussian_noise.astype(m.dtype, copy=False)
             return m + gaussian_noise
         return m
 
@@ -464,6 +474,10 @@ class AdditivePoissonNoise:
         if self.random_state.uniform() < self.execution_probability:
             lam = self.random_state.uniform(self.lam[0], self.lam[1])
             poisson_noise = self.random_state.poisson(lam, size=m.shape)
+            if np.issubdtype(np.asarray(m).dtype, np.floating):
+                # keep floating patches in their own precision: the int noise
+                # would otherwise up-cast float32 data to float64
+                poisson_noise = poisson_noise.astype(m.dtype, copy=False)
             return m + poisson_noise
         return m
 
@@ -487,7 +501,9 @@ class ToTensor:
         if self.expand_dims and m.ndim == 3:
             m = np.expand_dims(m, axis=0)
 
-        return torch.from_numpy(m.astype(dtype=self.dtype))
+        # no copy when the array is already a contiguous target-dtype array;
+        # torch.from_numpy cannot take negative strides (from np.flip/np.rot90)
+        return torch.from_numpy(np.ascontiguousarray(m, dtype=self.dtype))
 
 
 class Relabel:
