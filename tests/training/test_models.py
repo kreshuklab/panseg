@@ -12,6 +12,20 @@ from panseg.functionals.training.model import (
 from tests.conftest import IS_CUDA_AVAILABLE
 
 
+def _forward_with_final_conv_output(model, x) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return ``(forward output, output of the final 1x1 conv)`` for `x`."""
+    captured: dict[str, torch.Tensor] = {}
+    handle = model.final_conv.register_forward_hook(
+        lambda module, inputs, output: captured.setdefault("logits", output)
+    )
+    try:
+        with torch.no_grad():
+            y = model(x)
+    finally:
+        handle.remove()
+    return y, captured["logits"]
+
+
 @pytest.mark.skipif(not IS_CUDA_AVAILABLE, reason="Cuda is not available")
 class TestModelPrediction:
     def test_UNet2D(self):
@@ -19,10 +33,11 @@ class TestModelPrediction:
         model = UNet2D(in_channels=3, out_channels=1)
         model.eval()
         x = torch.randn(4, 3, 260, 260)
-        y = model(x)
+        y, logits = _forward_with_final_conv_output(model, x)
         assert y.shape == (4, 1, 260, 260)
-        # forward() returns logits in every mode; the activation is explicit
-        assert (y < 0).any() or (y > 1).any()
+        # forward() returns the final conv's logits unchanged in eval mode too:
+        # nothing (in particular no activation) is applied after it
+        assert torch.equal(y, logits)
 
     def test_SpocoNet(self):
         model = SpocoNet.from_unet_params(
