@@ -20,7 +20,7 @@ from panseg.functionals.prediction.utils.size_finder import (
     probe_max_patch_shape,
     will_CUDA_OOM,
 )
-from tests.functionals.prediction.conftest import (
+from tests.functionals.prediction.helpers import (
     requires_cuda,
     tiny_2d_model,
     tiny_3d_model,

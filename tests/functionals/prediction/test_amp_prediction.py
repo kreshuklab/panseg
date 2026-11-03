@@ -18,7 +18,7 @@ from panseg.functionals.prediction import prediction as prediction_module
 from panseg.functionals.prediction import unet_prediction
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
 from panseg.functionals.training.model import UNet3D
-from tests.functionals.prediction.conftest import (
+from tests.functionals.prediction.helpers import (
     MODEL_CONFIG,
     make_dataset,
     raw_volume,

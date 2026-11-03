@@ -21,7 +21,7 @@ import torch
 from panseg.functionals.prediction import unet_prediction
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
 from panseg.functionals.training.model import UNet2D, UNet3D, UNet3DProbabilities
-from tests.functionals.prediction.conftest import MODEL_CONFIG, make_dataset
+from tests.functionals.prediction.helpers import MODEL_CONFIG, make_dataset
 
 GOLDEN_PATH = (
     Path(__file__).resolve().parents[2] / "resources" / "output_contract_golden.pt"
