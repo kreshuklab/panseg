@@ -127,9 +127,7 @@ class TestOutputContract:
         rename them and break `PytorchStateDictWeightsDescr` loading).
         """
         torch.manual_seed(0)
-        kwargs = dict(
-            in_channels=3, out_channels=1, final_sigmoid=True, f_maps=(8, 16)
-        )
+        kwargs = dict(in_channels=3, out_channels=1, final_sigmoid=True, f_maps=(8, 16))
         base = base_cls(**kwargs)
         probabilities = probabilities_cls(**kwargs)
 
