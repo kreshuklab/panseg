@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Self
+from typing import Callable, Self
 
 import torch
 import torch.nn as nn
@@ -602,6 +602,17 @@ class AbstractUNet(nn.Module):
         """
         return self.activate(self(x))
 
+    def output_activation(self) -> Callable[[torch.Tensor], torch.Tensor]:
+        """The activation a consumer must apply to `forward`'s output.
+
+        `forward` returns logits, so consumers that call `forward` and need
+        probabilities (e.g. `ArrayPredictor`, which keeps control of the
+        forward pass for `torch.compile`) apply this. The identity for models
+        whose `forward` is already activated (`UNet*Probabilities`), which makes
+        a double activation impossible by construction.
+        """
+        return self.activate
+
 
 class UNet3D(AbstractUNet):
     """
@@ -670,13 +681,18 @@ class UNet2D(AbstractUNet):
         )
 
 
-class UNet3DProbabilities(UNet3D):
-    """`UNet3D` whose `forward` returns probabilities instead of logits.
+class ProbabilitiesForward:
+    """Mixin for `AbstractUNet` subclasses whose `forward` returns probabilities.
 
     Export-only variant for BioImage.IO: published models must emit normalized
     probabilities when called through `bioimageio.core`, which just calls
-    `forward`. State-dict compatible with `UNet3D` — no new parameters or
-    buffers — so trained weights load unchanged.
+    `forward`. State-dict compatible with the base architecture — no new
+    parameters or buffers — so trained weights load unchanged.
+
+    The mixin owns the whole activation contract, so the subclasses cannot
+    diverge: `forward` activates, `predict` therefore does not activate again,
+    and `output_activation` is the identity so consumers that activate after
+    `forward` (e.g. `ArrayPredictor`) never double-activate either.
     """
 
     def forward(self, x):
@@ -686,19 +702,22 @@ class UNet3DProbabilities(UNet3D):
         # forward() already returns probabilities; never activate twice
         return self(x)
 
+    def output_activation(self) -> Callable[[torch.Tensor], torch.Tensor]:
+        return nn.Identity()
 
-class UNet2DProbabilities(UNet2D):
+
+class UNet3DProbabilities(ProbabilitiesForward, UNet3D):
+    """`UNet3D` whose `forward` returns probabilities instead of logits.
+
+    See `ProbabilitiesForward`.
+    """
+
+
+class UNet2DProbabilities(ProbabilitiesForward, UNet2D):
     """`UNet2D` whose `forward` returns probabilities instead of logits.
 
-    See `UNet3DProbabilities`.
+    See `ProbabilitiesForward`.
     """
-
-    def forward(self, x):
-        return self.activate(super().forward(x))
-
-    def predict(self, x):
-        # forward() already returns probabilities; never activate twice
-        return self(x)
 
 
 class SpocoNet(nn.Module):

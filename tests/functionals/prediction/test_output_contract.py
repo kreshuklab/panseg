@@ -204,3 +204,47 @@ def test_export_subclass_matches_golden_probabilities(golden):
     np.testing.assert_allclose(
         pred.numpy(), golden["gold_probs_3d"].numpy(), rtol=RTOL, atol=ATOL
     )
+
+
+def test_array_predictor_does_not_double_activate(golden):
+    """Feeding the export class to `ArrayPredictor` must not activate twice
+    (sigmoid(sigmoid(x)) collapses the probabilities to ~0.5).
+
+    The predictor applies the model's output activation after `forward`; the
+    export classes' `forward` is already activated, so their activation entry is
+    the identity. Both models carry the same weights, so both must produce the
+    same probability map.
+    """
+    patch = tuple(golden["patch"].tolist())
+    halo = tuple(golden["halo"].tolist())
+    raw = golden["raw_3d"].numpy()
+
+    def predict(model) -> np.ndarray:
+        model.load_state_dict(golden["state_unet3d"])
+        return ArrayPredictor(
+            model=model,
+            in_channels=1,
+            out_channels=1,
+            device="cpu",
+            patch=patch,
+            patch_halo=halo,
+            single_batch_mode=True,
+            headless=False,
+            disable_tqdm=True,
+        )(make_dataset(raw, patch=patch, halo=halo))
+
+    base_output = predict(make_3d(True))
+    export_output = predict(
+        UNet3DProbabilities(
+            in_channels=1,
+            out_channels=1,
+            final_sigmoid=True,
+            f_maps=[8, 16],
+            num_groups=4,
+            layer_order="gcr",
+        )
+    )
+
+    np.testing.assert_allclose(export_output, base_output, rtol=RTOL, atol=ATOL)
+    # a double sigmoid would pull every value towards 0.5
+    assert not np.allclose(base_output, 0.5, atol=0.1)
