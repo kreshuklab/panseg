@@ -858,6 +858,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#training-data-layouts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Training data layouts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#train-from-gui" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1641,6 +1652,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#training-data-layouts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Training data layouts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#train-from-gui" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1699,7 +1721,7 @@ high-quality data, and run it on the whole dataset.</p>
 <p>For training from an dataset stored on disk, create the directories <code>train</code> and <code>val</code>.
 Your training images must be stored as <code>h5</code> files in these directories.
 The <code>h5</code> files must contain the input image under the <code>raw</code> key, and the
-segmentation under the <code>label</code> key.</p>
+segmentation under the <code>label</code> key. The label must be channel-less.</p>
 <div class="highlight"><pre><span></span><code>mydataset/
 ├── train/
 │   ├── first.h5
@@ -1708,10 +1730,62 @@ segmentation under the <code>label</code> key.</p>
     ├── val_one.h5
     └── val_two.h5 
 </code></pre></div>
+<h2 id="training-data-layouts">Training data layouts<a class="headerlink" href="#training-data-layouts" title="Permanent link">&para;</a></h2>
+<p>Each <code>h5</code> file may hold 2D or 3D data; which models can be trained depends on
+the layout of the <code>raw</code>/<code>label</code> pair:</p>
+<table>
+<thead>
+<tr>
+<th><code>raw</code></th>
+<th><code>label</code></th>
+<th><code>2D</code> model</th>
+<th><code>3D</code> model</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>yx</code> (2D)</td>
+<td><code>yx</code> (2D)</td>
+<td>✓</td>
+<td>–</td>
+</tr>
+<tr>
+<td><code>cyx</code> (2D)</td>
+<td><code>yx</code> (2D)</td>
+<td>✓</td>
+<td>–</td>
+</tr>
+<tr>
+<td><code>zyx</code> (3D)</td>
+<td><code>zyx</code> (3D)</td>
+<td>✓, per z-slice</td>
+<td>✓</td>
+</tr>
+<tr>
+<td><code>czyx</code> (3D)</td>
+<td><code>zyx</code> (3D)</td>
+<td>✓, per z-slice</td>
+<td>✓</td>
+</tr>
+</tbody>
+</table>
+<p>Any other combination is rejected with a clear error. The label must always be
+channel-less.</p>
+<p>PanSeg resolves the layout of each dataset from its <code>axis_order</code> attribute when
+present (PanSeg's own <code>h5</code> exports carry it); otherwise it is inferred from the
+shapes of the <code>raw</code>/<code>label</code> pair as listed in the table. See
+<a href="../../panseg_models/training/">Advanced Training</a> for the details.</p>
+<p>When training a <code>2D</code> model on <code>zyx</code>/<code>czyx</code> data, every z-slice is an independent
+2D sample. The patch z-extent must then be <code>1</code> (the z-stride
+follows automatically).</p>
 <h2 id="train-from-gui">Train from GUI<a class="headerlink" href="#train-from-gui" title="Permanent link">&para;</a></h2>
 <p>To train from images loaded in the GUI, you need a layer containing the input
 image and one containing the segmentation. Make sure the quality of the
 segmentation is as good as possible by using the proofreading tool.</p>
+<p>For 2D (<code>yx</code>/<code>cyx</code>) data only <code>2D</code> training is possible. For volumetric
+(<code>zyx</code>/<code>czyx</code>) data, the model settings offer a <code>2D</code>/<code>3D</code> choice (default <code>3D</code>):
+<code>2D</code> trains a 2D model per z-slice as described above and freezes the patch size
+in z to <code>1</code>.</p>
 <h2 id="widgets">Widgets<a class="headerlink" href="#widgets" title="Permanent link">&para;</a></h2>
 <p>
         
@@ -1781,7 +1855,7 @@ will be stopped. Stops earlier if the accuracy converges.</li>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date">December 15, 2025</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date">October 30, 2026</span>
   </span>
 
     

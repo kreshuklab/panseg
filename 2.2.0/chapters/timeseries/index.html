@@ -1561,6 +1561,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#from-multiple-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        From multiple files
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#limitations" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1599,16 +1610,38 @@
 
 <h1 id="time-series">Time Series<a class="headerlink" href="#time-series" title="Permanent link">&para;</a></h1>
 <p>PanSeg imports, processes, and exports time series data.
-In the current version Panseg does not take any advantage of the time data,
+In the current version PanSeg does not take any advantage of the time data,
 it only processes the data frame-by-frame. Tracking and other processing
-across timepoints will be added in a future version.</p>
+across time points will be added in a future version.</p>
 <h2 id="supported-layouts-and-formats">Supported layouts and formats<a class="headerlink" href="#supported-layouts-and-formats" title="Permanent link">&para;</a></h2>
 <p>The time series layouts are TYX (2D), TZYX (3D), and their multichannel versions
 TCYX and TCZYX.</p>
 <p>Import supports OME-TIFF, h5, and zarr.
 For OME-TIFF, the input tab prefills the stack layout from
 the file's OME-XML, and it reads the time spacing from the timing metadata
-(<code>TimeIncrement</code> or <code>Plane.DeltaT</code>) if the file carries it.</p>
+(<code>TimeIncrement</code> or <code>Plane.DeltaT</code>) if the file carries it.
+OME-ZARR support is planned (#622)</p>
+<h2 id="from-multiple-files">From multiple files<a class="headerlink" href="#from-multiple-files" title="Permanent link">&para;</a></h2>
+<p>A time series can also come from a set of independent files, one image per
+timepoint. Select several files in the Open File dialog and they stack into
+one series in alphanumeric filename order. Each file must be a single image
+(no time axis of its own), and the stack layout must be spatial; the import
+adds the T axis itself. Multi-channel files stack per channel, with equal
+channel counts across files.</p>
+<p>The spacing between the files is unknown at import. Set it in the input
+tab's Details field once you know the acquisition interval; export then
+writes it like any other time spacing.</p>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>A multifile OME-TIFF series is a different thing: one logical image
+whose planes are chained across files through the OME-XML (UUID and
+FileName references), or whose metadata lives in a <code>.companion.ome</code>
+file. It looks identical to a set of independent images in a file
+dialog. PanSeg rejects it. The reader would silently fill missing
+planes with zeros when only part of the set is present, and the plane
+order comes from the XML, not from the filenames, so filename order
+would scramble the series anyway.</p>
+</div>
 <p>Export writes the time axis back out. Tiff export of a time series is always
 OME-TIFF, named with the <code>.ome.tiff</code> extension per the OME-TIFF naming
 convention, with <code>TimeIncrement</code> when the spacing is known. H5 and zarr export
@@ -1641,7 +1674,7 @@ carry the layout and the spacing with it.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date">October 7, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date">October 26, 2026</span>
   </span>
 
     

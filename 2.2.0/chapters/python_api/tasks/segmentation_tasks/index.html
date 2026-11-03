@@ -1854,6 +1854,8 @@
 <p>This function applies the distance transform watershed algorithm to segment the input image.
 It handles both standard boundary probability maps and nuclei images, with options for
 various preprocessing and segmentation parameters.</p>
+<p>On timeseries input the task runs per timepoint: label IDs are independent
+per timepoint, with no correspondence across timepoints.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2101,7 +2103,10 @@ image, and preprocessing is applied accordingly. Defaults to False.</p>
 <span class="normal">110</span>
 <span class="normal">111</span>
 <span class="normal">112</span>
-<span class="normal">113</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@task_tracker</span>
+<span class="normal">113</span>
+<span class="normal">114</span>
+<span class="normal">115</span>
+<span class="normal">116</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@task_tracker</span>
 <span class="nd">@timepoint_map</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">dt_watershed_task</span><span class="p">(</span>
     <span class="n">image</span><span class="p">:</span> <span class="n">PanSegImage</span><span class="p">,</span>
@@ -2123,6 +2128,9 @@ image, and preprocessing is applied accordingly. Defaults to False.</p>
 <span class="sd">    This function applies the distance transform watershed algorithm to segment the input image.</span>
 <span class="sd">    It handles both standard boundary probability maps and nuclei images, with options for</span>
 <span class="sd">    various preprocessing and segmentation parameters.</span>
+
+<span class="sd">    On timeseries input the task runs per timepoint: label IDs are independent</span>
+<span class="sd">    per timepoint, with no correspondence across timepoints.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        image (PanSegImage): The input image to segment.</span>
@@ -2216,6 +2224,8 @@ image, and preprocessing is applied accordingly. Defaults to False.</p>
     <div class="doc doc-contents first">
 
         <p>Agglomerative segmentation task.</p>
+<p>On timeseries input the task runs per timepoint: label IDs are independent
+per timepoint, with no correspondence across timepoints.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2273,10 +2283,7 @@ image, and preprocessing is applied accordingly. Defaults to False.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>panseg/tasks/segmentation_tasks.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">116</span>
-<span class="normal">117</span>
-<span class="normal">118</span>
-<span class="normal">119</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">119</span>
 <span class="normal">120</span>
 <span class="normal">121</span>
 <span class="normal">122</span>
@@ -2344,7 +2351,13 @@ image, and preprocessing is applied accordingly. Defaults to False.</p>
 <span class="normal">184</span>
 <span class="normal">185</span>
 <span class="normal">186</span>
-<span class="normal">187</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@task_tracker</span>
+<span class="normal">187</span>
+<span class="normal">188</span>
+<span class="normal">189</span>
+<span class="normal">190</span>
+<span class="normal">191</span>
+<span class="normal">192</span>
+<span class="normal">193</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@task_tracker</span>
 <span class="nd">@timepoint_map</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">clustering_segmentation_task</span><span class="p">(</span>
     <span class="n">image</span><span class="p">:</span> <span class="n">PanSegImage</span><span class="p">,</span>
@@ -2354,6 +2367,9 @@ image, and preprocessing is applied accordingly. Defaults to False.</p>
     <span class="n">post_min_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">100</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PanSegImage</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Agglomerative segmentation task.</span>
+
+<span class="sd">    On timeseries input the task runs per timepoint: label IDs are independent</span>
+<span class="sd">    per timepoint, with no correspondence across timepoints.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        image (PanSegImage): input image object</span>
@@ -2490,17 +2506,13 @@ over-segmentation. (default: 0.5)</p>
           </div>
         </li>
     </ul>
+        <p>On timeseries input the task runs per timepoint: label IDs are independent
+per timepoint, with no correspondence across timepoints.</p>
 
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>panseg/tasks/segmentation_tasks.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">190</span>
-<span class="normal">191</span>
-<span class="normal">192</span>
-<span class="normal">193</span>
-<span class="normal">194</span>
-<span class="normal">195</span>
-<span class="normal">196</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">196</span>
 <span class="normal">197</span>
 <span class="normal">198</span>
 <span class="normal">199</span>
@@ -2541,7 +2553,16 @@ over-segmentation. (default: 0.5)</p>
 <span class="normal">234</span>
 <span class="normal">235</span>
 <span class="normal">236</span>
-<span class="normal">237</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@task_tracker</span>
+<span class="normal">237</span>
+<span class="normal">238</span>
+<span class="normal">239</span>
+<span class="normal">240</span>
+<span class="normal">241</span>
+<span class="normal">242</span>
+<span class="normal">243</span>
+<span class="normal">244</span>
+<span class="normal">245</span>
+<span class="normal">246</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@task_tracker</span>
 <span class="nd">@timepoint_map</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">lmc_segmentation_task</span><span class="p">(</span>
     <span class="n">boundary_pmap</span><span class="p">:</span> <span class="n">PanSegImage</span><span class="p">,</span>
@@ -2564,6 +2585,9 @@ over-segmentation. (default: 0.5)</p>
 <span class="sd">            while a high-value bias the segmentation towards the</span>
 <span class="sd">            over-segmentation. (default: 0.5)</span>
 <span class="sd">        post_min_size (int): minimal size of the segments after Multicut. (default: 100)</span>
+
+<span class="sd">    On timeseries input the task runs per timepoint: label IDs are independent</span>
+<span class="sd">    per timepoint, with no correspondence across timepoints.</span>
 <span class="sd">    """</span>
     <span class="k">if</span> <span class="p">(</span>
         <span class="n">nuclei</span><span class="o">.</span><span class="n">semantic_type</span> <span class="ow">is</span> <span class="n">SemanticType</span><span class="o">.</span><span class="n">PREDICTION</span>

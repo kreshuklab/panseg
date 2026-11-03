@@ -819,6 +819,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#input-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input paths
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#widget-export-batch-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1608,6 +1619,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#input-paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input paths
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#widget-export-batch-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1661,6 +1683,36 @@ line using <code>panseg -e</code> .</p>
 <p class="admonition-title">Warning</p>
 <p>Some interactive steps can't be recorded into workflows, especially <strong>cropping</strong> and <strong>proofreading</strong></p>
 </div>
+<h2 id="input-paths">Input paths<a class="headerlink" href="#input-paths" title="Permanent link">&para;</a></h2>
+<p>The <code>input_path</code> of a workflow accepts four shapes:</p>
+<table>
+<thead>
+<tr>
+<th><code>input_path</code></th>
+<th>What runs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>a file</td>
+<td>one job, one image</td>
+</tr>
+<tr>
+<td>a directory of files</td>
+<td>one job per file</td>
+</tr>
+<tr>
+<td>a directory of subdirectories</td>
+<td>one job per subdirectory, each is a time series (alphanumeric filename order)</td>
+</tr>
+<tr>
+<td>a list of files</td>
+<td>one job, the files stacked as one time series</td>
+</tr>
+</tbody>
+</table>
+<p>If files and subdirectories are mixed in the same directory, the files
+are imported and the subdirectories are ignored.</p>
 <h2 id="widget-export-batch-workflow">Widget: Export Batch Workflow<a class="headerlink" href="#widget-export-batch-workflow" title="Permanent link">&para;</a></h2>
 <p>
         
@@ -1716,7 +1768,7 @@ line using <code>panseg -e</code> .</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date">December 15, 2025</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date">October 26, 2026</span>
   </span>
 
     

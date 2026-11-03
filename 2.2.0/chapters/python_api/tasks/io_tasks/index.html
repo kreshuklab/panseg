@@ -1787,7 +1787,7 @@
 
 
 <h3 id="panseg.tasks.io_tasks.import_image_task" class="doc doc-heading">
-            <code class="highlight language-python"><span class="n">panseg</span><span class="o">.</span><span class="n">tasks</span><span class="o">.</span><span class="n">io_tasks</span><span class="o">.</span><span class="n">import_image_task</span><span class="p">(</span><span class="n">input_path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span> <span class="n">semantic_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">stack_layout</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">image_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PanSegImage</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">PanSegImage</span><span class="p">]</span> <span class="o">|</span> <span class="n">Task_message</span></code>
+            <code class="highlight language-python"><span class="n">panseg</span><span class="o">.</span><span class="n">tasks</span><span class="o">.</span><span class="n">io_tasks</span><span class="o">.</span><span class="n">import_image_task</span><span class="p">(</span><span class="n">input_path</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">Path</span><span class="p">],</span> <span class="n">semantic_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">stack_layout</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">image_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PanSegImage</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">PanSegImage</span><span class="p">]</span> <span class="o">|</span> <span class="n">Task_message</span></code>
 
 <a href="#panseg.tasks.io_tasks.import_image_task" class="headerlink" title="Permanent link">&para;</a></h3>
 
@@ -1795,16 +1795,20 @@
     <div class="doc doc-contents first">
 
         <p>Task wrapper creating a PanSegImage object from an image file.</p>
+<p>A list of paths (multi-file import) is stacked as one time series, in
+alphanumeric filename order: each file is one timepoint and the stack
+layout applies spatially to every file.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
     <ul>
         <li class="doc-section-item field-body">
             <b><code>input_path</code></b>
-              (<code><span title="pathlib.Path">Path</span></code>)
+              (<code><span title="pathlib.Path">Path</span> | <span title="list">list</span>[<span title="pathlib.Path">Path</span>]</code>)
           –
           <div class="doc-md-description">
-            <p>path to the image file</p>
+            <p>path to the image file, or a
+selection of paths to stack as one time series</p>
           </div>
         </li>
         <li class="doc-section-item field-body">
@@ -1822,7 +1826,8 @@
           <div class="doc-md-description">
             <p>stack layout of the image
 (any of the letters tczyx), optionally followed by a slice to
-truncate before importing, e.g. "TYXC[:3,:,:,:]"</p>
+truncate before importing, e.g. "TYXC[:3,:,:,:]"
+Multi-file imports can not be sliced.</p>
           </div>
         </li>
         <li class="doc-section-item field-body">
@@ -1851,8 +1856,7 @@ same as the file name.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>panseg/tasks/io_tasks.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 9</span>
-<span class="normal">10</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">10</span>
 <span class="normal">11</span>
 <span class="normal">12</span>
 <span class="normal">13</span>
@@ -1892,19 +1896,42 @@ same as the file name.</p>
 <span class="normal">47</span>
 <span class="normal">48</span>
 <span class="normal">49</span>
-<span class="normal">50</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@task_tracker</span><span class="p">(</span>
+<span class="normal">50</span>
+<span class="normal">51</span>
+<span class="normal">52</span>
+<span class="normal">53</span>
+<span class="normal">54</span>
+<span class="normal">55</span>
+<span class="normal">56</span>
+<span class="normal">57</span>
+<span class="normal">58</span>
+<span class="normal">59</span>
+<span class="normal">60</span>
+<span class="normal">61</span>
+<span class="normal">62</span>
+<span class="normal">63</span>
+<span class="normal">64</span>
+<span class="normal">65</span>
+<span class="normal">66</span>
+<span class="normal">67</span>
+<span class="normal">68</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@task_tracker</span><span class="p">(</span>
     <span class="n">is_root</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
     <span class="n">stack_level</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
     <span class="n">list_inputs</span><span class="o">=</span><span class="p">{</span>
         <span class="s2">"input_path"</span><span class="p">:</span> <span class="n">RunTimeInputSchema</span><span class="p">(</span>
-            <span class="n">description</span><span class="o">=</span><span class="s2">"Path to a file, or a directory containing files (all files will be imported) or list of paths."</span><span class="p">,</span>
+            <span class="n">description</span><span class="o">=</span><span class="p">(</span>
+                <span class="s2">"Path to a file, a directory of files (one job per file), a "</span>
+                <span class="s2">"directory of subdirectories (one job per subdirectory, the "</span>
+                <span class="s2">"files stacked as one time series), or a list of paths "</span>
+                <span class="s2">"(stacked as one time series)."</span>
+            <span class="p">),</span>
             <span class="n">required</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
             <span class="n">is_input_file</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
         <span class="p">),</span>
     <span class="p">},</span>
 <span class="p">)</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">import_image_task</span><span class="p">(</span>
-    <span class="n">input_path</span><span class="p">:</span> <span class="n">Path</span><span class="p">,</span>
+    <span class="n">input_path</span><span class="p">:</span> <span class="n">Path</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">Path</span><span class="p">],</span>
     <span class="n">semantic_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">stack_layout</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">image_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
@@ -1913,19 +1940,31 @@ same as the file name.</p>
 <span class="w">    </span><span class="sd">"""</span>
 <span class="sd">    Task wrapper creating a PanSegImage object from an image file.</span>
 
+<span class="sd">    A list of paths (multi-file import) is stacked as one time series, in</span>
+<span class="sd">    alphanumeric filename order: each file is one timepoint and the stack</span>
+<span class="sd">    layout applies spatially to every file.</span>
+
 <span class="sd">    Args:</span>
-<span class="sd">        input_path (Path): path to the image file</span>
+<span class="sd">        input_path (Path | list[Path]): path to the image file, or a</span>
+<span class="sd">            selection of paths to stack as one time series</span>
 <span class="sd">        semantic_type (str): semantic type of the image (raw, segmentation, prediction)</span>
 <span class="sd">        stack_layout (str): stack layout of the image</span>
 <span class="sd">            (any of the letters tczyx), optionally followed by a slice to</span>
 <span class="sd">            truncate before importing, e.g. "TYXC[:3,:,:,:]"</span>
+<span class="sd">            Multi-file imports can not be sliced.</span>
 <span class="sd">        image_name (str): name of the image, if None the name will be the</span>
 <span class="sd">            same as the file name.</span>
 <span class="sd">        key (str | None): key for the image (used only for h5 and zarr formats)</span>
 <span class="sd">    """</span>
 
     <span class="k">if</span> <span class="n">image_name</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">image_name</span> <span class="o">=</span> <span class="n">input_path</span><span class="o">.</span><span class="n">stem</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">input_path</span><span class="p">,</span> <span class="n">Path</span><span class="p">):</span>
+            <span class="n">image_name</span> <span class="o">=</span> <span class="n">input_path</span><span class="o">.</span><span class="n">stem</span>
+        <span class="k">elif</span> <span class="n">input_path</span><span class="p">:</span>
+            <span class="n">image_name</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">input_path</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="n">natural_sort_key</span><span class="p">)</span><span class="o">.</span><span class="n">stem</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># a placeholder name: import_image rejects the empty selection</span>
+            <span class="n">image_name</span> <span class="o">=</span> <span class="s2">"image"</span>
 
     <span class="k">return</span> <span class="n">import_image</span><span class="p">(</span>
         <span class="n">path</span><span class="o">=</span><span class="n">input_path</span><span class="p">,</span>
@@ -2029,25 +2068,7 @@ to be replaced in the final file name.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>panseg/tasks/io_tasks.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 53</span>
-<span class="normal"> 54</span>
-<span class="normal"> 55</span>
-<span class="normal"> 56</span>
-<span class="normal"> 57</span>
-<span class="normal"> 58</span>
-<span class="normal"> 59</span>
-<span class="normal"> 60</span>
-<span class="normal"> 61</span>
-<span class="normal"> 62</span>
-<span class="normal"> 63</span>
-<span class="normal"> 64</span>
-<span class="normal"> 65</span>
-<span class="normal"> 66</span>
-<span class="normal"> 67</span>
-<span class="normal"> 68</span>
-<span class="normal"> 69</span>
-<span class="normal"> 70</span>
-<span class="normal"> 71</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 71</span>
 <span class="normal"> 72</span>
 <span class="normal"> 73</span>
 <span class="normal"> 74</span>
@@ -2081,7 +2102,25 @@ to be replaced in the final file name.</p>
 <span class="normal">102</span>
 <span class="normal">103</span>
 <span class="normal">104</span>
-<span class="normal">105</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@task_tracker</span><span class="p">(</span>
+<span class="normal">105</span>
+<span class="normal">106</span>
+<span class="normal">107</span>
+<span class="normal">108</span>
+<span class="normal">109</span>
+<span class="normal">110</span>
+<span class="normal">111</span>
+<span class="normal">112</span>
+<span class="normal">113</span>
+<span class="normal">114</span>
+<span class="normal">115</span>
+<span class="normal">116</span>
+<span class="normal">117</span>
+<span class="normal">118</span>
+<span class="normal">119</span>
+<span class="normal">120</span>
+<span class="normal">121</span>
+<span class="normal">122</span>
+<span class="normal">123</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@task_tracker</span><span class="p">(</span>
     <span class="n">is_leaf</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
     <span class="n">stack_level</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
     <span class="n">list_inputs</span><span class="o">=</span><span class="p">{</span>
