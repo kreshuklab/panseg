@@ -102,7 +102,14 @@ def create_model_config(
     pre_trained: Optional[Path] = None,
     val_stride_shape: Optional[tuple[int, int, int]] = None,
 ):
-    """Write training config to yaml file."""
+    """Write training config to yaml file.
+
+    The written ``config_train.yml`` is the record of the run's setup. Its
+    ``loaders.val.slice_builder.stride_shape`` records the *effective* validation
+    stride (``val_stride_shape``, or the patch shape when validation runs on the
+    non-overlapping default grid); `launch_training` reads it back when such a
+    file is used as a training config.
+    """
 
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     with open(PATH_TRAIN_TEMPLATE, "r") as f:
@@ -219,11 +226,15 @@ def unet_training(
         documentation: markdown text packaged as the model's README
             documentation.
         val_slice_builder: optional slice-builder section for the validation
-            loader (mirrors ``loaders.val.slice_builder`` of the training
-            YAML). Its ``stride_shape`` sets the val patch stride; when the
-            section is absent (or has no ``stride_shape``), validation patches
-            are extracted non-overlapping. Validation patches are never
-            threshold-filtered: the val loss covers the whole volume.
+            loader (mirrors ``loaders.val.slice_builder`` of the
+            ``config_train.yml`` record). Its ``stride_shape`` sets the val
+            patch stride; when the section is absent (or has no
+            ``stride_shape``), validation patches are extracted non-overlapping.
+            Validation patches are never threshold-filtered: the val loss covers
+            the whole volume. A training YAML may configure the same stride under
+            ``loaders.val.slice_builder.stride_shape`` (that is the spelling of
+            the written record); `panseg --train` translates it to this
+            argument, and rejects configuring both.
         amp: training precision mode: ``"auto"`` runs bf16 autocast on CUDA
             devices with bf16 support (loss reductions, weights, checkpoints,
             and exported tensors stay fp32) and silently falls back to fp32

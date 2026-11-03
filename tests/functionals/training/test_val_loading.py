@@ -266,6 +266,106 @@ class TestUnetTrainingValSliceBuilder:
         assert "stride_shape" not in train_call.kwargs
 
 
+class TestLaunchTrainingValStride:
+    """A YAML's `loaders.val.slice_builder.stride_shape` reaches the real grid.
+
+    End to end through the CLI entry point: a tiny CPU training run on a real
+    H5 dataset, with the actual `create_datasets` call observed.
+    """
+
+    VOLUME = 64
+
+    @classmethod
+    def _write_dataset(cls, root: Path) -> Path:
+        rng = np.random.default_rng(0)
+        shape = (cls.VOLUME,) * 3
+        raw = rng.integers(0, 256, shape)
+        label = np.zeros(shape, dtype="uint8")
+        label[8:56, 8:56, 8:56] = 1
+        data_dir = root / "data"
+        _write_h5(data_dir / "train" / "vol.h5", raw, label)
+        _write_h5(data_dir / "val" / "vol.h5", raw, label)
+        return data_dir
+
+    def _run(self, tmp_path, monkeypatch, **config_extra) -> list[int]:
+        from panseg.functionals.training import train as train_module
+        from panseg.run_panseg import main
+
+        data_dir = self._write_dataset(tmp_path)
+        config = {
+            "dataset_dir": str(data_dir),
+            "model_name": "test_launch_val_stride",
+            "in_channels": 1,
+            "out_channels": 1,
+            "feature_maps": [2, 2],
+            "patch_size": [16, self.VOLUME, self.VOLUME],
+            "max_num_iters": 2,
+            "dimensionality": "3D",
+            "sparse": True,
+            "device": "cpu",
+            **config_extra,
+        }
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(yaml.safe_dump(config))
+
+        real_create_datasets = train_module.create_datasets
+        patch_counts: list[int] = []
+
+        def spy(*args, **kwargs):
+            datasets = real_create_datasets(*args, **kwargs)
+            patch_counts.append(sum(len(dataset) for dataset in datasets))
+            return datasets
+
+        monkeypatch.setattr(train_module, "create_datasets", spy)
+        monkeypatch.setattr(train_module, "PATH_PANSEG_MODELS", tmp_path)
+        monkeypatch.setattr(train_module, "test_model", MagicMock())
+        monkeypatch.setattr(train_module, "make_model_description", MagicMock())
+        monkeypatch.setattr("panseg.run_panseg.check_version", MagicMock())
+        monkeypatch.setattr(
+            model_zoo,
+            "path_zoo",
+            tmp_path / "models_zoo.yaml",
+        )
+        monkeypatch.setattr(
+            model_zoo,
+            "path_zoo_custom",
+            tmp_path / "custom_zoo.yaml",
+        )
+
+        monkeypatch.setattr("sys.argv", ["panseg", "--train", str(config_path)])
+        main()
+
+        # train grid first, val grid second (see `unet_training`)
+        assert len(patch_counts) == 2
+        return patch_counts
+
+    def test_configured_val_stride_changes_the_val_grid(self, tmp_path, monkeypatch):
+        patch_counts = self._run(
+            tmp_path,
+            monkeypatch,
+            loaders={
+                "val": {
+                    "slice_builder": {
+                        "name": "SliceBuilder",
+                        "patch_shape": [16, self.VOLUME, self.VOLUME],
+                        # half the patch on y/x, half on z: 7 patches instead of 4
+                        "stride_shape": [8, self.VOLUME // 2, self.VOLUME // 2],
+                    }
+                }
+            },
+        )
+
+        assert patch_counts[1] == 7
+
+    def test_omitted_val_stride_runs_the_non_overlapping_grid(
+        self, tmp_path, monkeypatch
+    ):
+        patch_counts = self._run(tmp_path, monkeypatch)
+
+        # 64 / 16 == 4 non-overlapping z patches
+        assert patch_counts[1] == 4
+
+
 class TestModelConfigValStride:
     """The written training YAML records the *effective* val stride."""
 
@@ -315,3 +415,39 @@ class TestModelConfigValStride:
             32,
             32,
         )
+
+    @pytest.mark.parametrize("val_stride_shape", [None, (4, 32, 32)])
+    def test_written_config_round_trips_as_a_training_config(
+        self, tmp_path, val_stride_shape
+    ):
+        """The record written into `config_train.yml` is a valid input config.
+
+        `launch_training` reads `loaders.val.slice_builder.stride_shape` back, so
+        the written record reproduces the run's validation grid instead of being
+        dead config.
+        """
+        from panseg.functionals.training.train import create_model_config
+        from panseg.run_panseg import _translate_loaders
+
+        create_model_config(
+            tmp_path / "ckpt",
+            1,
+            1,
+            (8, 64, 64),
+            "3D",
+            "bcr",
+            False,
+            16,
+            100,
+            val_stride_shape=val_stride_shape,
+        )
+
+        with open(tmp_path / "ckpt" / "config_train.yml") as f:
+            config = yaml.load(f, Loader=yaml.FullLoader)
+        config["patch_size"] = [8, 64, 64]
+
+        _translate_loaders(config, tmp_path / "config_train.yml")
+
+        assert "loaders" not in config
+        expected = list(val_stride_shape or (8, 64, 64))
+        assert config["val_slice_builder"]["stride_shape"] == expected

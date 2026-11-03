@@ -94,6 +94,74 @@ def launch_workflow_headless(path: Path):
     run_headless_workflow(path=path)
 
 
+def _translate_loaders(config: dict, path: Path) -> None:
+    """Fold the YAML `loaders` section into `unet_training` arguments.
+
+    `loaders` is the section `create_model_config` writes into every
+    checkpoint's ``config_train.yml``: the written record of the effective
+    loader setup. It is not an argument of `unet_training` (the loaders are
+    derived from ``patch_size``/``device``), so a config that carries it — e.g. a
+    model's own ``config_train.yml`` used as a starting point — must not be
+    rejected as having unknown keys.
+
+    Exactly one knob in that section has a live counterpart: the validation
+    patch grid's ``stride_shape``, which maps to the ``val_slice_builder``
+    argument. The rest of the section is a record; the keys of the val slice
+    builder that would silently do nothing (a filter ``name`` or a
+    ``threshold``: val patches are never filtered) are rejected instead, as is a
+    val ``patch_shape`` that differs from ``patch_size`` (the val loader is
+    always built from the training patch size).
+    """
+    loaders = config.pop("loaders", None)
+    if loaders is None:
+        return
+    if not isinstance(loaders, dict):
+        raise ValueError(f"`loaders` must be a mapping in training config {path}.")
+
+    val = loaders.get("val") or {}
+    slice_builder = (val if isinstance(val, dict) else {}).get("slice_builder") or {}
+    if not isinstance(slice_builder, dict):
+        raise ValueError(
+            f"`loaders.val.slice_builder` must be a mapping in training config {path}."
+        )
+
+    unknown = sorted(set(slice_builder) - {"name", "patch_shape", "stride_shape"})
+    if unknown:
+        raise ValueError(
+            f"Unsupported keys in `loaders.val.slice_builder` of {path}: {unknown}. "
+            "Validation patches are built unfiltered on the training patch shape, "
+            "so only `stride_shape` is configurable there."
+        )
+    name = slice_builder.get("name", "SliceBuilder")
+    if name != "SliceBuilder":
+        raise ValueError(
+            f"`loaders.val.slice_builder.name` must be 'SliceBuilder' in {path}, "
+            f"got {name!r}: validation patches are never threshold-filtered."
+        )
+    patch_shape = config.get("patch_size")
+    configured_patch_shape = slice_builder.get("patch_shape")
+    if (
+        patch_shape is not None
+        and configured_patch_shape is not None
+        and list(configured_patch_shape) != list(patch_shape)
+    ):
+        raise ValueError(
+            f"`loaders.val.slice_builder.patch_shape` ({configured_patch_shape}) must "
+            f"match `patch_size` ({patch_shape}) in {path}: the validation loader is "
+            "built from the training patch size."
+        )
+
+    stride_shape = slice_builder.get("stride_shape")
+    if stride_shape is None:
+        return
+    if "val_slice_builder" in config:
+        raise ValueError(
+            f"Configure the validation patch stride once in {path}: either "
+            "`val_slice_builder` or `loaders.val.slice_builder.stride_shape`."
+        )
+    config["val_slice_builder"] = {"stride_shape": list(stride_shape)}
+
+
 def launch_training(path: Path):
     """Launch the training"""
     config = load_config(path)
@@ -102,7 +170,8 @@ def launch_training(path: Path):
 
     # The example config nests the parameters under a `training:` key,
     # but a flat top-level config is accepted as well.
-    config = config.get("training", config)
+    config = dict(config.get("training", config))
+    _translate_loaders(config, path)
 
     import inspect
 
