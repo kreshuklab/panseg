@@ -5,7 +5,10 @@ import h5py
 import numpy as np
 from torch.utils.data import Dataset
 
-from panseg.functionals.prediction.utils.slice_builder import FilterSliceBuilder
+from panseg.functionals.prediction.utils.slice_builder import (
+    FilterSliceBuilder,
+    SliceBuilder,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +205,16 @@ class HDF5Dataset(Dataset):
         raw_internal_path (str or list): H5 internal path to the raw dataset
         label_internal_path (str or list): H5 internal path to the label dataset
         global_normalization (bool): if True, the mean and std of the raw data will be calculated over the whole dataset
+        filter_patches (bool): if True (train), build the patch grid with
+            `FilterSliceBuilder`: stride max(p // 2, 1) and patches below the
+            foreground threshold dropped. If False (val), build a plain
+            `SliceBuilder` grid: no threshold filtering and (by default)
+            non-overlapping, so the val loss covers the whole volume and is not
+            biased towards foreground-rich patches.
+        stride_shape (tuple): patch stride for the unfiltered grid
+            (`filter_patches=False`); defaults to `patch_shape`, i.e.
+            non-overlapping. Must be None for the filtered train grid (which
+            always uses max(p // 2, 1) as stride).
     """
 
     def __init__(
@@ -213,6 +226,8 @@ class HDF5Dataset(Dataset):
         raw_internal_path="raw",
         label_internal_path="label",
         global_normalization=True,
+        filter_patches: bool = True,
+        stride_shape: tuple[int, int, int] | None = None,
     ):
         self.file_path = file_path
         self.dimensionality = dimensionality
@@ -243,11 +258,29 @@ class HDF5Dataset(Dataset):
             self._check_volume_sizes()
 
             # build slice indices for raw and label data sets
-            slice_builder = FilterSliceBuilder(
-                self.raw,
-                self.label,
-                patch_shape=patch_shape,
-            )
+            if filter_patches:
+                # train: overlapping, foreground-filtered grid
+                if stride_shape is not None:
+                    raise ValueError(
+                        "stride_shape is only configurable for the unfiltered "
+                        "(validation) grid; the filtered train grid always uses "
+                        "max(patch_shape // 2, 1) as stride."
+                    )
+                slice_builder = FilterSliceBuilder(
+                    self.raw,
+                    self.label,
+                    patch_shape=patch_shape,
+                )
+            else:
+                # val: unfiltered grid, non-overlapping unless configured otherwise
+                slice_builder = SliceBuilder(
+                    self.raw,
+                    self.label,
+                    patch_shape=patch_shape,
+                    stride_shape=stride_shape
+                    if stride_shape is not None
+                    else patch_shape,
+                )
             self.raw_slices = slice_builder.raw_slices
             label_slices = slice_builder.label_slices
             assert label_slices is not None, "label slices exist when a label is given"

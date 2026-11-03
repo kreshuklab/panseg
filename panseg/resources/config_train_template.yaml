@@ -55,7 +55,8 @@ loaders:
       name: FilterSliceBuilder
       # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
       patch_shape: [80, 160, 160]
-      # train stride between patches
+      # train stride between patches; the training loader always uses max(patch_shape // 2, 1)
+      # and drops patches with less than `threshold` non-zero labels
       stride_shape: [40, 80, 80]
       # minimum volume of the labels in the patch
       threshold: 0.1
@@ -69,13 +70,14 @@ loaders:
       - PATH_TO_VAL_DIR
 
     # SliceBuilder configuration, i.e. how to iterate over the input volume patch-by-patch
+    # NOTE (behavior change): validation patches are built non-overlapping (stride =
+    # patch_shape by default, `stride_shape` below is honored when configured through the
+    # `val_slice_builder` training option) and are NOT threshold-filtered. The val loss
+    # therefore covers the whole volume instead of only foreground-rich patches, and its
+    # meaning shifts slightly compared to older runs -- that is the point.
     slice_builder:
-      name: FilterSliceBuilder
-      # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
+      name: SliceBuilder
+      # val patch size given to the network (matches the train patch size)
       patch_shape: [80, 160, 160]
-      # train stride between patches
+      # val stride between patches; defaults to the patch shape (non-overlapping)
       stride_shape: [80, 160, 160]
-      # minimum volume of the labels in the patch
-      threshold: 0.1
-      # probability of accepting patches which do not fulfil the threshold criterion
-      slack_acceptance: 0.01
