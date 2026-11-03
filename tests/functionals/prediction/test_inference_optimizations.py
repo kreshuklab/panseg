@@ -249,3 +249,25 @@ def test_unet_prediction_forwards_optimization_flags(tmp_path, monkeypatch):
     )
 
     assert calls == {"channels_last_3d": False, "compile": True}
+
+
+@requires_cuda
+def test_array_predictor_h2d_is_non_blocking_on_cuda(tensor_to_spy):
+    """The pinned batch transfers of the prediction loop copy to the GPU
+    asynchronously (the constructor's memory probes are synchronous by
+    design and excluded here)."""
+    dataset = make_dataset(raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
+    model = tiny_3d_model()
+    predictor = _make_predictor(model, "cuda", amp="off")
+
+    del tensor_to_spy[:]  # drop the constructor's probe transfers
+    predictor(dataset)
+
+    # patch (8, 64, 64) + halo (2, 8, 8) both sides -> batches (b, 1, 12, 80, 80);
+    # a positional device arg marks the H2D move (the channels_last_3d
+    # conversion is kwargs-only)
+    batch_calls = [
+        kw for shape, args, kw in tensor_to_spy if shape == (1, 1, 12, 80, 80) and args
+    ]
+    assert batch_calls, "the batch transfer must be observed"
+    assert all(kw.get("non_blocking") is True for kw in batch_calls)

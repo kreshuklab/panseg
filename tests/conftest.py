@@ -28,6 +28,25 @@ IS_CUDA_AVAILABLE = torch.cuda.is_available()
 
 
 @pytest.fixture
+def tensor_to_spy(monkeypatch):
+    """Record ``(shape, args, kwargs)`` of every ``torch.Tensor.to`` call.
+
+    Used to pin the host-to-device transfer contract (non-blocking copies of
+    pinned batches on CUDA). Filter by the batch shape to isolate the transfer
+    calls from torch-internal conversions (module moves, ``memory_format``).
+    """
+    calls = []
+    real_to = torch.Tensor.to
+
+    def wrapped(self, *args, **kwargs):
+        calls.append((tuple(self.shape), args, dict(kwargs)))
+        return real_to(self, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "to", wrapped)
+    return calls
+
+
+@pytest.fixture
 def napari_raw():
     data = np.random.rand(10, 10, 10)
     voxel_size = (1.0, 1.0, 1.0)

@@ -23,16 +23,19 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 class _CountingLoss(torch.nn.Module):
-    """DiceLoss wrapper counting how many batches were actually trained on."""
+    """DiceLoss wrapper recording how many batches were trained/validated on."""
 
     def __init__(self):
         super().__init__()
         self.inner = DiceLoss()
         self.calls = 0
+        self.losses: list[float] = []
 
     def forward(self, output, target):
         self.calls += 1
-        return self.inner(output, target)
+        loss = self.inner(output, target)
+        self.losses.append(float(loss.detach()))
+        return loss
 
 
 def _fixed_batch(seed: int = 0):
@@ -49,6 +52,7 @@ def _make_trainer(
     batches: int,
     device: str = "cpu",
     loss=None,
+    val_batches: int = 0,
 ):
     torch.manual_seed(7)
     model = UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4]).to(device)
@@ -62,7 +66,10 @@ def _make_trainer(
             optimizer, factor=0.2, patience=10
         ),
         loss_criterion=loss,
-        loaders={"train": [batch] * batches, "val": []},
+        loaders={
+            "train": [batch] * batches,
+            "val": [_fixed_batch(1)] * val_batches,
+        },
         checkpoint_dir=checkpoint_dir,
         max_num_iterations=max_num_iterations,
         device=device,
@@ -101,3 +108,53 @@ class TestIterationBudget:
         trainer.train()
 
         assert loss.calls == 7
+
+
+@requires_cuda
+class TestNonBlockingTransfers:
+    """Pinned host batches copy to the GPU asynchronously (the copy is ordered
+    before the CUDA ops that follow on the same stream)."""
+
+    def test_trainer_transfers_use_non_blocking_on_cuda(self, tmp_path, tensor_to_spy):
+        trainer, loss = _make_trainer(
+            tmp_path, 2, 1, batches=2, val_batches=2, device="cuda"
+        )
+
+        trainer.train()
+
+        batch_shape = (1, 1, 8, 16, 16)
+        h2d_calls = [kw for shape, _, kw in tensor_to_spy if shape == batch_shape]
+        assert h2d_calls, "the batch transfers must be observed"
+        assert all(kw.get("non_blocking") is True for kw in h2d_calls)
+        assert loss.calls == 4  # 2 train + 2 val batches
+
+    def test_non_blocking_results_match_blocking(self, tmp_path, monkeypatch):
+        """The async path must produce exactly the blocking path's losses."""
+        real_to = torch.Tensor.to
+
+        def run(force_blocking: bool) -> list[float]:
+            def wrapped(self, *args, **kwargs):
+                # only override keyword calls: torch internals pass non_blocking
+                # positionally, which cannot take the kwarg again
+                if force_blocking and len(args) < 3:
+                    kwargs["non_blocking"] = False
+                return real_to(self, *args, **kwargs)
+
+            monkeypatch.setattr(torch.Tensor, "to", wrapped)
+            trainer, loss = _make_trainer(
+                tmp_path / f"run_{force_blocking}",
+                3,
+                1,
+                batches=3,
+                val_batches=1,
+                device="cuda",
+            )
+            trainer.train()
+            return loss.losses
+
+        blocking = run(True)
+        non_blocking = run(False)
+
+        assert len(blocking) == len(non_blocking) >= 3
+        for step, (blocking_loss, nb_loss) in enumerate(zip(blocking, non_blocking)):
+            assert nb_loss == pytest.approx(blocking_loss, rel=1e-4, abs=1e-5), step
