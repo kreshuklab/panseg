@@ -18,6 +18,7 @@ from panseg.functionals.precision import (
 )
 from panseg.functionals.training.model import UNet2D
 from panseg.functionals.training.utils import RunningAverage
+from panseg.functionals.transfer import to_device
 
 logger = logging.getLogger(__name__)
 
@@ -92,10 +93,6 @@ class UNetTrainer:
         self.max_num_iterations = max_num_iterations
         self.max_num_epochs = max_num_iterations // len(loaders["train"]) + 1
         self.device = device
-        # the loader pins the host batches on CUDA, so they can copy to the
-        # GPU asynchronously: the copy is ordered before the CUDA ops that
-        # follow on the same stream
-        self.non_blocking = torch.device(device).type == "cuda"
         self.log_after_iters = log_after_iters
         self.amp: AmpMode = validate_amp(amp)
         self.best_eval_loss = float("+inf")
@@ -158,8 +155,9 @@ class UNetTrainer:
         self.model.train()
 
         for _input, target in tqdm(self.loaders["train"]):
-            _input = _input.to(self.device, non_blocking=self.non_blocking)
-            target = target.to(self.device, non_blocking=self.non_blocking)
+            # non-blocking exactly for pinned batches (see `to_device`)
+            _input = to_device(_input, self.device)
+            target = to_device(target, self.device)
             output, loss = self._forward_pass(_input, target)
 
             train_losses.update(loss.item(), self._batch_size(_input))
@@ -213,8 +211,8 @@ class UNetTrainer:
 
         with torch.no_grad():
             for _input, target in tqdm(self.loaders["val"]):
-                _input = _input.to(self.device, non_blocking=self.non_blocking)
-                target = target.to(self.device, non_blocking=self.non_blocking)
+                _input = to_device(_input, self.device)
+                target = to_device(target, self.device)
 
                 output, loss = self._forward_pass(_input, target)
                 val_losses.update(loss.item(), self._batch_size(_input))

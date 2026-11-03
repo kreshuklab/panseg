@@ -2,8 +2,9 @@
 
 `should_stop` must be evaluated every iteration (it used to run only every
 `log_after_iters`, overrunning `max_num_iterations` by up to an epoch), and the
-host-to-device copies of the pinned loader batches must be non-blocking on CUDA
-(the copy is ordered before the CUDA ops that follow on the same stream).
+host-to-device copy of a loader batch is non-blocking exactly when that batch is
+pinned (on unpinned memory the flag is a silent no-op; see
+`panseg.functionals.transfer`).
 """
 
 from pathlib import Path
@@ -20,6 +21,17 @@ requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="CUDA required for transfer tests"
 )
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+BATCH_SHAPE = (1, 1, 8, 16, 16)
+
+
+def _fixed_batch(seed: int = 0, pin: bool = False):
+    g = torch.Generator().manual_seed(seed)
+    inp = torch.randn(1, 1, 8, 16, 16, generator=g)
+    target = torch.rand(1, 1, 8, 16, 16, generator=g)
+    if pin:
+        inp, target = inp.pin_memory(), target.pin_memory()
+    return inp, target
 
 
 class _CountingLoss(torch.nn.Module):
@@ -38,13 +50,6 @@ class _CountingLoss(torch.nn.Module):
         return loss
 
 
-def _fixed_batch(seed: int = 0):
-    g = torch.Generator().manual_seed(seed)
-    inp = torch.randn(1, 1, 8, 16, 16, generator=g)
-    target = torch.rand(1, 1, 8, 16, 16, generator=g)
-    return inp, target
-
-
 def _make_trainer(
     checkpoint_dir: Path,
     max_num_iterations: int,
@@ -53,12 +58,13 @@ def _make_trainer(
     device: str = "cpu",
     loss=None,
     val_batches: int = 0,
+    pin: bool = False,
 ):
     torch.manual_seed(7)
     model = UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4]).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     loss = loss if loss is not None else _CountingLoss()
-    batch = _fixed_batch()
+    batch = _fixed_batch(pin=pin)
     trainer = UNetTrainer(
         model=model,
         optimizer=optimizer,
@@ -68,7 +74,7 @@ def _make_trainer(
         loss_criterion=loss,
         loaders={
             "train": [batch] * batches,
-            "val": [_fixed_batch(1)] * val_batches,
+            "val": [_fixed_batch(1, pin=pin)] * val_batches,
         },
         checkpoint_dir=checkpoint_dir,
         max_num_iterations=max_num_iterations,
@@ -110,24 +116,49 @@ class TestIterationBudget:
         assert loss.calls == 7
 
 
-@requires_cuda
-class TestNonBlockingTransfers:
-    """Pinned host batches copy to the GPU asynchronously (the copy is ordered
-    before the CUDA ops that follow on the same stream)."""
+class TestHostToDeviceTransfers:
+    """Batches copy non-blocking exactly when they are pinned."""
 
-    def test_trainer_transfers_use_non_blocking_on_cuda(self, tmp_path, tensor_to_spy):
+    @staticmethod
+    def _run(tmp_path, tensor_to_spy, val_batches=1, **trainer_kwargs) -> list[dict]:
         trainer, loss = _make_trainer(
-            tmp_path, 2, 1, batches=2, val_batches=2, device="cuda"
+            tmp_path, 2, 1, batches=2, val_batches=val_batches, **trainer_kwargs
+        )
+        trainer.train()
+        # 2 train + `val_batches` val batches reached the loss
+        assert loss.calls == 2 + val_batches
+        return [kw for shape, _, kw in tensor_to_spy if shape == BATCH_SHAPE]
+
+    def test_pinned_batches_copy_non_blocking(
+        self, tmp_path, tensor_to_spy, monkeypatch
+    ):
+        monkeypatch.setattr(torch.Tensor, "is_pinned", lambda self: True)
+
+        calls = self._run(tmp_path, tensor_to_spy)
+
+        assert calls, "the batch transfers must be observed"
+        assert all(kw.get("non_blocking") is True for kw in calls)
+
+    def test_unpinned_batches_copy_blocking(self, tmp_path, tensor_to_spy):
+        """Without pinning (`pin_memory=False`) the flag must not be set: it
+        would only be a silent no-op."""
+        calls = self._run(tmp_path, tensor_to_spy)
+
+        assert calls, "the batch transfers must be observed"
+        assert all(kw.get("non_blocking") is False for kw in calls)
+
+    @requires_cuda
+    def test_trainer_transfers_use_non_blocking_on_cuda(self, tmp_path, tensor_to_spy):
+        """The real loader pins its batches on CUDA, so they copy asynchronously
+        (the copy is ordered before the CUDA ops that follow on the same stream)."""
+        calls = self._run(
+            tmp_path, tensor_to_spy, val_batches=2, device="cuda", pin=True
         )
 
-        trainer.train()
+        assert calls
+        assert all(kw.get("non_blocking") is True for kw in calls)
 
-        batch_shape = (1, 1, 8, 16, 16)
-        h2d_calls = [kw for shape, _, kw in tensor_to_spy if shape == batch_shape]
-        assert h2d_calls, "the batch transfers must be observed"
-        assert all(kw.get("non_blocking") is True for kw in h2d_calls)
-        assert loss.calls == 4  # 2 train + 2 val batches
-
+    @requires_cuda
     def test_non_blocking_results_match_blocking(self, tmp_path, monkeypatch):
         """The async path must produce exactly the blocking path's losses."""
         real_to = torch.Tensor.to
@@ -148,6 +179,7 @@ class TestNonBlockingTransfers:
                 batches=3,
                 val_batches=1,
                 device="cuda",
+                pin=True,
             )
             trainer.train()
             return loss.losses

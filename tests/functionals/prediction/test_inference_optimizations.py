@@ -271,3 +271,27 @@ def test_array_predictor_h2d_is_non_blocking_on_cuda(tensor_to_spy):
     ]
     assert batch_calls, "the batch transfer must be observed"
     assert all(kw.get("non_blocking") is True for kw in batch_calls)
+
+
+@pytest.mark.parametrize("pinned", [True, False])
+def test_array_predictor_h2d_follows_the_pinned_state(
+    tensor_to_spy, monkeypatch, pinned
+):
+    """The flag follows the batch's pinned state, not the device type.
+
+    On unpinned memory `non_blocking=True` is a silent no-op, so a loader
+    without pinning (or a device where pinning is unavailable) must copy
+    blocking. Run on CPU to exercise the derivation without CUDA.
+    """
+    monkeypatch.setattr(torch.Tensor, "is_pinned", lambda self: pinned)
+    dataset = make_dataset(raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
+    predictor = _make_predictor(tiny_3d_model(), "cpu", amp="off")
+
+    del tensor_to_spy[:]  # drop the constructor's probe transfers
+    predictor(dataset)
+
+    batch_calls = [
+        kw for shape, args, kw in tensor_to_spy if shape == (1, 1, 12, 80, 80) and args
+    ]
+    assert batch_calls, "the batch transfer must be observed"
+    assert all(kw.get("non_blocking") is pinned for kw in batch_calls)

@@ -26,6 +26,7 @@ from panseg.functionals.prediction.utils.size_finder import (
     will_CUDA_OOM,
 )
 from panseg.functionals.training.embeddings import embeddings_to_affinities
+from panseg.functionals.transfer import to_device
 
 logger = logging.getLogger(__name__)
 
@@ -257,13 +258,10 @@ class ArrayPredictor:
             for input_, indices in tqdm.tqdm(test_loader, disable=self.disable_tqdm):
                 if self.tracker is not None:
                     self.tracker.progress += 1
-                # the loader pins the host batches, so they can copy to the GPU
-                # asynchronously (the copy is ordered before the forward pass on
-                # the same stream)
-                input_ = input_.to(
-                    self.device,
-                    non_blocking=torch.device(self.device).type == "cuda",
-                )  # input is padded with halo in dataset __getitem__
+                # the loader pins the host batches, so a pinned batch copies to
+                # the GPU asynchronously (`to_device`); the copy is ordered
+                # before the forward pass on the same stream
+                input_ = to_device(input_, self.device)  # padded with halo
                 if self.channels_last_3d:
                     input_ = input_.to(memory_format=torch.channels_last_3d)
                 # forward pass
