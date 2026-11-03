@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Callable, Self
+from typing import TYPE_CHECKING, Callable, Self
 
 import torch
 import torch.nn as nn
@@ -681,13 +681,24 @@ class UNet2D(AbstractUNet):
         )
 
 
-class ProbabilitiesForward:
+if TYPE_CHECKING:
+    # Typing only: the mixin is combined with an `AbstractUNet` subclass, so
+    # type checkers must see its API (`activate`, `forward`). At runtime the base
+    # is `object`, keeping the MRO of the concrete classes linear.
+    _ProbabilitiesBase = AbstractUNet
+else:
+    _ProbabilitiesBase = object
+
+
+class ProbabilitiesForward(_ProbabilitiesBase):
     """Mixin for `AbstractUNet` subclasses whose `forward` returns probabilities.
 
-    Export-only variant for BioImage.IO: published models must emit normalized
-    probabilities when called through `bioimageio.core`, which just calls
-    `forward`. State-dict compatible with the base architecture — no new
-    parameters or buffers — so trained weights load unchanged.
+    Mix into the concrete architecture as ``class UNet3DProbabilities(
+    ProbabilitiesForward, UNet3D)``. Export-only variant for BioImage.IO:
+    published models must emit normalized probabilities when called through
+    `bioimageio.core`, which just calls `forward`. State-dict compatible with
+    the base architecture — no new parameters or buffers — so trained weights
+    load unchanged.
 
     The mixin owns the whole activation contract, so the subclasses cannot
     diverge: `forward` activates, `predict` therefore does not activate again,
