@@ -2,7 +2,13 @@ import pytest
 import torch
 
 from panseg.functionals.training.embeddings import embeddings_to_affinities
-from panseg.functionals.training.model import SpocoNet, UNet2D
+from panseg.functionals.training.model import (
+    SpocoNet,
+    UNet2D,
+    UNet2DProbabilities,
+    UNet3D,
+    UNet3DProbabilities,
+)
 from tests.conftest import IS_CUDA_AVAILABLE
 
 
@@ -103,3 +109,40 @@ class TestOutputContract:
         with torch.no_grad():
             model.eval()
             assert torch.equal(model.predict(x), model(x))
+
+    @pytest.mark.parametrize(
+        "base_cls, probabilities_cls, volume_shape",
+        [
+            (UNet2D, UNet2DProbabilities, (2, 3, 32, 32)),
+            (UNet3D, UNet3DProbabilities, (2, 3, 16, 16, 16)),
+        ],
+    )
+    def test_probabilities_subclass_is_state_dict_compatible(
+        self, base_cls, probabilities_cls, volume_shape
+    ):
+        """Old weights must stay loadable: the export subclass adds no state.
+
+        The subclass is what `biio.py` exports; it must have exactly the
+        parameter/buffer names of the trained architecture (a wrapper would
+        rename them and break `PytorchStateDictWeightsDescr` loading).
+        """
+        torch.manual_seed(0)
+        kwargs = dict(
+            in_channels=3, out_channels=1, final_sigmoid=True, f_maps=(8, 16)
+        )
+        base = base_cls(**kwargs)
+        probabilities = probabilities_cls(**kwargs)
+
+        state = base.state_dict()
+        # exact key set (parameters *and* buffers), no renames, no additions
+        assert set(state) == set(probabilities.state_dict())
+        # strict load in both directions
+        probabilities.load_state_dict(state)
+        base.load_state_dict(probabilities.state_dict())
+
+        x = torch.randn(*volume_shape)
+        base.eval()
+        probabilities.eval()
+        with torch.no_grad():
+            # the subclass's forward is exactly the base model's probability output
+            torch.testing.assert_close(probabilities(x), base.predict(x))
