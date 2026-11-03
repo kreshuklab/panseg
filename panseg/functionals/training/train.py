@@ -258,7 +258,9 @@ def unet_training(
         model=model,
         in_channels=in_channels,
         patch_shape=patch_size,
-        patch_halo=(4, 4, 4),  # some slack
+        # training runs the exact patch shape (no halo); any slack here would
+        # inflate the probed volume and waste batch-size headroom
+        patch_halo=(0, 0, 0),
         device=device,
         for_training=True,  # backward passes need ~2-3x the memory of a forward
         amp=amp,

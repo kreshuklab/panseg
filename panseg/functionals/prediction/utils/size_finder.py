@@ -49,6 +49,38 @@ def _quiet_oom_probing(device: str):
         torch.cuda.memory.set_per_process_memory_fraction(previous, index)
 
 
+_BN_MODULES = (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)
+
+
+@contextlib.contextmanager
+def _preserve_bn_stats(model: nn.Module):
+    """Snapshot and restore the BatchNorm running stats of `model`.
+
+    The training-mode batch-size probe runs forward passes in train mode (probe
+    fidelity: the measured memory must match the real training steps), which
+    updates `running_mean`, `running_var` and `num_batches_tracked`. Those
+    updates must not leak into the training run, so the buffers are restored
+    bit-exactly when the probe ends -- including when the probe raises.
+    """
+    saved = [
+        (
+            module,
+            module.running_mean.clone(),
+            module.running_var.clone(),
+            module.num_batches_tracked.clone(),
+        )
+        for module in model.modules()
+        if isinstance(module, _BN_MODULES) and module.track_running_stats
+    ]
+    try:
+        yield
+    finally:
+        for module, running_mean, running_var, num_batches_tracked in saved:
+            module.running_mean.copy_(running_mean)
+            module.running_var.copy_(running_var)
+            module.num_batches_tracked.copy_(num_batches_tracked)
+
+
 def is_2d_model(model: nn.Module) -> bool:
     while True:
         if isinstance(model, nn.DataParallel):
@@ -359,6 +391,45 @@ def _probe_batch(
                 model(x)
 
 
+# Largest batch size the probe search considers (the old power-of-2 search
+# topped out here as well).
+MAX_PROBE_BATCH_SIZE = 2048
+
+
+def _probe_batch_feasible(
+    model: nn.Module,
+    x_shape: tuple[int, ...],
+    batch_size: int,
+    for_training: bool,
+    amp: AmpSetting,
+    device: str,
+) -> bool:
+    """Probe one batch size; True if it fits, False on OOM (or an unexpected
+    error, which is logged and treated as infeasible like before)."""
+    x = None
+    try:
+        x = torch.randn((batch_size,) + x_shape).to(device)
+        _probe_batch(model, x, for_training, amp, device)
+        return True
+    except RuntimeError as e:
+        if is_oom_error(e, device):
+            errs = str(e).split(".", maxsplit=1)
+            logger.info(f"Encountered '{errs[0]}' at batch size {batch_size}.")
+            logger.debug(f"{errs[-1]}")
+        else:
+            logger.warning(
+                f"Encountered '{e}' at batch size {batch_size}, "
+                "treating the batch size as infeasible."
+            )
+        return False
+    finally:
+        if for_training:
+            # drop the probe's gradients, they must not leak into training
+            model.zero_grad(set_to_none=True)
+        del x
+        torch.cuda.empty_cache()
+
+
 def find_batch_size(
     model: nn.Module,
     in_channels: int,
@@ -369,6 +440,11 @@ def find_batch_size(
     amp: AmpSetting = "auto",
 ) -> int:
     """Determine the maximum feasible batch size for a given model based on available GPU memory.
+
+    The search doubles the batch size until it no longer fits and then bisects
+    the last interval, so the result is the true maximum (the old power-of-2
+    search settled for e.g. 4 when 6 fitted). The BatchNorm running stats of
+    `model` are restored bit-exactly after probing.
 
     Args:
         model (nn.Module): The model to be used for prediction or training.
@@ -393,49 +469,41 @@ def find_batch_size(
     actual_patch_shape = tuple(patch_shape[i] + 2 * patch_halo[i] for i in range(3))
     if isinstance(model, UNet2D):
         actual_patch_shape = actual_patch_shape[1:]
+    x_shape = (in_channels,) + actual_patch_shape
 
     was_training = model.training
-    with _quiet_oom_probing(device):
+    with _quiet_oom_probing(device), _preserve_bn_stats(model):
         model = model.to(device)
         model.train(for_training)
-        for batch_size in [2**i for i in range(12)]:
-            x = None
-            try:
-                x = torch.randn((batch_size, in_channels) + actual_patch_shape).to(
-                    device
+        try:
+            if not _probe_batch_feasible(model, x_shape, 1, for_training, amp, device):
+                raise RuntimeError(
+                    f"Could not determine a feasible batch size for patch size "
+                    f"{patch_shape} and halo {patch_halo}. Please reduce the patch size."
                 )
-                _probe_batch(model, x, for_training, amp, device)
-            except RuntimeError as e:
-                if is_oom_error(e, device):
-                    errs = str(e).split(".", maxsplit=1)
-                    logger.info(
-                        f"Encountered '{errs[0]}' at batch size {batch_size}, halving it."
-                    )
-                    logger.debug(f"{errs[-1]}")
-                    batch_size //= 2
-                    break
-                else:
-                    logger.warning(
-                        f"Encountered '{e}' at batch size {batch_size}, "
-                        "unexpected but continuing with halved batch size."
-                    )
-                    batch_size //= 2
-                    break
-            finally:
-                if for_training:
-                    # drop the probe's gradients, they must not leak into training
-                    model.zero_grad(set_to_none=True)
-                del x
-                torch.cuda.empty_cache()
-        model.train(was_training)
-        del model
-        torch.cuda.empty_cache()
-        if batch_size == 0:
-            raise RuntimeError(
-                f"Could not determine a feasible batch size for patch size "
-                f"{patch_shape} and halo {patch_halo}. Please reduce the patch size."
-            )
-        return batch_size
+            feasible = 1
+            candidate = 2
+            while candidate <= MAX_PROBE_BATCH_SIZE and _probe_batch_feasible(
+                model, x_shape, candidate, for_training, amp, device
+            ):
+                feasible = candidate
+                candidate *= 2
+            if candidate <= MAX_PROBE_BATCH_SIZE:
+                # candidate OOMed: bisect (feasible, candidate) for the true max
+                infeasible = candidate
+                while feasible + 1 < infeasible:
+                    mid = (feasible + infeasible) // 2
+                    if _probe_batch_feasible(
+                        model, x_shape, mid, for_training, amp, device
+                    ):
+                        feasible = mid
+                    else:
+                        infeasible = mid
+            return feasible
+        finally:
+            model.train(was_training)
+            del model
+            torch.cuda.empty_cache()
 
 
 def will_CUDA_OOM(

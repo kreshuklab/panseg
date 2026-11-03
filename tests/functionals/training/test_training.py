@@ -907,6 +907,9 @@ class TestUnetTraining:
         # The batch size must be probed with a backward pass, otherwise the
         # first training iteration can run out of memory
         assert mock_find_batch_size.call_args.kwargs["for_training"] is True
+        # ...and at the true training patch shape: a halo slack would inflate
+        # the probed volume and waste batch-size headroom
+        assert mock_find_batch_size.call_args.kwargs["patch_halo"] == (0, 0, 0)
 
         # Verify that DataParallel was called
         mock_data_parallel.assert_called_once()

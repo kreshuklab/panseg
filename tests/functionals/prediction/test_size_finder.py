@@ -512,10 +512,10 @@ def test_find_batch_size_raises_when_batch_one_ooms(fake_cuda):
 
 
 def test_find_batch_size_2d_model_slices_first_dim(fake_cuda):
-    # (16, 16) = 256 voxels per sample: batch 64 (16384) fits, batch 128 OOMs
+    # (16, 16) = 256 voxels per sample: 78 samples (19968) fit, 79 (20224) OOMs
     model = FakeUNet2D(oom_voxel_threshold=20_000)
 
-    assert find_batch_size(model, 1, (1, 16, 16), (0, 0, 0), "cuda:0") == 64
+    assert find_batch_size(model, 1, (1, 16, 16), (0, 0, 0), "cuda:0") == 78
     assert all(len(shape) == 4 for shape in model.seen_input_shapes)
 
 
@@ -549,6 +549,96 @@ def test_find_batch_size_restores_training_mode(fake_cuda):
     find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0", for_training=True)
 
     assert not model.training
+
+
+class _BnProbeModel(nn.Module):
+    """Probe double whose forward runs a *real* BatchNorm update on a real
+    tensor before honoring the OOM oracle: train-mode probes genuinely pollute
+    `running_mean`/`running_var`/`num_batches_tracked`, like the real model."""
+
+    def __init__(self, oom_voxel_threshold=None):
+        super().__init__()
+        self.bn = nn.BatchNorm3d(2)
+        self.oom_voxel_threshold = oom_voxel_threshold
+        self.seen_input_shapes = []
+        self.bn_updates = 0
+
+    def to(self, *args, **kwargs):
+        return self
+
+    def forward(self, x):
+        self.seen_input_shapes.append(tuple(x.shape))
+        voxels = int(np.prod(x.shape))
+        # BN update first, then the oracle: even a failing probe may leave the
+        # running stats mutated
+        t = torch.arange(2 * 4**3, dtype=torch.float32).reshape(1, 2, 4, 4, 4)
+        before = int(self.bn.num_batches_tracked)
+        out = self.bn(t).sum()
+        if int(self.bn.num_batches_tracked) > before:
+            self.bn_updates += 1
+        if self.oom_voxel_threshold is not None and voxels > self.oom_voxel_threshold:
+            raise RuntimeError("CUDA out of memory. Tried to allocate 999.00 GiB.")
+        return out
+
+
+def _bn_buffers(model):
+    return {name: buf.clone() for name, buf in model.named_buffers()}
+
+
+def test_find_batch_size_for_training_restores_bn_stats_bit_exact(fake_cuda):
+    """The train-mode probe must not leak BatchNorm running stats into training."""
+    model = _BnProbeModel()
+    before = _bn_buffers(model)
+
+    find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0", for_training=True)
+
+    assert model.bn_updates > 0, "the probe must actually run train-mode forwards"
+    after = _bn_buffers(model)
+    assert after.keys() == before.keys()
+    for name in before:
+        assert torch.equal(after[name], before[name]), name
+
+
+def test_find_batch_size_restores_bn_stats_when_batch_one_ooms(fake_cuda):
+    model = _BnProbeModel(oom_voxel_threshold=0)
+    before = _bn_buffers(model)
+
+    with pytest.raises(RuntimeError, match="Could not determine a feasible batch size"):
+        find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0", for_training=True)
+
+    assert model.bn_updates > 0
+    after = _bn_buffers(model)
+    for name in before:
+        assert torch.equal(after[name], before[name]), name
+
+
+def test_find_batch_size_bisects_to_the_true_maximum(fake_cuda):
+    # 16^3 = 4096 voxels/sample: 6 samples (24576) fit, 7 (28672) OOMs.
+    # The old power-of-2 search settled for 4.
+    model = FakeUNet3D(oom_voxel_threshold=25_000)
+
+    assert find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0") == 6
+
+
+@pytest.mark.parametrize("max_samples", [1, 2, 3, 5, 6, 7, 12, 13, 16, 31])
+def test_find_batch_size_result_within_power_of_two_and_true_max(
+    fake_cuda, max_samples
+):
+    """The result is never below the old power-of-2 value and never above the
+    true maximum (a fake monotone OOM oracle makes both bounds exact)."""
+    model = FakeUNet3D(oom_voxel_threshold=max_samples * 4096)
+
+    result = find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0")
+
+    power_of_two = 2 ** (max_samples.bit_length() - 1)
+    assert power_of_two <= result <= max_samples
+    assert result == max_samples
+
+
+def test_find_batch_size_caps_at_2048(fake_cuda):
+    model = FakeUNet3D()  # never OOMs
+
+    assert find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0") == 2048
 
 
 def _patch_cuda_memory(monkeypatch, previous_fraction=1.0):
