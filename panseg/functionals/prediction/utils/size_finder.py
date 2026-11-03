@@ -409,7 +409,8 @@ def find_batch_size(
         if batch_size == 0:
             raise RuntimeError(
                 f"Could not determine a feasible batch size for patch size "
-                f"{patch_shape} and halo {patch_halo}. Please reduce the patch size."
+                f"{patch_shape} and halo {patch_halo}, even at batch size 1. "
+                "Please reduce the patch size/halo or free up device memory."
             )
         return batch_size
 
