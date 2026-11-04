@@ -3,10 +3,19 @@
 `channels_last_3d` is a memory-layout change, not a math change: outputs must
 match the plain layout within a tight tolerance and stay contiguous float32
 numpy arrays. It is default-on on CUDA for 3D models and must stay off on CPU
-and for 2D models. `torch.compile` is opt-in (one-time compile cost; triton
-needs `C_INCLUDE_PATH=/usr/local/cuda/include` in some environments) and must
-degrade gracefully to eager when compilation fails.
+and for 2D models.
+
+`torch.compile` is now automatic by default (`compile=None`): it engages only
+on CUDA and only when the number of prediction batches amortizes the one-time
+compile cost (`COMPILE_MIN_BATCHES`). An explicit `compile=True` / `False`
+override still forces compilation / eager execution. Compiling on CPU is never
+worth it, so auto must keep it off there even when the batch threshold is met.
+A failed compile must degrade gracefully to eager (triton needs
+`C_INCLUDE_PATH=/usr/local/cuda/include` in some environments).
 """
+
+import inspect
+import math
 
 import numpy as np
 import pytest
@@ -14,6 +23,7 @@ import torch
 
 from panseg.functionals.prediction import prediction as prediction_module
 from panseg.functionals.prediction import unet_prediction
+from panseg.functionals.prediction.utils import array_predictor
 from panseg.functionals.prediction.utils.array_dataset import ArrayDataset
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
 from tests.functionals.prediction.helpers import (
@@ -36,6 +46,7 @@ def _make_predictor(
     in_channels: int = 1,
     patch: tuple[int, int, int] = (8, 64, 64),
     patch_halo: tuple[int, int, int] = (2, 8, 8),
+    single_batch_mode: bool = True,
     **kwargs,
 ) -> ArrayPredictor:
     return ArrayPredictor(
@@ -45,7 +56,7 @@ def _make_predictor(
         device=device,
         patch=patch,
         patch_halo=patch_halo,
-        single_batch_mode=True,
+        single_batch_mode=single_batch_mode,
         headless=False,
         **kwargs,
     )
@@ -165,20 +176,121 @@ def test_channels_last_3d_stays_off_for_2d_models_on_cuda():
     assert pmaps.shape == (1, 16, 96, 96)
 
 
-def test_compile_defaults_to_off(monkeypatch):
-    def fail_if_called(model, *args, **kwargs):
-        raise AssertionError("torch.compile must not run when compile is off")
+def test_compile_auto_stays_off_on_cpu_even_above_threshold(monkeypatch):
+    """Auto compile is CUDA-only: meeting the batch threshold is not enough."""
+    calls: list = []
 
-    monkeypatch.setattr(torch, "compile", fail_if_called)
+    def recording_compile(model, *args, **kwargs):
+        calls.append(model)
+        return model  # passthrough: no real inductor compile
+
+    monkeypatch.setattr(array_predictor, "COMPILE_MIN_BATCHES", 1)
+    monkeypatch.setattr(torch, "compile", recording_compile)
     dataset = make_dataset(raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
 
     pmaps = _predict(tiny_3d_model(), dataset, "cpu")
 
     assert pmaps.shape == (1, 16, 96, 96)
+    assert calls == [], "auto compile must never run on CPU"
+
+
+def test_compile_auto_threshold_is_cuda_only_and_batch_based():
+    """Unit-check the threshold arithmetic without needing a GPU.
+
+    `_should_compile` is pure: relabelling `predictor.device` exercises the CUDA
+    branch without moving any tensors.
+    """
+    min_batches = array_predictor.COMPILE_MIN_BATCHES
+
+    predictor = _make_predictor(tiny_3d_model(), "cpu", amp="off")
+    # CPU never compiles automatically, even for an absurd number of batches
+    assert predictor._should_compile(10**9) is False
+
+    predictor.device = "cuda"
+    assert predictor._should_compile(min_batches - 1) is False
+    assert predictor._should_compile(min_batches) is True
+
+    # explicit overrides win over device and threshold
+    forced = _make_predictor(tiny_3d_model(), "cpu", amp="off", compile=True)
+    assert forced._should_compile(0) is True
+
+    eager = _make_predictor(tiny_3d_model(), "cpu", amp="off", compile=False)
+    eager.device = "cuda"
+    assert eager._should_compile(10**9) is False
+
+
+@requires_cuda
+def test_compile_auto_decision_counts_batches_not_patches(monkeypatch):
+    """The threshold applies to `len(DataLoader)`, i.e. batches, not patches."""
+    dataset = make_dataset(raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
+    n_patches = len(dataset)
+    n_batches_at_bs2 = math.ceil(n_patches / 2)
+    # Above what batch size 2 yields, but reachable with batch size 1.
+    threshold = n_batches_at_bs2 + 1
+    assert threshold <= n_patches, "test needs batch size 1 to cross the threshold"
+
+    calls: list = []
+
+    def recording_compile(model, *args, **kwargs):
+        calls.append(model)
+        return model  # passthrough: no real inductor compile
+
+    monkeypatch.setattr(torch, "compile", recording_compile)
+    monkeypatch.setattr(array_predictor, "COMPILE_MIN_BATCHES", threshold)
+
+    def _run(batch_size: int) -> None:
+        monkeypatch.setattr(
+            array_predictor, "find_batch_size", lambda *a, **k: batch_size
+        )
+        predictor = _make_predictor(
+            tiny_3d_model(), "cuda", amp="off", single_batch_mode=False
+        )
+        assert predictor.batch_size == batch_size
+        predictor(dataset)
+
+    _run(2)  # ceil(n_patches / 2) batches < threshold
+    assert calls == [], "compile decision used patches instead of batches"
+
+    _run(1)  # n_patches batches >= threshold
+    assert len(calls) == 1, "compile was not enabled at batch size 1"
+
+
+def test_compile_explicit_override_on_cpu(monkeypatch):
+    """`compile=True` forces compilation on CPU; `compile=False` forces eager."""
+    dataset = make_dataset(raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
+
+    forced_calls: list = []
+
+    def recording_passthrough(model, *args, **kwargs):
+        forced_calls.append(model)
+        return model  # passthrough: no real inductor compile
+
+    # threshold far above the dataset's batch count: only the override matters
+    monkeypatch.setattr(array_predictor, "COMPILE_MIN_BATCHES", 10**6)
+    monkeypatch.setattr(torch, "compile", recording_passthrough)
+    pmaps = _predict(tiny_3d_model(), dataset, "cpu", compile=True)
+
+    assert pmaps.shape == (1, 16, 96, 96)
+    assert len(forced_calls) == 1, "compile=True must force a single compile call"
+
+    eager_calls: list = []
+
+    def eager_recording(model, *args, **kwargs):
+        eager_calls.append(model)
+        return model  # passthrough: no real inductor compile
+
+    # threshold of 1 would trigger auto compilation on CUDA
+    monkeypatch.setattr(array_predictor, "COMPILE_MIN_BATCHES", 1)
+    monkeypatch.setattr(torch, "compile", eager_recording)
+    pmaps = _predict(tiny_3d_model(), dataset, "cpu", compile=False)
+
+    assert pmaps.shape == (1, 16, 96, 96)
+    assert eager_calls == [], "compile=False must force eager execution"
 
 
 @requires_cuda
 def test_compile_wraps_model_and_matches_eager(monkeypatch, caplog):
+    """`compile=True` is the explicit override; the math must match eager."""
     calls: list = []
     real_compile = torch.compile
 
@@ -209,7 +321,8 @@ def test_compile_wraps_model_and_matches_eager(monkeypatch, caplog):
 
 
 def test_compile_degrades_gracefully_on_first_forward_failure(monkeypatch, caplog):
-    """A failing compiled forward falls back to eager with a clear warning."""
+    """`compile=True` forces compilation even on CPU; a failing compiled forward
+    falls back to eager with a clear warning (no CUDA required)."""
 
     class FailingCompiled(torch.nn.Module):
         def __init__(self, inner):
@@ -232,6 +345,54 @@ def test_compile_degrades_gracefully_on_first_forward_failure(monkeypatch, caplo
     assert any("torch.compile" in record.getMessage() for record in caplog.records)
 
 
+def test_compile_is_idempotent_across_calls(monkeypatch):
+    """Repeated `__call__` on one predictor must not retry `torch.compile`."""
+    calls: list = []
+
+    def recording_passthrough(model, *args, **kwargs):
+        calls.append(model)
+        return model  # passthrough: no real inductor compile
+
+    monkeypatch.setattr(torch, "compile", recording_passthrough)
+    dataset = make_dataset(raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
+    predictor = _make_predictor(tiny_3d_model(), "cpu", amp="off", compile=True)
+
+    first = predictor(dataset)
+    second = predictor(dataset)
+
+    assert len(calls) == 1, "torch.compile must run exactly once per predictor"
+    assert first.shape == second.shape == (1, 16, 96, 96)
+
+
+def test_compile_failure_is_not_retried_on_later_calls(monkeypatch, caplog):
+    """A graceful first-forward fallback is remembered: no compile retry."""
+    calls: list = []
+
+    class FailingCompiled(torch.nn.Module):
+        def __init__(self, inner):
+            super().__init__()
+            self.inner = inner
+
+        def forward(self, x):
+            raise RuntimeError("inductor: fatal error: cuda.h: No such file")
+
+    def failing_compile(model, *args, **kwargs):
+        calls.append(model)
+        return FailingCompiled(model)
+
+    monkeypatch.setattr(torch, "compile", failing_compile)
+    dataset = make_dataset(raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
+    predictor = _make_predictor(tiny_3d_model(), "cpu", amp="off", compile=True)
+
+    with caplog.at_level("WARNING"):
+        first = predictor(dataset)
+        second = predictor(dataset)
+
+    assert first.shape == second.shape == (1, 16, 96, 96)
+    assert np.isfinite(second).all()
+    assert len(calls) == 1, "a known-failing compile must not be retried"
+
+
 def test_unet_prediction_forwards_tuning_options(tmp_path, monkeypatch):
     """`unet_prediction` shares the tuning options with the sizing probe and predictor."""
     calls: dict = {}
@@ -244,7 +405,7 @@ def test_unet_prediction_forwards_tuning_options(tmp_path, monkeypatch):
         def __init__(self, **kwargs):
             calls["amp"] = kwargs.get("amp")
             calls["channels_last_3d"] = kwargs.get("channels_last_3d")
-            calls["compile"] = kwargs.get("compile")
+            calls["has_compile_arg"] = "compile" in kwargs
 
         def __call__(self, dataset):
             return np.zeros((1,) + dataset.raw.shape, dtype="float32")
@@ -267,16 +428,20 @@ def test_unet_prediction_forwards_tuning_options(tmp_path, monkeypatch):
         disable_tqdm=True,
         amp="off",
         channels_last_3d=False,
-        compile=True,
     )
 
     assert calls == {
         "probe_amp": "off",
         "amp": "off",
         "channels_last_3d": False,
-        "compile": True,
+        "has_compile_arg": False,
     }
     assert pmaps.shape == (1, 16, 96, 96)
+
+
+def test_unet_prediction_has_no_compile_argument():
+    """Compile is decided by `ArrayPredictor`; callers cannot pass it."""
+    assert "compile" not in inspect.signature(unet_prediction).parameters
 
 
 @requires_cuda

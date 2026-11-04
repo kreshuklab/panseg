@@ -214,7 +214,6 @@ def unet_prediction(
     tracker=None,
     amp: AmpSetting = "auto",
     channels_last_3d: bool = True,
-    compile: bool = True,
 ) -> np.ndarray:
     """Generate prediction from raw data using a specified 3D U-Net model.
 
@@ -247,12 +246,6 @@ def unet_prediction(
             channels_last_3d memory format (measured faster and leaner for
             inference; kept off on CPU and for 2D models). Outputs are
             unaffected. Defaults to True.
-        compile (bool, optional): wrap the inference model in `torch.compile`
-            (measured 1.28x faster, -36% peak memory at a one-time compile cost
-            per patch shape). In some environments triton additionally needs
-            ``C_INCLUDE_PATH=/usr/local/cuda/include``
-            If compilation fails at the first forward, prediction
-            degrades to eager with a warning. Defaults to True.
 
     Returns:
         np.ndarray: The predicted boundaries as a 3D (Z, Y, X) or 4D (C, Z, Y, X) array, normalized between 0 and 1.
@@ -348,7 +341,6 @@ def unet_prediction(
         tracker=tracker,
         amp=amp,
         channels_last_3d=channels_last_3d,
-        compile=compile,
     )
 
     if int(model_config["in_channels"]) > 1:  # if multi-channel input

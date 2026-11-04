@@ -30,6 +30,10 @@ from panseg.functionals.transfer import to_device
 
 logger = logging.getLogger(__name__)
 
+# Empirical amortization threshold: below this many forward passes the one-time
+# compile cost outweighs the per-batch saving.
+COMPILE_MIN_BATCHES = 200
+
 
 class ArrayPredictor:
     """Predictor class for applying a model to a dataset and returning the results as numpy arrays.
@@ -57,8 +61,13 @@ class ArrayPredictor:
         amp (AmpSetting, optional): precision mode, see `unet_prediction`.
         channels_last_3d (bool, optional): channels_last_3d memory format for
             3D models on CUDA, see `unet_prediction`.
-        compile (bool, optional): opt-in `torch.compile`, see `unet_prediction`
-            (including the triton environment caveat).
+        compile (bool | None, optional): torch.compile control. None (default)
+            compiles automatically only on CUDA and only when the number of
+            prediction batches amortizes the one-time compile cost
+            (COMPILE_MIN_BATCHES); True forces compilation; False forces eager
+            execution. In some environments triton additionally needs
+            C_INCLUDE_PATH=/usr/local/cuda/include; a failed compile falls back
+            to eager with a warning.
 
     Attributes:
         batch_size (int): Calculated batch size based on device capabilities and model requirements.
@@ -88,7 +97,7 @@ class ArrayPredictor:
         tracker=None,
         amp: AmpSetting = "auto",
         channels_last_3d: bool = True,
-        compile: bool = False,
+        compile: bool | None = None,
     ):
         self.device = device
         self.tracker = tracker
@@ -158,15 +167,52 @@ class ArrayPredictor:
         if self.channels_last_3d:
             self.model = self.model.to(memory_format=torch.channels_last_3d)
 
-        # opt-in torch.compile (one-time compile cost per patch shape)
+        # `torch.compile` is decided per `__call__` from the number of batches
+        # (see `_maybe_compile`); `None` means auto.
+        self.compile = compile
         self._eager_model = self.model
         self._compiled = False
-        if compile:
-            try:
-                self.model = torch.compile(self.model)
-                self._compiled = True
-            except Exception as e:
-                logger.warning("torch.compile is unavailable (%s); running eager.", e)
+        # a failed compile (eager fallback) is remembered so later `__call__`s
+        # do not retry a known-failing compile
+        self._compile_failed = False
+
+    def _should_compile(self, num_batches: int) -> bool:
+        if self.compile is not None:
+            return self.compile
+        return (
+            torch.device(self.device).type == "cuda"
+            and num_batches >= COMPILE_MIN_BATCHES
+        )
+
+    def _maybe_compile(self, num_batches: int) -> None:
+        if self._compiled or self._compile_failed:
+            return
+        if self._should_compile(num_batches):
+            self._enable_compile(num_batches)
+        elif self.compile is None:
+            if torch.device(self.device).type != "cuda":
+                logger.info(
+                    "Skipping torch.compile: device %s is not CUDA.", self.device
+                )
+            else:
+                logger.info(
+                    "Skipping torch.compile: %d batches < %d required to amortize "
+                    "the compile cost.",
+                    num_batches,
+                    COMPILE_MIN_BATCHES,
+                )
+
+    def _enable_compile(self, num_batches: int) -> None:
+        # Capture the execution-eager model after DataParallel / channels_last_3d
+        # wrapping so the fallback in `_forward` is exactly that model.
+        self._eager_model = self.model
+        try:
+            self.model = torch.compile(self.model)
+            self._compiled = True
+            logger.info("Using torch.compile for %d batches.", num_batches)
+        except Exception as e:
+            self._compile_failed = True
+            logger.warning("torch.compile is unavailable (%s); running eager.", e)
 
     def _forward(self, input_: torch.Tensor) -> torch.Tensor:
         """Model forward, degrading `torch.compile` to eager on first-forward failure.
@@ -188,6 +234,7 @@ class ArrayPredictor:
             )
             self.model = self._eager_model
             self._compiled = False
+            self._compile_failed = True
             return self.model(input_)
 
     def __call__(self, test_dataset: Dataset) -> np.ndarray:
@@ -204,9 +251,10 @@ class ArrayPredictor:
             pin_memory=True,
             collate_fn=default_prediction_collate,
         )
+        num_batches = len(test_loader)
 
         if self.verbose_logging:
-            logger.info(f"Running prediction on {len(test_loader)} batches")
+            logger.info(f"Running prediction on {num_batches} batches")
 
         # dimensionality of the output prediction
         volume_shape = self.volume_shape(test_dataset)
@@ -241,9 +289,12 @@ class ArrayPredictor:
         # It is necessary for batchnorm/dropout layers if present (the final
         # activation is applied explicitly, see `_activate`)
         self.model.eval()
+        # decide on `torch.compile` from the actual number of batches; the 2D
+        # check above deliberately sees the uncompiled model
+        self._maybe_compile(num_batches)
         # Run prediction on the entire input dataset
         if self.tracker is not None:
-            self.tracker.total = len(test_loader)
+            self.tracker.total = num_batches
         # every patch has the same shape, so cuDNN autotuning pays off; the
         # forward passes run in the same precision mode as the memory probes
         with cudnn_benchmark(), amp_context(self.amp, self.device), torch.no_grad():
