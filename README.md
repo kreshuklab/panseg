@@ -75,6 +75,10 @@ This project stated 2020 as `PlantSeg`, but its capabilities are not
 restricted to plant cells! To better reflect that, for the 2.0 release
 we changed the name to `PanSeg`, referring to plant and animal cells.
 
+## User survey
+
+This is an approved de.NBI service. Please help us improve by taking our short [user survey](https://www.surveymonkey.de/r/denbi-service?sc=hd-hub&tool=panseg)
+
 ## Citation
 
 ### PanSeg 2.0
