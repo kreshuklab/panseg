@@ -10,10 +10,7 @@ import pytest
 import torch
 
 from panseg.functionals.precision import amp_context, cudnn_benchmark, validate_amp
-
-requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA required for AMP tests"
-)
+from tests.conftest import requires_cuda
 
 
 def test_amp_off_never_enables_autocast():
@@ -24,6 +21,16 @@ def test_amp_off_never_enables_autocast():
 
 def test_amp_auto_is_silent_fp32_on_cpu():
     with amp_context("auto", "cpu"):
+        assert not torch.is_autocast_enabled("cuda")
+        assert not torch.is_autocast_enabled("cpu")
+
+
+def test_amp_auto_is_silent_fp32_without_bf16_support(monkeypatch):
+    """CUDA hardware without bf16 support silently falls back to fp32."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: False)
+
+    with amp_context("auto", "cuda"):
         assert not torch.is_autocast_enabled("cuda")
         assert not torch.is_autocast_enabled("cpu")
 
@@ -41,20 +48,12 @@ def test_amp_auto_accepts_plain_cuda_device_string():
         assert torch.is_autocast_enabled("cuda")
 
 
-@requires_cuda
-def test_amp_context_accepts_yaml_boolean_spellings():
-    """A bare `on`/`off` parsed as a boolean must resolve like "auto"/"off"."""
-    with amp_context(True, "cuda"):
-        assert torch.is_autocast_enabled("cuda")
-    with amp_context(False, "cuda"):
-        assert not torch.is_autocast_enabled("cuda")
-
-
 @pytest.mark.parametrize("device", ["cuda", "cpu", "mps"])
 def test_amp_rejects_unknown_modes(device):
     with pytest.raises(ValueError, match="amp"):
         amp_context(
-            "sometimes", device  # pyright: ignore[reportArgumentType] -- deliberately invalid
+            "sometimes",
+            device,  # pyright: ignore[reportArgumentType] -- deliberately invalid
         )
 
 

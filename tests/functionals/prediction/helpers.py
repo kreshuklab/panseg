@@ -1,17 +1,25 @@
 """Shared helpers for the prediction test modules (probes, AMP, inference opts)."""
 
+from pathlib import Path
+
 import numpy as np
-import pytest
 import torch
 
 from panseg.functionals.prediction.utils.array_dataset import ArrayDataset
 from panseg.functionals.prediction.utils.slice_builder import SliceBuilder
 from panseg.functionals.training.augs import get_test_augmentations
 from panseg.functionals.training.model import UNet2D, UNet3D
+from tests.conftest import requires_cuda
 
-requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="CUDA required for AMP tests"
-)
+__all__ = [
+    "MODEL_CONFIG",
+    "make_dataset",
+    "raw_volume",
+    "requires_cuda",
+    "save_model_files",
+    "tiny_2d_model",
+    "tiny_3d_model",
+]
 
 MODEL_CONFIG = """model:
   name: UNet3D
@@ -38,6 +46,17 @@ def tiny_3d_model(in_channels: int = 1) -> UNet3D:
 def tiny_2d_model() -> UNet2D:
     """2D counterpart of `tiny_3d_model` for the 2D probe paths."""
     return UNet2D(in_channels=1, out_channels=1, f_maps=8, num_levels=2)
+
+
+def save_model_files(tmp_path: Path) -> tuple[Path, Path]:
+    """Save a small UNet3D like a zoo model (config + weights)."""
+    torch.manual_seed(0)
+    model = UNet3D(in_channels=1, out_channels=1, final_sigmoid=True, f_maps=[8, 16])
+    weights_path = tmp_path / "best_checkpoint.pytorch"
+    torch.save(model.state_dict(), weights_path)
+    config_path = tmp_path / "config_train.yml"
+    config_path.write_text(MODEL_CONFIG)
+    return config_path, weights_path
 
 
 def make_dataset(

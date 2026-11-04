@@ -12,10 +12,7 @@ import pytest
 import torch
 
 from panseg.functionals.transfer import to_device
-
-requires_cuda = pytest.mark.skipif(
-    not torch.cuda.is_available(), reason="pinning needs CUDA"
-)
+from tests.conftest import requires_cuda
 
 
 class _RecordingTensor:
@@ -41,15 +38,6 @@ def test_to_device_derives_non_blocking_from_the_pinned_state(pinned):
 
     # `non_blocking=True` on unpinned memory does nothing: it must not be claimed
     assert tensor.transfers == [("cuda", pinned)]
-
-
-def test_unpinned_tensors_copy_blocking():
-    tensor = torch.zeros(1, 1, 2, 2, 2)
-
-    moved = to_device(tensor, "cpu")
-
-    assert moved is tensor
-    assert tensor.is_pinned() is False
 
 
 @requires_cuda

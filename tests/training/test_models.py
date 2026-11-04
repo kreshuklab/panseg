@@ -2,13 +2,7 @@ import pytest
 import torch
 
 from panseg.functionals.training.embeddings import embeddings_to_affinities
-from panseg.functionals.training.model import (
-    SpocoNet,
-    UNet2D,
-    UNet2DProbabilities,
-    UNet3D,
-    UNet3DProbabilities,
-)
+from panseg.functionals.training.model import SpocoNet, UNet2D
 from tests.conftest import IS_CUDA_AVAILABLE
 
 
@@ -64,12 +58,17 @@ class TestOutputContract:
 
     @staticmethod
     def _model(final_sigmoid: bool, out_channels: int = 1, **kwargs) -> UNet2D:
+        # "gcr" (GroupNorm) has no mode-dependent state, unlike BatchNorm or
+        # Dropout. The train/eval outputs of these fixtures are therefore equal
+        # by construction; that equality only pins that the contract does not
+        # depend on the mode, not a general train/eval equivalence.
         torch.manual_seed(0)
         return UNet2D(
             in_channels=3,
             out_channels=out_channels,
             final_sigmoid=final_sigmoid,
             f_maps=(8, 16),
+            layer_order="gcr",
             **kwargs,
         )
 
@@ -80,13 +79,23 @@ class TestOutputContract:
         with torch.no_grad():
             model.train()
             train_out = model(x)
+            train_probs = model.predict(x)
             model.eval()
             eval_out = model(x)
+            eval_probs = model.predict(x)
 
-        # mode-independent contract: the same logits in both modes
-        assert torch.equal(train_out, eval_out)
-        # logits, not probabilities: sigmoid outputs are strictly positive
+        # the real contract, asserted in each mode: predict() is
+        # activate(forward()), and forward() returns logits, not probabilities
+        # (sigmoid outputs would be strictly positive)
+        torch.testing.assert_close(train_probs, model.activate(train_out))
+        torch.testing.assert_close(eval_probs, model.activate(eval_out))
+        assert (train_out < 0).any()
         assert (eval_out < 0).any()
+
+        # "gcr" (GroupNorm) carries no mode-dependent state, so the values
+        # happen to be identical here; this is not a general claim that
+        # forward() is mode-invariant for every architecture
+        assert torch.equal(train_out, eval_out)
 
     def test_predict_returns_probabilities(self):
         torch.manual_seed(1)
@@ -97,12 +106,13 @@ class TestOutputContract:
             logits = model(x)
             probs = model.predict(x)
 
-        assert probs.shape == logits.shape
-        assert (probs >= 0).all() and (probs <= 1).all()
-        torch.testing.assert_close(probs, torch.sigmoid(logits))
+            assert probs.shape == logits.shape
+            assert (probs >= 0).all() and (probs <= 1).all()
+            torch.testing.assert_close(probs, torch.sigmoid(logits))
+            torch.testing.assert_close(probs, model.activate(logits))
 
-        # mode-independent contract: the same probabilities in both modes
-        with torch.no_grad():
+            # the contract holds in train mode too; with "gcr" (GroupNorm) the
+            # values themselves cannot change between modes
             model.train()
             assert torch.equal(model.predict(x), probs)
 
@@ -124,38 +134,3 @@ class TestOutputContract:
         with torch.no_grad():
             model.eval()
             assert torch.equal(model.predict(x), model(x))
-
-    @pytest.mark.parametrize(
-        "base_cls, probabilities_cls, volume_shape",
-        [
-            (UNet2D, UNet2DProbabilities, (2, 3, 32, 32)),
-            (UNet3D, UNet3DProbabilities, (2, 3, 16, 16, 16)),
-        ],
-    )
-    def test_probabilities_subclass_is_state_dict_compatible(
-        self, base_cls, probabilities_cls, volume_shape
-    ):
-        """Old weights must stay loadable: the export subclass adds no state.
-
-        The subclass is what `biio.py` exports; it must have exactly the
-        parameter/buffer names of the trained architecture (a wrapper would
-        rename them and break `PytorchStateDictWeightsDescr` loading).
-        """
-        torch.manual_seed(0)
-        kwargs = dict(in_channels=3, out_channels=1, final_sigmoid=True, f_maps=(8, 16))
-        base = base_cls(**kwargs)
-        probabilities = probabilities_cls(**kwargs)
-
-        state = base.state_dict()
-        # exact key set (parameters *and* buffers), no renames, no additions
-        assert set(state) == set(probabilities.state_dict())
-        # strict load in both directions
-        probabilities.load_state_dict(state)
-        base.load_state_dict(probabilities.state_dict())
-
-        x = torch.randn(*volume_shape)
-        base.eval()
-        probabilities.eval()
-        with torch.no_grad():
-            # the subclass's forward is exactly the base model's probability output
-            torch.testing.assert_close(probabilities(x), base.predict(x))

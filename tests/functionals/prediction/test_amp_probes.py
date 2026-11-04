@@ -8,7 +8,6 @@ discarded. The feasibility search and `ArrayPredictor` must pass their
 configured mode down to the probes.
 """
 
-import numpy as np
 import pytest
 import torch
 from torch import nn
@@ -16,6 +15,7 @@ from torch import nn
 from panseg.functionals.prediction.utils import array_predictor, size_finder
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
 from panseg.functionals.prediction.utils.size_finder import (
+    find_batch_size,
     find_feasible_patch_and_halo_shapes,
     probe_max_patch_shape,
     will_CUDA_OOM,
@@ -41,64 +41,52 @@ def _record_autocast(model: nn.Module) -> list[tuple[bool, torch.dtype]]:
     return seen
 
 
-@requires_cuda
-@pytest.mark.parametrize("amp, enabled", [("auto", True), ("off", False)])
-def test_find_batch_size_probes_in_the_resolved_precision_mode(amp, enabled):
-    from panseg.functionals.prediction.utils.size_finder import find_batch_size
+def _probe_find_batch_size(model, amp):
+    find_batch_size(model, 1, (8, 8, 8), (0, 0, 0), "cuda", amp=amp)
 
-    model = tiny_3d_model()
+
+def _probe_find_batch_size_training(model, amp):
+    find_batch_size(model, 1, (8, 8, 8), (0, 0, 0), "cuda", for_training=True, amp=amp)
+
+
+def _probe_will_cuda_oom(model, amp):
+    will_CUDA_OOM(model, 1, (8, 8, 8), (0, 0, 0), 1, "cuda", amp=amp)
+
+
+def _probe_max_patch_shape(model, amp):
+    # 2D models take the linear search, which starts right at the top and is
+    # therefore the fastest probe path to observe on a real GPU
+    probe_max_patch_shape(model, 1, "cuda", amp=amp)
+
+
+@requires_cuda
+@pytest.mark.parametrize(
+    ("probe", "model_factory"),
+    [
+        (_probe_find_batch_size, tiny_3d_model),
+        (_probe_find_batch_size_training, tiny_3d_model),
+        (_probe_will_cuda_oom, tiny_3d_model),
+        (_probe_max_patch_shape, tiny_2d_model),
+    ],
+    ids=[
+        "find_batch_size",
+        "find_batch_size_training",
+        "will_CUDA_OOM",
+        "probe_max_patch_shape",
+    ],
+)
+@pytest.mark.parametrize("amp, enabled", [("auto", True), ("off", False)])
+def test_probes_run_in_the_resolved_precision_mode(probe, model_factory, amp, enabled):
+    model = model_factory()
     seen = _record_autocast(model)
 
-    find_batch_size(model, 1, (8, 8, 8), (0, 0, 0), "cuda", amp=amp)
+    probe(model, amp)
 
     assert seen, "probe ran no forward pass"
     for autocast_on, autocast_dtype in seen:
         assert autocast_on is enabled
         if enabled:
             assert autocast_dtype == torch.bfloat16
-
-
-@requires_cuda
-@pytest.mark.parametrize("amp, enabled", [("auto", True), ("off", False)])
-def test_find_batch_size_training_probe_in_the_resolved_precision_mode(amp, enabled):
-    from panseg.functionals.prediction.utils.size_finder import find_batch_size
-
-    model = tiny_3d_model()
-    seen = _record_autocast(model)
-
-    find_batch_size(model, 1, (8, 8, 8), (0, 0, 0), "cuda", for_training=True, amp=amp)
-
-    assert seen, "probe ran no forward pass"
-    for autocast_on, _ in seen:
-        assert autocast_on is enabled
-
-
-@requires_cuda
-@pytest.mark.parametrize("amp, enabled", [("auto", True), ("off", False)])
-def test_will_cuda_oom_probes_in_the_resolved_precision_mode(amp, enabled):
-    model = tiny_3d_model()
-    seen = _record_autocast(model)
-
-    will_CUDA_OOM(model, 1, (8, 8, 8), (0, 0, 0), 1, "cuda", amp=amp)
-
-    assert seen, "probe ran no forward pass"
-    for autocast_on, _ in seen:
-        assert autocast_on is enabled
-
-
-@requires_cuda
-@pytest.mark.parametrize("amp, enabled", [("auto", True), ("off", False)])
-def test_probe_max_patch_shape_runs_in_the_resolved_precision_mode(amp, enabled):
-    # 2D models take the linear search, which starts right at the top and is
-    # therefore the fastest probe path to observe on a real GPU
-    model = tiny_2d_model()
-    seen = _record_autocast(model)
-
-    probe_max_patch_shape(model, 1, "cuda", amp=amp)
-
-    assert seen, "probe ran no forward pass"
-    for autocast_on, _ in seen:
-        assert autocast_on is enabled
 
 
 class _RecordingProbe:

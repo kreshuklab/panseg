@@ -10,7 +10,9 @@ these values.
 Only regenerate the golden if the fence itself has to move (a deliberate,
 documented contract change), and only after the change has been reviewed: the
 file is the independent pre-change record, so regenerating it from the new code
-drops that record. Adjust the two "pre-change" lines that use
+drops that record. To make that explicit, ``main`` refuses to overwrite an
+existing output file unless the reviewed change sets
+``PANSEG_REGENERATE_GOLDEN=1``. Adjust the two "pre-change" lines that use
 ``model.predict`` to ``model(x)`` when generating against pre-change code.
 
 Run from the checkout root::
@@ -19,6 +21,7 @@ Run from the checkout root::
         tests/resources/gen_output_contract_golden.py [OUT_PATH]
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -28,15 +31,10 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from panseg.functionals.prediction import unet_prediction  # noqa: E402
-from panseg.functionals.prediction.utils.array_predictor import (
-    ArrayPredictor,  # noqa: E402
-)
-from panseg.functionals.training.model import UNet2D, UNet3D  # noqa: E402
-from tests.functionals.prediction.helpers import (  # noqa: E402
-    MODEL_CONFIG,
-    make_dataset,
-)
+from panseg.functionals.prediction import unet_prediction
+from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
+from panseg.functionals.training.model import UNet2D, UNet3D
+from tests.functionals.prediction.helpers import MODEL_CONFIG, make_dataset
 
 DEFAULT_OUT = Path(__file__).resolve().parent / "output_contract_golden.pt"
 
@@ -64,6 +62,13 @@ def make_2d() -> UNet2D:
 
 
 def main(out_path: Path = DEFAULT_OUT) -> None:
+    if out_path.exists() and os.environ.get("PANSEG_REGENERATE_GOLDEN") != "1":
+        raise SystemExit(
+            f"{out_path} already exists and is the pre-change record.\n"
+            "Regenerating it is a reviewed contract change, not a routine "
+            "refresh: set PANSEG_REGENERATE_GOLDEN=1 to overwrite it "
+            "deliberately."
+        )
     torch.manual_seed(0)
     model_3d = make_3d(final_sigmoid=True)
     torch.manual_seed(1)
@@ -137,6 +142,7 @@ def main(out_path: Path = DEFAULT_OUT) -> None:
 
     torch.save(
         {
+            "golden_kind": "pre-change-output-contract",
             "state_unet3d": model_3d.state_dict(),
             "state_unet3d_softmax": model_3d_softmax.state_dict(),
             "state_unet2d": model_2d.state_dict(),

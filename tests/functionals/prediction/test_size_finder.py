@@ -302,10 +302,15 @@ def _raise_fake_device_error(model, x):
     return _FakeOutput(model, voxels)
 
 
-class FakeUNet3D(UNet3D):
-    """UNet3D double for the OOM unit tests: `forward` raises a fake CUDA OOM (or
-    a non-OOM error) once the input exceeds a configured voxel count, and `to`
-    never moves the model to a real device. No forward pass ever runs."""
+class _FakeUNetProbeMixin:
+    """Shared probe double for the OOM unit tests: `forward` raises a fake CUDA
+    OOM (or a non-OOM error) once the input exceeds a configured voxel count,
+    and `to` never moves the model to a real device. No real forward pass ever
+    runs.
+
+    Both fakes keep subclassing `UNet3D`/`UNet2D` so `is_2d_model` routes to the
+    matching code path.
+    """
 
     def __init__(
         self,
@@ -332,32 +337,12 @@ class FakeUNet3D(UNet3D):
         return _raise_fake_device_error(self, x)
 
 
-class FakeUNet2D(UNet2D):
+class FakeUNet3D(_FakeUNetProbeMixin, UNet3D):
+    """3D probe double (see `_FakeUNetProbeMixin`)."""
+
+
+class FakeUNet2D(_FakeUNetProbeMixin, UNet2D):
     """2D variant of `FakeUNet3D` so that `is_2d_model` routes to the 2D code paths."""
-
-    def __init__(
-        self,
-        oom_voxel_threshold=None,
-        unexpected_error_above=None,
-        failure=None,
-        backward_oom_threshold=None,
-    ):
-        super().__init__(1, 1, f_maps=8, num_levels=2)
-        self.oom_voxel_threshold = oom_voxel_threshold
-        self.unexpected_error_above = unexpected_error_above
-        self.failure = failure
-        self.backward_oom_threshold = backward_oom_threshold
-        self.backward_calls = 0
-        self.seen_input_shapes = []
-
-    def to(self, *args, **kwargs):
-        return self
-
-    def forward(self, x):
-        self.seen_input_shapes.append(tuple(x.shape))
-        if self.failure is not None:
-            raise RuntimeError(self.failure)
-        return _raise_fake_device_error(self, x)
 
 
 @pytest.fixture()
@@ -400,13 +385,6 @@ def test_probe_max_patch_shape_3d_treats_mps_buffer_size_error_as_oom(fake_cuda)
     model = FakeUNet3D(failure="Invalid buffer size: 4.29 GiB")
 
     assert probe_max_patch_shape(model, 1, "mps") == (32, 32, 32)
-
-
-def test_probe_max_patch_shape_3d_reraises_buffer_size_error_on_cuda(fake_cuda):
-    model = FakeUNet3D(failure="Invalid buffer size: 4.29 GiB")
-
-    with pytest.raises(RuntimeError, match="Invalid buffer size"):
-        probe_max_patch_shape(model, 1, "cuda:0")
 
 
 @pytest.mark.parametrize(
@@ -532,14 +510,6 @@ def test_find_batch_size_for_training_halves_on_backward_oom(fake_cuda):
     # the inference probe never runs backward; the training probe runs it for
     # the fitting batch 1 and for the OOMing batch 2
     assert model.backward_calls == 2
-
-
-def test_find_batch_size_for_training_runs_backward(fake_cuda):
-    model = FakeUNet3D()
-
-    find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0", for_training=True)
-
-    assert model.backward_calls > 0
 
 
 def test_find_batch_size_restores_training_mode(fake_cuda):

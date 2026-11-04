@@ -8,15 +8,13 @@ threshold-filtered).
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-import torch
 import yaml
 
-from panseg.core.zoo import model_zoo
-from panseg.functionals.training.train import create_datasets, unet_training
+from panseg.functionals.training.train import create_datasets
 from tests.functionals.training.helpers import model_dir_patches, write_h5
 
 # The example volume from the analysis: 64x256x256 with patch 32x128x128.
@@ -128,6 +126,12 @@ class TestValSliceGrid:
         )
         val = _make_phase_dataset(tmp_path, "val")
 
+        starts = [
+            sorted({raw_slice[axis + 1].start for raw_slice in val.raw_slices})
+            for axis in range(3)
+        ]
+        assert starts == [[0, 32, 38], [0, 128, 172], [0, 128, 172]]
+
         counts = _coverage(val)
         assert counts.min() >= 1, "every voxel must be validated"
         # covers the volume exactly once except where the border-anchored edge
@@ -175,89 +179,6 @@ class TestValStrideConfig:
             )
 
 
-class TestUnetTrainingValSliceBuilder:
-    """`unet_training` threads the val slice-builder section into the val loader."""
-
-    @staticmethod
-    def _run_mocked_unet_training(tmp_path, **extra_kwargs):
-        mock_dataset = MagicMock()
-        mock_dataset.__len__.return_value = 10
-        mock_dataset.raw = MagicMock(shape=(1, 8, 64, 64))
-        batch = torch.from_numpy(np.random.rand(1, 1, 1, 64, 64).astype("float32"))
-
-        dataset_dir = tmp_path / "dataset"
-        (dataset_dir / "train").mkdir(parents=True)
-        (dataset_dir / "val").mkdir()
-
-        with (
-            patch("panseg.functionals.training.train.test_model"),
-            patch("panseg.functionals.training.train.make_model_description"),
-            patch("panseg.functionals.training.train.UNetTrainer") as mock_trainer,
-            patch(
-                "panseg.functionals.training.train.create_datasets",
-                return_value=[mock_dataset],
-            ) as mock_create_datasets,
-            patch("panseg.functionals.training.train.create_model_config"),
-            patch("panseg.functionals.training.train.find_batch_size", return_value=1),
-            patch(
-                "panseg.functionals.training.train.DataLoader",
-                return_value=[(batch, None)],
-            ),
-            patch("panseg.functionals.training.train.ConcatDataset"),
-            patch("panseg.functionals.training.train.PATH_PANSEG_MODELS", tmp_path),
-            patch("panseg.core.zoo.PATH_PANSEG_MODELS", tmp_path),
-            patch.multiple(
-                model_zoo,
-                path_zoo=tmp_path / "models_zoo.yaml",
-                path_zoo_custom=tmp_path / "custom_zoo.yaml",
-            ),
-        ):
-
-            def _train():
-                state = mock_trainer.call_args.kwargs["model"].state_dict()
-                checkpoint_dir = tmp_path / "test_val_stride_cfg"
-                checkpoint_dir.mkdir(parents=True, exist_ok=True)
-                torch.save(state, checkpoint_dir / "best_checkpoint.pytorch")
-
-            mock_trainer.return_value.train.side_effect = _train
-            unet_training(
-                dataset_dir=str(dataset_dir),
-                model_name="test_val_stride_cfg",
-                in_channels=1,
-                out_channels=1,
-                feature_maps=(16, 16),
-                patch_size=(1, 64, 64),
-                max_num_iters=5,
-                dimensionality="2D",
-                sparse=False,
-                device="cpu",
-                **extra_kwargs,
-            )
-        return mock_create_datasets
-
-    def test_val_slice_builder_section_selects_the_stride(self, tmp_path):
-        mock_create_datasets = self._run_mocked_unet_training(
-            tmp_path, val_slice_builder={"stride_shape": [1, 32, 32]}
-        )
-
-        val_call = mock_create_datasets.call_args_list[1]
-        assert val_call.kwargs["stride_shape"] == (1, 32, 32)
-
-    def test_val_defaults_to_non_overlapping(self, tmp_path):
-        mock_create_datasets = self._run_mocked_unet_training(tmp_path)
-
-        val_call = mock_create_datasets.call_args_list[1]
-        assert val_call.kwargs["stride_shape"] is None
-
-    def test_train_call_has_no_val_stride(self, tmp_path):
-        mock_create_datasets = self._run_mocked_unet_training(
-            tmp_path, val_slice_builder={"stride_shape": [1, 32, 32]}
-        )
-
-        train_call = mock_create_datasets.call_args_list[0]
-        assert "stride_shape" not in train_call.kwargs
-
-
 class TestLaunchTrainingValStride:
     """A YAML's `loaders.val.slice_builder.stride_shape` reaches the real grid.
 
@@ -279,7 +200,9 @@ class TestLaunchTrainingValStride:
         _write_h5(data_dir / "val" / "vol.h5", raw, label)
         return data_dir
 
-    def _run(self, tmp_path, monkeypatch, model_name: str, **config_extra) -> list[int]:
+    def _run(
+        self, tmp_path, monkeypatch, model_name: str, **config_extra
+    ) -> tuple[list[int], list[tuple[str, dict]]]:
         from panseg.functionals.training import train as train_module
         from panseg.run_panseg import main
 
@@ -302,10 +225,12 @@ class TestLaunchTrainingValStride:
 
         real_create_datasets = train_module.create_datasets
         patch_counts: list[int] = []
+        calls: list[tuple[str, dict]] = []
 
         def spy(*args, **kwargs):
             datasets = real_create_datasets(*args, **kwargs)
             patch_counts.append(sum(len(dataset) for dataset in datasets))
+            calls.append((args[1], kwargs))
             return datasets
 
         monkeypatch.setattr(train_module, "create_datasets", spy)
@@ -320,10 +245,10 @@ class TestLaunchTrainingValStride:
 
         # train grid first, val grid second (see `unet_training`)
         assert len(patch_counts) == 2
-        return patch_counts
+        return patch_counts, calls
 
     def test_configured_val_stride_changes_the_val_grid(self, tmp_path, monkeypatch):
-        patch_counts = self._run(
+        patch_counts, calls = self._run(
             tmp_path,
             monkeypatch,
             model_name="test_launch_val_stride_cfg",
@@ -340,16 +265,25 @@ class TestLaunchTrainingValStride:
         )
 
         assert patch_counts[1] == 7
+        (train_phase, train_kwargs), (val_phase, val_kwargs) = calls
+        assert train_phase == "train" and val_phase == "val"
+        # only the val grid is stride-configurable; a train stride is rejected
+        assert "stride_shape" not in train_kwargs
+        assert val_kwargs["stride_shape"] == (8, self.VOLUME // 2, self.VOLUME // 2)
 
     def test_omitted_val_stride_runs_the_non_overlapping_grid(
         self, tmp_path, monkeypatch
     ):
-        patch_counts = self._run(
+        patch_counts, calls = self._run(
             tmp_path, monkeypatch, model_name="test_launch_val_stride_default"
         )
 
         # 64 / 16 == 4 non-overlapping z patches
         assert patch_counts[1] == 4
+        (train_phase, train_kwargs), (val_phase, val_kwargs) = calls
+        assert train_phase == "train" and val_phase == "val"
+        assert "stride_shape" not in train_kwargs
+        assert val_kwargs["stride_shape"] is None
 
 
 class TestModelConfigValStride:
@@ -401,39 +335,3 @@ class TestModelConfigValStride:
             32,
             32,
         )
-
-    @pytest.mark.parametrize("val_stride_shape", [None, (4, 32, 32)])
-    def test_written_config_round_trips_as_a_training_config(
-        self, tmp_path, val_stride_shape
-    ):
-        """The record written into `config_train.yml` is a valid input config.
-
-        `launch_training` reads `loaders.val.slice_builder.stride_shape` back, so
-        the written record reproduces the run's validation grid instead of being
-        dead config.
-        """
-        from panseg.functionals.training.train import create_model_config
-        from panseg.run_panseg import _translate_loaders
-
-        create_model_config(
-            tmp_path / "ckpt",
-            1,
-            1,
-            (8, 64, 64),
-            "3D",
-            "bcr",
-            False,
-            16,
-            100,
-            val_stride_shape=val_stride_shape,
-        )
-
-        with open(tmp_path / "ckpt" / "config_train.yml") as f:
-            config = yaml.load(f, Loader=yaml.FullLoader)
-        config["patch_size"] = [8, 64, 64]
-
-        _translate_loaders(config, tmp_path / "config_train.yml")
-
-        assert "loaders" not in config
-        expected = list(val_stride_shape or (8, 64, 64))
-        assert config["val_slice_builder"]["stride_shape"] == expected

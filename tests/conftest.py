@@ -25,6 +25,9 @@ VOXEL_SIZE = (0.235, 0.15, 0.15)
 KEY_ZARR = "volumes/new"
 
 IS_CUDA_AVAILABLE = torch.cuda.is_available()
+requires_cuda = pytest.mark.skipif(
+    not IS_CUDA_AVAILABLE, reason="CUDA required for this test"
+)
 
 
 @pytest.fixture

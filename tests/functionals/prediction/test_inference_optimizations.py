@@ -8,8 +8,6 @@ needs `C_INCLUDE_PATH=/usr/local/cuda/include` in some environments) and must
 degrade gracefully to eager when compilation fails.
 """
 
-from pathlib import Path
-
 import numpy as np
 import pytest
 import torch
@@ -18,12 +16,12 @@ from panseg.functionals.prediction import prediction as prediction_module
 from panseg.functionals.prediction import unet_prediction
 from panseg.functionals.prediction.utils.array_dataset import ArrayDataset
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
-from panseg.functionals.training.model import UNet3D
 from tests.functionals.prediction.helpers import (
-    MODEL_CONFIG,
     make_dataset,
     raw_volume,
     requires_cuda,
+    save_model_files,
+    tiny_2d_model,
     tiny_3d_model,
 )
 
@@ -33,15 +31,20 @@ def _predict(model, dataset, device: str, in_channels: int = 1, **kwargs) -> np.
 
 
 def _make_predictor(
-    model, device: str, in_channels: int = 1, **kwargs
+    model,
+    device: str,
+    in_channels: int = 1,
+    patch: tuple[int, int, int] = (8, 64, 64),
+    patch_halo: tuple[int, int, int] = (2, 8, 8),
+    **kwargs,
 ) -> ArrayPredictor:
     return ArrayPredictor(
         model=model,
         in_channels=in_channels,
         out_channels=1,
         device=device,
-        patch=(8, 64, 64),
-        patch_halo=(2, 8, 8),
+        patch=patch,
+        patch_halo=patch_halo,
         single_batch_mode=True,
         headless=False,
         **kwargs,
@@ -145,6 +148,23 @@ def test_channels_last_3d_stays_off_on_cpu():
     assert not any(input_cl for input_cl, _ in seen)
 
 
+@requires_cuda
+def test_channels_last_3d_stays_off_for_2d_models_on_cuda():
+    """2D models run 4D tensors; the 3D memory format must not be engaged."""
+    # 2D models predict one Z slice at a time: patch depth 1, no Z halo
+    predictor = _make_predictor(
+        tiny_2d_model(),
+        "cuda",
+        amp="off",
+        patch=(1, 64, 64),
+        patch_halo=(0, 8, 8),
+    )
+    assert predictor.channels_last_3d is False
+
+    pmaps = predictor(make_dataset(raw_volume(), patch=(1, 64, 64), halo=(0, 8, 8)))
+    assert pmaps.shape == (1, 16, 96, 96)
+
+
 def test_compile_defaults_to_off(monkeypatch):
     def fail_if_called(model, *args, **kwargs):
         raise AssertionError("torch.compile must not run when compile is off")
@@ -158,7 +178,7 @@ def test_compile_defaults_to_off(monkeypatch):
 
 
 @requires_cuda
-def test_compile_wraps_model_and_matches_eager(monkeypatch):
+def test_compile_wraps_model_and_matches_eager(monkeypatch, caplog):
     calls: list = []
     real_compile = torch.compile
 
@@ -176,9 +196,13 @@ def test_compile_wraps_model_and_matches_eager(monkeypatch):
         return _predict(model, dataset, "cuda", amp="off", compile=compile)
 
     pmaps_eager = _run(compile=False)
-    pmaps_compiled = _run(compile=True)
+    with caplog.at_level("WARNING"):
+        pmaps_compiled = _run(compile=True)
 
     assert len(calls) == 1, "torch.compile was not used for compile=True"
+    assert not any(
+        "torch.compile failed" in record.getMessage() for record in caplog.records
+    ), "torch.compile failed and silently fell back to eager"
     assert pmaps_compiled.dtype == np.float32
     assert pmaps_compiled.flags.c_contiguous
     np.testing.assert_allclose(pmaps_compiled, pmaps_eager, rtol=1e-3, atol=1e-3)
@@ -208,15 +232,17 @@ def test_compile_degrades_gracefully_on_first_forward_failure(monkeypatch, caplo
     assert any("torch.compile" in record.getMessage() for record in caplog.records)
 
 
-def test_unet_prediction_forwards_optimization_flags(tmp_path, monkeypatch):
-    """`unet_prediction` passes the optimization flags to the predictor."""
+def test_unet_prediction_forwards_tuning_options(tmp_path, monkeypatch):
+    """`unet_prediction` shares the tuning options with the sizing probe and predictor."""
     calls: dict = {}
 
     def fake_find_feasible(*args, **kwargs):
+        calls["probe_amp"] = kwargs.get("amp", "auto")
         return (8, 64, 64), (2, 8, 8)
 
     class FakePredictor:
         def __init__(self, **kwargs):
+            calls["amp"] = kwargs.get("amp")
             calls["channels_last_3d"] = kwargs.get("channels_last_3d")
             calls["compile"] = kwargs.get("compile")
 
@@ -228,14 +254,9 @@ def test_unet_prediction_forwards_optimization_flags(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(prediction_module, "ArrayPredictor", FakePredictor)
 
-    torch.manual_seed(0)
-    model = UNet3D(in_channels=1, out_channels=1, final_sigmoid=True, f_maps=[8, 16])
-    weights_path = tmp_path / "best_checkpoint.pytorch"
-    torch.save(model.state_dict(), weights_path)
-    config_path = tmp_path / "config_train.yml"
-    config_path.write_text(MODEL_CONFIG)
+    config_path, weights_path = save_model_files(tmp_path)
 
-    unet_prediction(
+    pmaps = unet_prediction(
         raw=raw_volume(),
         input_layout="ZYX",
         model_name=None,
@@ -244,11 +265,18 @@ def test_unet_prediction_forwards_optimization_flags(tmp_path, monkeypatch):
         model_weights_path=weights_path,
         device="cpu",
         disable_tqdm=True,
+        amp="off",
         channels_last_3d=False,
         compile=True,
     )
 
-    assert calls == {"channels_last_3d": False, "compile": True}
+    assert calls == {
+        "probe_amp": "off",
+        "amp": "off",
+        "channels_last_3d": False,
+        "compile": True,
+    }
+    assert pmaps.shape == (1, 16, 96, 96)
 
 
 @requires_cuda

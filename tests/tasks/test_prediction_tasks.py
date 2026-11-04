@@ -30,7 +30,7 @@ from panseg.core.image import (
     SemanticType,
 )
 from panseg.functionals.training.biio import make_model_description
-from panseg.functionals.training.model import UNet3D, UNet3DProbabilities
+from panseg.functionals.training.model import UNet3D
 from panseg.io.voxelsize import VoxelSize
 from panseg.tasks.prediction_tasks import biio_prediction_task, unet_prediction_task
 

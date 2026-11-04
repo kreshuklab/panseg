@@ -20,7 +20,12 @@ import torch
 
 from panseg.functionals.prediction import unet_prediction
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
-from panseg.functionals.training.model import UNet2D, UNet3D, UNet3DProbabilities
+from panseg.functionals.training.model import (
+    UNet2D,
+    UNet2DProbabilities,
+    UNet3D,
+    UNet3DProbabilities,
+)
 from tests.functionals.prediction.helpers import MODEL_CONFIG, make_dataset
 
 GOLDEN_PATH = (
@@ -32,7 +37,12 @@ ATOL = 1e-6
 
 @pytest.fixture(scope="module")
 def golden():
-    return torch.load(GOLDEN_PATH, map_location="cpu", weights_only=True)
+    data = torch.load(GOLDEN_PATH, map_location="cpu", weights_only=True)
+    # Pin the fence's origin: these values were captured from the code *before*
+    # the output-contract change. A regenerated file must not silently replace
+    # the pre-change record.
+    assert data["golden_kind"] == "pre-change-output-contract"
+    return data
 
 
 def make_3d(final_sigmoid: bool, out_channels: int = 1) -> UNet3D:
@@ -179,31 +189,49 @@ def test_state_dict_keys_are_unchanged(golden):
 
 
 def test_export_subclass_matches_golden_probabilities(golden):
-    """The BioImage.IO export callable must emit exactly the old probabilities.
+    """The BioImage.IO export callables must emit exactly the old probabilities.
 
     `biio.py` exports `UNet3DProbabilities`/`UNet2DProbabilities`, whose
     `forward` applies the final activation: published models keep their
     documented [0, 1] output contract. `predict()` must not double-activate.
     """
-    model = UNet3DProbabilities(
-        in_channels=1,
-        out_channels=1,
-        final_sigmoid=True,
-        f_maps=[8, 16],
-        num_groups=4,
-        layer_order="gcr",
-    )
-    model.load_state_dict(golden["state_unet3d"])
-    model.eval()
-    with torch.no_grad():
-        out = model(golden["input_3d"])
-        pred = model.predict(golden["input_3d"])
-    np.testing.assert_allclose(
-        out.numpy(), golden["gold_probs_3d"].numpy(), rtol=RTOL, atol=ATOL
-    )
-    np.testing.assert_allclose(
-        pred.numpy(), golden["gold_probs_3d"].numpy(), rtol=RTOL, atol=ATOL
-    )
+    cases = [
+        (
+            UNet3DProbabilities(
+                in_channels=1,
+                out_channels=1,
+                final_sigmoid=True,
+                f_maps=[8, 16],
+                num_groups=4,
+                layer_order="gcr",
+            ),
+            "state_unet3d",
+            "input_3d",
+            "gold_probs_3d",
+        ),
+        (
+            UNet2DProbabilities(
+                in_channels=1,
+                out_channels=2,
+                final_sigmoid=True,
+                f_maps=[8, 16],
+                num_groups=4,
+                layer_order="gcr",
+            ),
+            "state_unet2d",
+            "input_2d",
+            "gold_probs_2d",
+        ),
+    ]
+    for model, state_key, input_key, probs_key in cases:
+        model.load_state_dict(golden[state_key])
+        model.eval()
+        with torch.no_grad():
+            out = model(golden[input_key])
+            pred = model.predict(golden[input_key])
+        expected = golden[probs_key].numpy()
+        np.testing.assert_allclose(out.numpy(), expected, rtol=RTOL, atol=ATOL)
+        np.testing.assert_allclose(pred.numpy(), expected, rtol=RTOL, atol=ATOL)
 
 
 def test_array_predictor_does_not_double_activate(golden):

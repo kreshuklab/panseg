@@ -14,15 +14,13 @@ import pytest
 import torch
 
 from panseg.functionals.precision import AmpMode
-from panseg.functionals.prediction import prediction as prediction_module
 from panseg.functionals.prediction import unet_prediction
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
-from panseg.functionals.training.model import UNet3D
 from tests.functionals.prediction.helpers import (
-    MODEL_CONFIG,
     make_dataset,
     raw_volume,
     requires_cuda,
+    save_model_files,
     tiny_3d_model,
 )
 
@@ -97,13 +95,7 @@ def test_array_predictor_outputs_close_between_amp_modes():
 @pytest.fixture()
 def dummy_model_files(tmp_path: Path):
     """Small local UNet3D saved like a zoo model (config + weights)."""
-    torch.manual_seed(0)
-    model = UNet3D(in_channels=1, out_channels=1, final_sigmoid=True, f_maps=[8, 16])
-    weights_path = tmp_path / "best_checkpoint.pytorch"
-    torch.save(model.state_dict(), weights_path)
-    config_path = tmp_path / "config_train.yml"
-    config_path.write_text(MODEL_CONFIG)
-    return config_path, weights_path
+    return save_model_files(tmp_path)
 
 
 def _predict_unet(model_files, raw, amp):
@@ -132,50 +124,3 @@ def test_unet_prediction_amp_modes_agree_on_cpu(dummy_model_files):
     assert pmaps_auto.dtype == np.float32
     assert pmaps_auto.shape == (1, 16, 96, 96)
     np.testing.assert_array_equal(pmaps_auto, pmaps_off)
-
-
-def test_unet_prediction_flows_amp_to_sizing_and_predictor(
-    dummy_model_files, monkeypatch
-):
-    """The patch-sizing probe and the predictor share the configured mode."""
-    calls: dict[str, str] = {}
-
-    def fake_find_feasible(
-        model,
-        in_channels,
-        full_volume_shape,
-        min_halo_shape,
-        device,
-        max_attempts=5,
-        both_sides=False,
-        amp="auto",
-    ):
-        calls["probe"] = amp
-        return (8, 64, 64), (2, 8, 8)
-
-    class FakePredictor:
-        def __init__(self, **kwargs):
-            calls["predictor"] = kwargs.get("amp", "auto")
-
-        def __call__(self, dataset):
-            return np.zeros((1,) + dataset.raw.shape, dtype="float32")
-
-    monkeypatch.setattr(
-        prediction_module, "find_feasible_patch_and_halo_shapes", fake_find_feasible
-    )
-    monkeypatch.setattr(prediction_module, "ArrayPredictor", FakePredictor)
-
-    pmaps = unet_prediction(
-        raw=raw_volume(),
-        input_layout="ZYX",
-        model_name=None,
-        model_id=None,
-        config_path=dummy_model_files[0],
-        model_weights_path=dummy_model_files[1],
-        device="cpu",
-        disable_tqdm=True,
-        amp="off",
-    )
-
-    assert calls == {"probe": "off", "predictor": "off"}
-    assert pmaps.shape == (1, 16, 96, 96)

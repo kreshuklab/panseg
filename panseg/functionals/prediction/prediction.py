@@ -249,10 +249,9 @@ def unet_prediction(
             unaffected. Defaults to True.
         compile (bool, optional): wrap the inference model in `torch.compile`
             (measured 1.28x faster, -36% peak memory at a one-time compile cost
-            per patch shape). Off by default because of that cost; in some
-            environments triton additionally needs
-            ``C_INCLUDE_PATH=/usr/local/cuda/include`` (no cuda.h on the default
-            include path). If compilation fails at the first forward, prediction
+            per patch shape). In some environments triton additionally needs
+            ``C_INCLUDE_PATH=/usr/local/cuda/include``
+            If compilation fails at the first forward, prediction
             degrades to eager with a warning. Defaults to True.
 
     Returns:
