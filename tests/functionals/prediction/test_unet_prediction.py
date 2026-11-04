@@ -108,7 +108,7 @@ def test_unet_prediction_auto_patch_never_exceeds_sample(dummy_model, monkeypatc
     monkeypatch.setattr(
         size_finder,
         "probe_max_patch_shape",
-        lambda model, in_channels, device: (64, 64, 64),
+        lambda model, in_channels, device, amp="auto": (64, 64, 64),
     )
     raw = np.random.rand(16, 96, 256).astype("float32")
 
@@ -162,7 +162,7 @@ def test_unet_prediction_2d_model_on_3d_input(
         monkeypatch.setattr(
             size_finder,
             "probe_max_patch_shape",
-            lambda model, in_channels, device: probed_max,
+            lambda model, in_channels, device, amp="auto": probed_max,
         )
     raw = np.random.rand(*raw_shape).astype("float32")
 
@@ -185,7 +185,7 @@ def test_unet_prediction_2d_full_slice_auto_patch_recovers_from_loop_oom(
     monkeypatch.setattr(
         size_finder,
         "probe_max_patch_shape",
-        lambda model, in_channels, device: (1, 3200, 3200),
+        lambda model, in_channels, device, **kwargs: (1, 3200, 3200),
     )
     monkeypatch.setattr(array_predictor, "find_batch_size", lambda *a, **k: 16)
     raw = np.random.default_rng(0).random((32, 64, 64)).astype("float32")

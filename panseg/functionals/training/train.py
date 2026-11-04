@@ -19,6 +19,7 @@ from panseg import (
     PATH_TRAIN_TEMPLATE,
 )
 from panseg.core.zoo import model_zoo
+from panseg.functionals.precision import AmpSetting, validate_amp
 from panseg.functionals.prediction.utils.size_finder import find_batch_size
 from panseg.functionals.training.augs import Augmenter
 from panseg.functionals.training.biio import make_model_description
@@ -99,8 +100,16 @@ def create_model_config(
     f_maps,
     max_num_iters,
     pre_trained: Optional[Path] = None,
+    val_stride_shape: Optional[tuple[int, int, int]] = None,
 ):
-    """Write training config to yaml file."""
+    """Write training config to yaml file.
+
+    The written ``config_train.yml`` is the record of the run's setup. Its
+    ``loaders.val.slice_builder.stride_shape`` records the *effective* validation
+    stride (``val_stride_shape``, or the patch shape when validation runs on the
+    non-overlapping default grid); `launch_training` reads it back when such a
+    file is used as a training config.
+    """
 
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     with open(PATH_TRAIN_TEMPLATE, "r") as f:
@@ -122,7 +131,11 @@ def create_model_config(
         max(i // 2, 1) for i in patch_size
     ]
     train_template["loaders"]["val"]["slice_builder"]["patch_shape"] = patch_size
-    train_template["loaders"]["val"]["slice_builder"]["stride_shape"] = patch_size
+    # record the *effective* val stride: non-overlapping by default, or the
+    # stride configured through the `val_slice_builder` section
+    train_template["loaders"]["val"]["slice_builder"]["stride_shape"] = (
+        val_stride_shape if val_stride_shape is not None else patch_size
+    )
 
     out_path = checkpoint_dir / FILE_CONFIG_TRAIN_YAML
     with open(out_path, "w") as yaml_file:
@@ -150,6 +163,8 @@ def unet_training(
     additional_citations: list[str] | None = None,
     license: str | None = None,
     documentation: str | None = None,
+    val_slice_builder: dict | None = None,
+    amp: AmpSetting = "auto",
 ) -> None:
     """Train a new UNet model; the main entrypoint behind ``panseg --train``.
 
@@ -177,8 +192,9 @@ def unet_training(
             encoder level; deeper levels follow the geometric progression
             ``f^k`` with k=1..4. A sequence defines each encoder level size explicitly.
         patch_size: training patch shape ``(z, y, x)``. Training patches are
-            extracted with half the patch shape as stride (overlapping), val
-            patches without overlap. The z-extent must be ``1`` for 2D models.
+            extracted with half the patch shape as stride (overlapping),
+            validation patches on a non-overlapping grid (see
+            ``val_slice_builder``). The z-extent must be ``1`` for 2D models.
         max_num_iters: maximum number of training iterations.
         dimensionality: whether to train a 2D or 3D UNet (also accepts
             ``"2d"``/``"2"`` and ``"3d"``/``"3"``). With 2D training on
@@ -209,7 +225,22 @@ def unet_training(
         license: license under which the packaged model is published.
         documentation: markdown text packaged as the model's README
             documentation.
+        val_slice_builder: optional slice-builder section for the validation
+            loader (mirrors ``loaders.val.slice_builder`` of the
+            ``config_train.yml`` record). Its ``stride_shape`` sets the val
+            patch stride; when the section is absent (or has no
+            ``stride_shape``), validation patches are extracted non-overlapping.
+            Validation patches are never threshold-filtered: the val loss covers
+            the whole volume. A training YAML may configure the same stride under
+            ``loaders.val.slice_builder.stride_shape`` (that is the spelling of
+            the written record); `panseg --train` translates it to this
+            argument, and rejects configuring both.
+        amp: training precision mode: ``"auto"`` runs bf16 autocast on CUDA
+            devices with bf16 support (loss reductions, weights, checkpoints,
+            and exported tensors stay fp32) and silently falls back to fp32
+            elsewhere; ``"off"`` always trains in fp32.
     """
+    amp = validate_amp(amp)
     if dimensionality in ["2D", "2d", "2"] and patch_size[0] != 1:
         raise ValueError(
             "2D models train per z-slice; patch z-extent must be 1, "
@@ -238,9 +269,10 @@ def unet_training(
         model=model,
         in_channels=in_channels,
         patch_shape=patch_size,
-        patch_halo=(4, 4, 4),  # some slack
+        patch_halo=(0, 0, 0),
         device=device,
         for_training=True,  # backward passes need ~2-3x the memory of a forward
+        amp=amp,
     )
 
     if torch.cuda.device_count() > 1 and device != "cpu":
@@ -268,8 +300,19 @@ def unet_training(
     train_datasets = create_datasets(
         dataset_dir, "train", patch_size, dimensionality, in_channels=in_channels
     )
+    # val runs on its own grid: unfiltered, non-overlapping by default (the
+    # `val_slice_builder` section of the training YAML may override the stride)
+    val_stride = None
+    if val_slice_builder is not None:
+        configured = val_slice_builder.get("stride_shape")
+        val_stride = tuple(configured) if configured is not None else None
     val_datasets = create_datasets(
-        dataset_dir, "val", patch_size, dimensionality, in_channels=in_channels
+        dataset_dir,
+        "val",
+        patch_size,
+        dimensionality,
+        in_channels=in_channels,
+        stride_shape=val_stride,
     )
     loaders = {
         "train": DataLoader(
@@ -312,6 +355,7 @@ def unet_training(
         feature_maps,
         max_num_iters,
         pre_trained=pre_trained,
+        val_stride_shape=val_stride,
     )
 
     trainer = UNetTrainer(
@@ -323,6 +367,7 @@ def unet_training(
         checkpoint_dir=checkpoint_dir,
         max_num_iterations=max_num_iters,
         device=device,
+        amp=amp,
     )
 
     trainer.train()
@@ -376,7 +421,9 @@ def unet_training(
         test_in = torch.squeeze(test_in, dim=-3)
 
     with torch.no_grad():
-        test_out = net(zero_mean_unit_variance(test_in))
+        # probabilities: `test_out` must match the output of the exported
+        # model, whose forward applies the final activation
+        test_out = net.predict(zero_mean_unit_variance(test_in))
 
     np.save(checkpoint_dir / "test_in.npy", test_in.numpy())
     np.save(checkpoint_dir / "test_out.npy", test_out.detach().cpu().numpy())
@@ -434,6 +481,7 @@ def create_datasets(
     patch_shape: tuple[int, int, int],
     dimensionality: Literal["2D", "3D"],
     in_channels: Optional[int] = None,
+    stride_shape: tuple[int, int, int] | None = None,
 ):
     """
     Load a dataset for training a unet.
@@ -444,6 +492,10 @@ def create_datasets(
         patch_shape (tuple): shape of the patch to be extracted from the raw data set
         in_channels (Optional[int]): expected number of raw channels. When given,
             each dataset's raw channel count is checked against it.
+        stride_shape (Optional[tuple]): patch stride for the val (unfiltered)
+            grid; defaults to `patch_shape`, i.e. non-overlapping. Only valid
+            for ``phase="val"``: the train grid is built by `FilterSliceBuilder`
+            with max(patch_shape // 2, 1) as stride.
     """
     assert phase in ["train", "val"], f"Phase {phase} not supported"
     phase_dir = Path(dataset_dir) / phase
@@ -455,6 +507,8 @@ def create_datasets(
             augmenter=Augmenter(),
             patch_shape=patch_shape,
             dimensionality=dimensionality,
+            filter_patches=phase == "train",
+            stride_shape=stride_shape,
         )
         num_channels = dataset.raw.shape[0]
         if in_channels is not None and num_channels != in_channels:

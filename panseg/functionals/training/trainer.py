@@ -9,8 +9,16 @@ from torch.optim.optimizer import Optimizer
 from torch.utils.tensorboard.writer import SummaryWriter
 from tqdm import tqdm
 
+from panseg.functionals.precision import (
+    AmpMode,
+    AmpSetting,
+    amp_context,
+    cudnn_benchmark,
+    validate_amp,
+)
 from panseg.functionals.training.model import UNet2D
 from panseg.functionals.training.utils import RunningAverage
+from panseg.functionals.transfer import to_device
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +66,9 @@ class UNetTrainer:
         max_num_iterations (int): maximum number of iterations
         device (str): device to use for training
         log_after_iters (int): number of iterations before logging to tensorboard
+        amp (str): precision mode (``"auto"``: bf16 autocast on supported CUDA
+            devices, else fp32; ``"off"``: always fp32). Model weights and
+            checkpoints stay fp32 in either mode. Defaults to "auto".
     """
 
     def __init__(
@@ -71,6 +82,7 @@ class UNetTrainer:
         max_num_iterations: int,
         device: str = "cuda",
         log_after_iters: int = 100,
+        amp: AmpSetting = "auto",
     ):
         self.model = model
         self.optimizer = optimizer
@@ -82,6 +94,7 @@ class UNetTrainer:
         self.max_num_epochs = max_num_iterations // len(loaders["train"]) + 1
         self.device = device
         self.log_after_iters = log_after_iters
+        self.amp: AmpMode = validate_amp(amp)
         self.best_eval_loss = float("+inf")
 
         self.num_iterations = 1
@@ -90,38 +103,41 @@ class UNetTrainer:
         self.writer = SummaryWriter(log_dir=checkpoint_dir / "logs")
 
     def train(self) -> None:
-        for epoch in range(self.max_num_epochs):
-            logger.info(f"Epoch [{epoch}/~{self.max_num_epochs}]")
-            # train for one epoch
-            should_terminate = self.train_epoch()
+        # every training/validation patch has the same shape, so cuDNN
+        # autotuning pays off (the previous flag value is restored on exit)
+        with cudnn_benchmark():
+            for epoch in range(self.max_num_epochs):
+                logger.info(f"Epoch [{epoch}/~{self.max_num_epochs}]")
+                # train for one epoch
+                should_terminate = self.train_epoch()
 
-            logger.info("Validating...")
-            # set the model in eval mode
-            self.model.eval()
-            # evaluate on validation set
-            eval_loss = self.validate()
-            logger.info(f"Val Loss: {eval_loss}.")
-            if self.writer is not None:
-                self.writer.add_scalar("Loss/val", eval_loss, self.num_iterations)
-            # set the model back to training mode
-            self.model.train()
+                logger.info("Validating...")
+                # set the model in eval mode
+                self.model.eval()
+                # evaluate on validation set
+                eval_loss = self.validate()
+                logger.info(f"Val Loss: {eval_loss}.")
+                if self.writer is not None:
+                    self.writer.add_scalar("Loss/val", eval_loss, self.num_iterations)
+                # set the model back to training mode
+                self.model.train()
 
-            # adjust learning rate if necessary
-            if isinstance(self.scheduler, ReduceLROnPlateau):
-                self.scheduler.step(eval_loss)
-            else:
-                self.scheduler.step()
-            # remember best validation metric
-            is_best = eval_loss < self.best_eval_loss
-            if is_best:
-                self.best_eval_loss = eval_loss
+                # adjust learning rate if necessary
+                if isinstance(self.scheduler, ReduceLROnPlateau):
+                    self.scheduler.step(eval_loss)
+                else:
+                    self.scheduler.step()
+                # remember best validation metric
+                is_best = eval_loss < self.best_eval_loss
+                if is_best:
+                    self.best_eval_loss = eval_loss
 
-            # save checkpoint
-            self._save_checkpoint(is_best)
+                # save checkpoint
+                self._save_checkpoint(is_best)
 
-            if should_terminate:
-                logger.info("Stopping criterion is satisfied. Finishing training")
-                return
+                if should_terminate:
+                    logger.info("Stopping criterion is satisfied. Finishing training")
+                    return
 
         logger.info(
             f"Reached maximum number of epochs: {self.max_num_epochs}. Finishing training..."
@@ -139,15 +155,19 @@ class UNetTrainer:
         self.model.train()
 
         for _input, target in tqdm(self.loaders["train"]):
-            _input, target = _input.to(self.device), target.to(self.device)
+            _input = to_device(_input, self.device)
+            target = to_device(target, self.device)
             output, loss = self._forward_pass(_input, target)
 
             train_losses.update(loss.item(), self._batch_size(_input))
 
-            # compute gradients and update parameters
+            # compute gradients and update parameters; the autocast context
+            # covers backward and the step too (per the AMP contract; gradients
+            # follow the dtypes recorded during the forward pass)
             self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+            with amp_context(self.amp, self.device):
+                loss.backward()
+                self.optimizer.step()
 
             if self.num_iterations % self.log_after_iters == 0:
                 # log stats, params and images
@@ -157,10 +177,10 @@ class UNetTrainer:
                         "Loss/train", train_losses.avg, self.num_iterations
                     )
 
-                if self.should_stop():
-                    return True
-
             self.num_iterations += 1
+
+            if self.should_stop():
+                return True
 
         return False
 
@@ -188,7 +208,8 @@ class UNetTrainer:
 
         with torch.no_grad():
             for _input, target in tqdm(self.loaders["val"]):
-                _input, target = _input.to(self.device), target.to(self.device)
+                _input = to_device(_input, self.device)
+                target = to_device(target, self.device)
 
                 output, loss = self._forward_pass(_input, target)
                 val_losses.update(loss.item(), self._batch_size(_input))
@@ -201,18 +222,20 @@ class UNetTrainer:
         model = (
             self.model.module if isinstance(self.model, nn.DataParallel) else self.model
         )
-        if isinstance(model, UNet2D):
-            # remove the singleton z-dimension from the input
-            _input = torch.squeeze(_input, dim=-3)
-            # forward pass
-            output = self.model(_input)
-            # add the singleton z-dimension to the output
-            output = torch.unsqueeze(output, dim=-3)
-        else:
-            # forward pass
-            output = self.model(_input)
+        with amp_context(self.amp, self.device):
+            if isinstance(model, UNet2D):
+                # remove the singleton z-dimension from the input
+                _input = torch.squeeze(_input, dim=-3)
+                # forward pass
+                output = self.model(_input)
+                # add the singleton z-dimension to the output
+                output = torch.unsqueeze(output, dim=-3)
+            else:
+                # forward pass
+                output = self.model(_input)
 
-        loss = self.loss_criterion(output, target)
+            # the loss computes in fp32 (see losses.py) even under autocast
+            loss = self.loss_criterion(output, target)
         return output, loss
 
     def _save_checkpoint(self, is_best):

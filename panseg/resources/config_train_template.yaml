@@ -35,10 +35,14 @@ trainer:
   log_after_iters: 500
   # max number of iterations
   max_num_iterations: 50000
-# Configure training and validation loaders
+  # amp: auto # training precision: 'auto' = bf16 autocast on supported CUDA devices (fp32 otherwise), 'off' = always fp32
+# Configuration of the training and validation loaders, as recorded in the
+# `config_train.yml` written into every checkpoint. The loaders are derived from
+# `patch_size` and `device`: when a config shaped like this one is passed to
+# `panseg --train`, only `val.slice_builder.stride_shape` is read back from this section.
 loaders:
-  # how many subprocesses to use for data loading
-  num_workers: 8
+  # how many subprocesses to use for data loading, increases memory demands
+  num_workers: 4
   # path to the raw data within the H5
   raw_internal_path: raw
   # path to the label data within the H5
@@ -54,7 +58,8 @@ loaders:
       name: FilterSliceBuilder
       # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
       patch_shape: [80, 160, 160]
-      # train stride between patches
+      # train stride between patches; the training loader always uses max(patch_shape // 2, 1)
+      # and drops patches with less than `threshold` non-zero labels
       stride_shape: [40, 80, 80]
       # minimum volume of the labels in the patch
       threshold: 0.1
@@ -68,13 +73,13 @@ loaders:
       - PATH_TO_VAL_DIR
 
     # SliceBuilder configuration, i.e. how to iterate over the input volume patch-by-patch
+    # `stride_shape`  maps to the `val_slice_builder` argument of `unet_training`.
     slice_builder:
-      name: FilterSliceBuilder
-      # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
+      # validation patches are never filtered, so a filter name
+      # (e.g. `FilterSliceBuilder`) is rejected instead of silently ignored
+      name: SliceBuilder
+      # val patch size given to the network; always the train patch size (`patch_size`),
+      # a different value is rejected
       patch_shape: [80, 160, 160]
-      # train stride between patches
+      # val stride between patches; defaults to the patch shape (non-overlapping)
       stride_shape: [80, 160, 160]
-      # minimum volume of the labels in the patch
-      threshold: 0.1
-      # probability of accepting patches which do not fulfil the threshold criterion
-      slack_acceptance: 0.01

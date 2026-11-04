@@ -2,8 +2,10 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from panseg.__version__ import __version__
+from panseg.functionals.precision import validate_amp
 from panseg.run_panseg import create_parser, launch_napari, main
 
 EXAMPLE_TRAIN_CONFIG = (
@@ -81,6 +83,150 @@ def test_launch_training_top_level_config(mock_check_version, mocker, tmp_path):
     m_unet_training.assert_called_once()
     assert m_unet_training.call_args.kwargs["model_name"] == "my_model"
     assert m_unet_training.call_args.kwargs["device"] == "cpu"
+
+
+def test_launch_training_accepts_amp_key(mock_check_version, mocker, tmp_path):
+    """`amp: auto|off` from the training YAML flows into `unet_training`."""
+    m_unet_training = mocker.patch(
+        "panseg.functionals.training.train.unet_training", autospec=True
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "dataset_dir: some_dir\n"
+        "model_name: my_model\n"
+        "in_channels: 1\n"
+        "out_channels: 1\n"
+        "feature_maps: 32\n"
+        "patch_size: [16, 64, 64]\n"
+        "max_num_iters: 5\n"
+        "dimensionality: 3D\n"
+        "sparse: false\n"
+        "device: cpu\n"
+        "amp: off\n"
+    )
+    sys.argv = ["panseg", "--train", str(config_path)]
+
+    main()
+
+    m_unet_training.assert_called_once()
+    # YAML parses a bare `off` as a boolean; it must resolve to the "off" mode
+    assert validate_amp(m_unet_training.call_args.kwargs["amp"]) == "off"
+
+
+_BASE_TRAIN_CONFIG = {
+    "dataset_dir": "some_dir",
+    "model_name": "my_model",
+    "in_channels": 1,
+    "out_channels": 1,
+    "feature_maps": 32,
+    "patch_size": [16, 64, 64],
+    "max_num_iters": 5,
+    "dimensionality": "3D",
+    "sparse": False,
+    "device": "cpu",
+}
+
+
+def _write_train_config(tmp_path: Path, **extra) -> Path:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({**_BASE_TRAIN_CONFIG, **extra}))
+    return config_path
+
+
+def _launch(config_path: Path, m_unet_training) -> dict:
+    sys.argv = ["panseg", "--train", str(config_path)]
+    main()
+    m_unet_training.assert_called_once()
+    return m_unet_training.call_args.kwargs
+
+
+def test_launch_training_translates_the_val_slice_builder_stride(
+    mock_check_version, mocker, tmp_path
+):
+    """The `loaders.val.slice_builder` section written into `config_train.yml`
+    is a valid input config: its `stride_shape` becomes `val_slice_builder`."""
+    m_unet_training = mocker.patch(
+        "panseg.functionals.training.train.unet_training", autospec=True
+    )
+    config_path = _write_train_config(
+        tmp_path,
+        loaders={
+            "val": {
+                "slice_builder": {
+                    "name": "SliceBuilder",
+                    "patch_shape": [16, 64, 64],
+                    "stride_shape": [8, 32, 32],
+                }
+            }
+        },
+    )
+
+    kwargs = _launch(config_path, m_unet_training)
+
+    assert kwargs["val_slice_builder"] == {"stride_shape": [8, 32, 32]}
+    # `loaders` is the written record, not a `unet_training` argument
+    assert "loaders" not in kwargs
+
+
+def test_launch_training_without_loaders_keeps_the_val_grid_default(
+    mock_check_version, mocker, tmp_path
+):
+    """Omitting the section leaves `val_slice_builder` unset (non-overlapping)."""
+    m_unet_training = mocker.patch(
+        "panseg.functionals.training.train.unet_training", autospec=True
+    )
+
+    kwargs = _launch(_write_train_config(tmp_path), m_unet_training)
+
+    assert "val_slice_builder" not in kwargs
+
+
+def test_launch_training_rejects_two_val_stride_spellings(
+    mock_check_version, mocker, tmp_path
+):
+    m_unet_training = mocker.patch(
+        "panseg.functionals.training.train.unet_training", autospec=True
+    )
+    config_path = _write_train_config(
+        tmp_path,
+        val_slice_builder={"stride_shape": [4, 32, 32]},
+        loaders={
+            "val": {"slice_builder": {"stride_shape": [8, 32, 32]}},
+        },
+    )
+
+    with pytest.raises(ValueError, match="val_slice_builder"):
+        _launch(config_path, m_unet_training)
+
+    m_unet_training.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "slice_builder, match",
+    [
+        # val patches are never filtered: a filter name would be a no-op
+        ({"name": "FilterSliceBuilder", "stride_shape": [8, 32, 32]}, "SliceBuilder"),
+        # val patches are always the training patch size
+        ({"patch_shape": [8, 32, 32], "stride_shape": [8, 32, 32]}, "patch_size"),
+        # val patches are never filtered: a threshold would be a no-op
+        ({"stride_shape": [8, 32, 32], "threshold": 0.1}, "slice_builder"),
+    ],
+    ids=["filter-name", "patch-shape", "threshold"],
+)
+def test_launch_training_rejects_dead_val_slice_builder_keys(
+    mock_check_version, mocker, tmp_path, slice_builder, match
+):
+    m_unet_training = mocker.patch(
+        "panseg.functionals.training.train.unet_training", autospec=True
+    )
+    config_path = _write_train_config(
+        tmp_path, loaders={"val": {"slice_builder": slice_builder}}
+    )
+
+    with pytest.raises(ValueError, match=match):
+        _launch(config_path, m_unet_training)
+
+    m_unet_training.assert_not_called()
 
 
 def test_launch_training_unknown_keys(mock_check_version, mocker, tmp_path):

@@ -81,7 +81,8 @@ def test_array_predictor_falls_back_to_smaller_batch_on_oom(monkeypatch):
     assert predictor.batch_size == 8
     assert model.seen_batch_sizes == [16, 16, 8, 8, 8, 8]
     assert prediction.shape == (1, 32, 64, 64)
-    assert np.allclose(prediction, 1.0)
+    # the model returns logits of 1, which the predictor activates (sigmoid)
+    assert np.allclose(prediction, torch.sigmoid(torch.tensor(1.0)).item())
 
 
 def test_array_predictor_names_patch_and_halo_when_batch_one_cannot_fit(monkeypatch):

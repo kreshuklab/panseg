@@ -43,7 +43,8 @@ class TestPanSegModelZoo:
             x = torch.randn(4, 1, 260, 260)
         else:
             x = torch.randn(4, 1, 80, 160, 160)
-        y = model(x)
+        # forward() returns logits; the normalized output comes from predict()
+        y = model.predict(x)
         # assert output normalized
         assert torch.all(0 <= y) and torch.all(y <= 1)
 

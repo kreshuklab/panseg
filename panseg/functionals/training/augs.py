@@ -356,9 +356,35 @@ class StandardLabelToBoundary:
         return np.stack(results, axis=0)
 
 
+def _match_float_precision(value, array):
+    """Cast `value` to `array`'s dtype when `array` is floating point.
+
+    Floating inputs keep their own precision: float64 statistics or noise would
+    otherwise up-cast a float32 patch (an extra full copy per patch, and a
+    silent dtype change on the way to the network). Integer inputs keep numpy's
+    usual promotion, so e.g. a uint16 patch plus noise is still computed in
+    float64 and cast once by `ToTensor`.
+
+    Args:
+        value: the scalar/array to cast (statistic, noise array, ...).
+        array: the patch the value is combined with.
+
+    Returns:
+        `value` cast to `array`'s dtype for floating-point arrays, unchanged
+        otherwise.
+    """
+    if np.issubdtype(np.asarray(array).dtype, np.floating):
+        return np.asarray(value, dtype=np.asarray(array).dtype)
+    return value
+
+
 class Standardize:
     """
     Apply Z-score normalization (0-mean, 1-std) to a given input tensor.
+
+    Floating-point inputs keep their own precision: a float32 patch stays
+    float32, the (possibly float64) statistics are cast to it instead of
+    up-casting the patch. Integer inputs follow numpy's usual promotion.
 
     Args:
         eps (float, optional): A small value added to the denominator for
@@ -396,6 +422,10 @@ class Standardize:
             else:
                 mean = np.mean(m)
                 std = np.std(m)
+
+        # keep floating inputs in their own precision (see the helper)
+        mean = _match_float_precision(mean, m)
+        std = _match_float_precision(std, m)
 
         return (m - mean) / np.clip(std, a_min=self.eps, a_max=None)
 
@@ -437,6 +467,13 @@ class Normalize:
 
 
 class AdditiveGaussianNoise:
+    """Add gaussian noise with a random std drawn from `scale`.
+
+    Floating-point inputs keep their own precision (a float32 patch stays
+    float32: the float64 noise is cast to it, instead of up-casting the patch);
+    integer inputs follow numpy's usual promotion.
+    """
+
     def __init__(
         self, random_state, scale=(0.0, 1.0), execution_probability=0.1, **kwargs
     ):
@@ -448,11 +485,19 @@ class AdditiveGaussianNoise:
         if self.random_state.uniform() < self.execution_probability:
             std = self.random_state.uniform(self.scale[0], self.scale[1])
             gaussian_noise = self.random_state.normal(0, std, size=m.shape)
+            gaussian_noise = _match_float_precision(gaussian_noise, m)
             return m + gaussian_noise
         return m
 
 
 class AdditivePoissonNoise:
+    """Add poisson noise with a random rate drawn from `lam`.
+
+    Floating-point inputs keep their own precision (a float32 patch stays
+    float32: the integer noise is cast to it, instead of up-casting the patch);
+    integer inputs follow numpy's usual promotion.
+    """
+
     def __init__(
         self, random_state, lam=(0.0, 1.0), execution_probability=0.1, **kwargs
     ):
@@ -464,6 +509,7 @@ class AdditivePoissonNoise:
         if self.random_state.uniform() < self.execution_probability:
             lam = self.random_state.uniform(self.lam[0], self.lam[1])
             poisson_noise = self.random_state.poisson(lam, size=m.shape)
+            poisson_noise = _match_float_precision(poisson_noise, m)
             return m + poisson_noise
         return m
 
@@ -471,6 +517,11 @@ class AdditivePoissonNoise:
 class ToTensor:
     """
     Converts a given input numpy.ndarray into torch.Tensor.
+
+    A contiguous array that already has the target `dtype` is not copied: the
+    tensor *shares memory* with the caller's array, so mutating the source
+    afterwards shows up in the tensor (and vice versa). Everything else (other
+    dtypes, negative strides from ``np.flip``/``np.rot90``, ...) is copied.
 
     Args:
         expand_dims (bool): if True, adds a channel dimension to the input data
@@ -487,7 +538,9 @@ class ToTensor:
         if self.expand_dims and m.ndim == 3:
             m = np.expand_dims(m, axis=0)
 
-        return torch.from_numpy(m.astype(dtype=self.dtype))
+        # no copy when the array is already a contiguous target-dtype array;
+        # torch.from_numpy cannot take negative strides (from np.flip/np.rot90)
+        return torch.from_numpy(np.ascontiguousarray(m, dtype=self.dtype))
 
 
 class Relabel:

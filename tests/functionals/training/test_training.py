@@ -12,6 +12,7 @@ import torch
 import yaml
 
 from panseg import FILE_CONFIG_TRAIN_YAML
+from panseg.core.zoo import model_zoo
 from panseg.functionals.training.augs import Augmenter
 from panseg.functionals.training.h5dataset import HDF5Dataset, resolve_dataset_layouts
 from panseg.functionals.training.losses import DiceLoss
@@ -24,6 +25,24 @@ from panseg.functionals.training.train import (
     zero_mean_unit_variance,
 )
 from panseg.functionals.training.trainer import UNetTrainer, load_pretrained_weights
+
+
+@pytest.fixture(autouse=True)
+def _isolate_model_zoo(tmp_path_factory):
+    """Keep the zoo records of test trainings out of the user's custom zoo.
+
+    `unet_training` registers every trained model via `model_zoo.add_custom_model`,
+    which writes `model_zoo.path_zoo_custom` and appends to its DataFrame. With
+    the user's real zoo those records persist across runs and later duplicate
+    the zoo index (`test_dimensionality_filter_is_spatial_only`).
+    """
+    root = tmp_path_factory.mktemp("model_zoo")
+    with patch.multiple(
+        model_zoo,
+        path_zoo=root / "models_zoo.yaml",
+        path_zoo_custom=root / "custom_zoo.yaml",
+    ):
+        yield
 
 
 def _write_checkpoints(mock_trainer_class, checkpoint_dir, make_states=None):
@@ -646,6 +665,8 @@ class TestUnetTraining:
 
         # test_in is stored as produced by the loader, un-normalized
         assert np.array_equal(test_in, loader_batch.squeeze(dim=-3).numpy())
+        # test_out is a probability map (the activation is applied explicitly)
+        assert test_out.min() >= 0 and test_out.max() <= 1
 
         def _predict(state):
             model = UNet2D(
@@ -658,7 +679,7 @@ class TestUnetTraining:
             model.load_state_dict(state)
             model.eval()
             with torch.no_grad():
-                out = model(zero_mean_unit_variance(torch.from_numpy(test_in)))
+                out = model.predict(zero_mean_unit_variance(torch.from_numpy(test_in)))
             return out.numpy()
 
         best_out = _predict(torch.load(weights, map_location="cpu"))
@@ -888,6 +909,9 @@ class TestUnetTraining:
         # The batch size must be probed with a backward pass, otherwise the
         # first training iteration can run out of memory
         assert mock_find_batch_size.call_args.kwargs["for_training"] is True
+        # ...and at the true training patch shape: a halo slack would inflate
+        # the probed volume and waste batch-size headroom
+        assert mock_find_batch_size.call_args.kwargs["patch_halo"] == (0, 0, 0)
 
         # Verify that DataParallel was called
         mock_data_parallel.assert_called_once()
@@ -1316,6 +1340,8 @@ class TestUNetTrainerForwardPass:
         trainer = UNetTrainer.__new__(UNetTrainer)
         trainer.model = model
         trainer.loss_criterion = DiceLoss()
+        trainer.amp = "auto"
+        trainer.device = "cpu"
         return trainer
 
     def test_forward_pass_unwraps_data_parallel_2d_model(self):
