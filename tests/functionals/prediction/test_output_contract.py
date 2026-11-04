@@ -1,4 +1,4 @@
-"""Golden fence for the logits/probabilities output contract (WP1 double sigmoid).
+"""Golden fence for the logits/probabilities output contract
 
 `tests/resources/output_contract_golden.pt` holds the externally visible
 outputs captured from the code *before* `forward()` started returning logits

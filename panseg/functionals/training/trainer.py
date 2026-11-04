@@ -155,7 +155,6 @@ class UNetTrainer:
         self.model.train()
 
         for _input, target in tqdm(self.loaders["train"]):
-            # non-blocking exactly for pinned batches (see `to_device`)
             _input = to_device(_input, self.device)
             target = to_device(target, self.device)
             output, loss = self._forward_pass(_input, target)
@@ -180,8 +179,6 @@ class UNetTrainer:
 
             self.num_iterations += 1
 
-            # evaluated every iteration (not just at the logging cadence), so
-            # max_num_iterations is not overrun by up to an epoch
             if self.should_stop():
                 return True
 

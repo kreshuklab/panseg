@@ -60,7 +60,7 @@ def _preserve_bn_stats(model: nn.Module):
     fidelity: the measured memory must match the real training steps), which
     updates `running_mean`, `running_var` and `num_batches_tracked`. Those
     updates must not leak into the training run, so the buffers are restored
-    bit-exactly when the probe ends -- including when the probe raises.
+    bit-exactly when the probe ends, including when the probe raises.
     """
     saved = [
         (
@@ -391,8 +391,7 @@ def _probe_batch(
                 model(x)
 
 
-# Largest batch size the probe search considers (the old power-of-2 search
-# topped out here as well).
+# Largest batch size the probe search considers
 MAX_PROBE_BATCH_SIZE = 2048
 
 

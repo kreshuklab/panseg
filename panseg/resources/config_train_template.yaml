@@ -39,11 +39,10 @@ trainer:
 # Configuration of the training and validation loaders, as recorded in the
 # `config_train.yml` written into every checkpoint. The loaders are derived from
 # `patch_size` and `device`: when a config shaped like this one is passed to
-# `panseg --train`, only `val.slice_builder.stride_shape` is read back from this
-# section (see below).
+# `panseg --train`, only `val.slice_builder.stride_shape` is read back from this section.
 loaders:
-  # how many subprocesses to use for data loading
-  num_workers: 8
+  # how many subprocesses to use for data loading, increases memory demands
+  num_workers: 4
   # path to the raw data within the H5
   raw_internal_path: raw
   # path to the label data within the H5
@@ -74,15 +73,10 @@ loaders:
       - PATH_TO_VAL_DIR
 
     # SliceBuilder configuration, i.e. how to iterate over the input volume patch-by-patch
-    # NOTE (behavior change): validation patches are built without threshold filtering
-    # and cover the whole volume. They are non-overlapping by default, and the
-    # `stride_shape` below is honored (it maps to the `val_slice_builder` argument of
-    # `unet_training`). The val loss therefore covers the whole volume instead of only
-    # foreground-rich patches, and its meaning shifts slightly compared to older runs
-    # -- that is the point.
+    # `stride_shape`  maps to the `val_slice_builder` argument of `unet_training`.
     slice_builder:
-      # must stay `SliceBuilder`: validation patches are never filtered, so a filter
-      # name (e.g. `FilterSliceBuilder`) is rejected instead of silently ignored
+      # validation patches are never filtered, so a filter name
+      # (e.g. `FilterSliceBuilder`) is rejected instead of silently ignored
       name: SliceBuilder
       # val patch size given to the network; always the train patch size (`patch_size`),
       # a different value is rejected

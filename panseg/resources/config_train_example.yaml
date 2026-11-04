@@ -19,9 +19,7 @@ training:
   # Optional:
   # amp: auto # training precision: 'auto' = bf16 autocast on supported CUDA devices (fp32 otherwise), 'off' = always fp32
   # val_slice_builder: # validation patch grid; val patches are unfiltered (no threshold) and non-overlapping by default
-  #   stride_shape: [80, 160, 160] # val stride; defaults to the patch shape. Note: the val loss now covers the
-  #                                # whole volume instead of only foreground-rich patches (val loss values from
-  #                                # older runs are not directly comparable)
+  #   stride_shape: [80, 160, 160] # val stride; defaults to the patch shape.
   # modality: '' # microscopy modality of the model, e.g. confocal
   # output_type: '' # prediction type, e.g. cell boundaries
   # description: '' # model description saved alongside the model

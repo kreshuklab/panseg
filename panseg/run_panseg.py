@@ -100,7 +100,7 @@ def _translate_loaders(config: dict, path: Path) -> None:
     `loaders` is the section `create_model_config` writes into every
     checkpoint's ``config_train.yml``: the written record of the effective
     loader setup. It is not an argument of `unet_training` (the loaders are
-    derived from ``patch_size``/``device``), so a config that carries it — e.g. a
+    derived from ``patch_size``/``device``), so a config that carries it, e.g. a
     model's own ``config_train.yml`` used as a starting point — must not be
     rejected as having unknown keys.
 
