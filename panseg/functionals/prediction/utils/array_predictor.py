@@ -20,6 +20,7 @@ from panseg.functionals.prediction.utils.array_dataset import (
     remove_padding,
 )
 from panseg.functionals.prediction.utils.size_finder import (
+    channels_last_3d_enabled,
     find_batch_size,
     is_2d_model,
     is_oom_error,
@@ -65,7 +66,8 @@ class ArrayPredictor:
         disable_tqdm (bool, optional): If True, disable tqdm progress bars. Defaults to False.
         amp (AmpSetting, optional): precision mode, see `unet_prediction`.
         channels_last_3d (bool, optional): channels_last_3d memory format for
-            3D models on CUDA, see `unet_prediction`.
+            3D models on CUDA, see `unet_prediction`. The memory probes size in
+            the same layout.
         compile (bool | None, optional): torch.compile control. None (default)
             compiles automatically only on CUDA and only when the number of
             prediction batches amortizes the one-time compile cost
@@ -123,6 +125,11 @@ class ArrayPredictor:
             output_activation() if output_activation is not None else nn.Identity()
         )
 
+        # the probes must size for the memory format of the prediction loop
+        self.channels_last_3d = channels_last_3d_enabled(
+            model, device, channels_last_3d
+        )
+
         if single_batch_mode:  # then check if OOM happens at batch size 1
             self.batch_size = 1
             if device != "cpu" and will_CUDA_OOM(
@@ -133,6 +140,7 @@ class ArrayPredictor:
                 self.batch_size,
                 device,
                 amp=self.amp,
+                channels_last_3d=self.channels_last_3d,
             ):
                 raise RuntimeError(
                     f"Prediction will run out of memory on {device} for "
@@ -142,7 +150,13 @@ class ArrayPredictor:
                 )
         else:  # find the max batch size without causing OOM, may be [1, 2, 4, 8, 16, ...]
             self.batch_size = find_batch_size(
-                model, in_channels, patch, patch_halo, device, amp=self.amp
+                model,
+                in_channels,
+                patch,
+                patch_halo,
+                device,
+                amp=self.amp,
+                channels_last_3d=self.channels_last_3d,
             )
 
         logger.info(f"Using batch size of {self.batch_size} for prediction")
@@ -165,12 +179,8 @@ class ArrayPredictor:
 
         # measured inference wins: channels_last_3d only pays off for 3D models
         # on CUDA (a memory-layout change, outputs are unaffected); keep it off
-        # on CPU and for 2D models
-        self.channels_last_3d = (
-            channels_last_3d
-            and torch.device(self.device).type == "cuda"
-            and not is_2d_model(model)
-        )
+        # on CPU and for 2D models. Idempotent: the probes may have converted
+        # the model already.
         if self.channels_last_3d:
             self.model = self.model.to(memory_format=torch.channels_last_3d)
 

@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from panseg.functionals.precision import AmpSetting, amp_context
+from panseg.functionals.precision import AmpSetting, amp_context, cudnn_benchmark
 from panseg.functionals.training.model import UNet2D
 
 logger = logging.getLogger(__name__)
@@ -91,6 +91,29 @@ def is_2d_model(model: nn.Module) -> bool:
             return isinstance(model, UNet2D)
 
 
+def channels_last_3d_enabled(model: nn.Module, device: str, requested: bool) -> bool:
+    """Whether the model actually runs in channels_last_3d: 3D models on CUDA only."""
+    return requested and torch.device(device).type == "cuda" and not is_2d_model(model)
+
+
+def _to_probe_device(
+    model: nn.Module, device: str, channels_last_3d: bool
+) -> tuple[nn.Module, bool]:
+    """Move `model` to `device` in the probe memory format.
+
+    Returns the model and the resolved channels_last_3d flag.
+    """
+    channels_last_3d = channels_last_3d_enabled(model, device, channels_last_3d)
+    model = model.to(device)
+    if channels_last_3d:
+        model = model.to(memory_format=torch.channels_last_3d)
+    return model, channels_last_3d
+
+
+def _to_probe_layout(x: torch.Tensor, channels_last_3d: bool) -> torch.Tensor:
+    return x.to(memory_format=torch.channels_last_3d) if channels_last_3d else x
+
+
 def min_input_depth(model: nn.Module) -> int:
     """Smallest input depth a model accepts: the product of its Z pooling kernels."""
     depth = 1
@@ -107,10 +130,11 @@ def is_oom_error(error: RuntimeError, device: str) -> bool:
     CUDA reports "CUDA out of memory", but Apple MPS reports memory failures
     with different wording: "The device has run out of memory" for general
     exhaustion, and "Invalid buffer size: N GiB" when a single allocation
-    exceeds the 4 GiB Metal buffer cap.
+    exceeds the 4 GiB Metal buffer cap. cuDNN autotuning under memory pressure
+    reports ``CUDNN_STATUS_ALLOC_FAILED`` instead.
     """
     message = str(error).lower()
-    if "out of memory" in message:
+    if "out of memory" in message or "cudnn_status_alloc_failed" in message:
         return True
     return "mps" in device and "invalid buffer size" in message
 
@@ -207,6 +231,7 @@ def probe_max_patch_shape(
     in_channels: int,
     device: str,
     amp: AmpSetting = "auto",
+    channels_last_3d: bool = False,
     # ) -> tuple[int, int, int] | tuple[int, int]:
 ) -> tuple[int, int, int]:
     """Determine the maximum feasible patch shape for a given model based on
@@ -215,6 +240,9 @@ def probe_max_patch_shape(
     The probe forward passes run under the same precision mode (`amp`) as the
     later prediction, so the probed maximum is not sized for fp32 memory when
     the model will run in bf16.
+
+    With `channels_last_3d=True` the probe runs in the prediction's
+    channels_last_3d layout; default False (plain contiguous layout).
 
     1. This is merely a good quick guess. However, an exact maximum size causes problems.
     2. If isotropic shape, then the `best_n` is 128 for 2080 Ti, 186 for 3090,
@@ -227,20 +255,22 @@ def probe_max_patch_shape(
         return (1, 1024, 1024) if nn_dim == 2 else (256, 256, 256)
 
     with _quiet_oom_probing(device):
-        model = model.to(device)
+        model, cl3d = _to_probe_device(model, device, channels_last_3d)
         model.eval()
 
         if nn_dim == 3:  # use binary search for 3D
             low, high = (2, 50)
             best_n = low
 
-            with torch.no_grad(), amp_context(amp, device):
+            with torch.no_grad(), amp_context(amp, device), cudnn_benchmark():
                 while low <= high:
                     mid = (low + high) // 2
                     patch_shape = (16 * mid,) * nn_dim
                     x = None
                     try:
-                        x = torch.randn((1, in_channels) + patch_shape).to(device)
+                        x = _to_probe_layout(
+                            torch.randn((1, in_channels) + patch_shape).to(device), cl3d
+                        )
                         _ = model(x)
                         best_n = mid  # Update best_n if successful
                         low = mid + 1  # Try larger patches
@@ -264,12 +294,14 @@ def probe_max_patch_shape(
         else:  # use linear search for 2D
             best_n = 200
 
-            with torch.no_grad(), amp_context(amp, device):
+            with torch.no_grad(), amp_context(amp, device), cudnn_benchmark():
                 while best_n > 16:
                     patch_shape = (16 * best_n,) * nn_dim
                     x = None
                     try:
-                        x = torch.randn((1, in_channels) + patch_shape).to(device)
+                        x = _to_probe_layout(
+                            torch.randn((1, in_channels) + patch_shape).to(device), cl3d
+                        )
                         _ = model(x)
                         break
                     except RuntimeError as e:
@@ -301,6 +333,7 @@ def find_feasible_patch_and_halo_shapes(
     max_attempts: int = 5,
     both_sides: bool = False,
     amp: AmpSetting = "auto",
+    channels_last_3d: bool = False,
 ) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     """Recommend a patch shape and halo size that is verified to fit on the device.
 
@@ -330,6 +363,8 @@ def find_feasible_patch_and_halo_shapes(
         amp (str): precision mode the memory probes run in (``"auto"``/``"off"``),
             to match the precision of the prediction they size for. Defaults to
             ``"auto"``.
+        channels_last_3d (bool, optional): size the probes in the prediction's
+            channels_last_3d layout; default False (plain contiguous layout).
 
     Returns:
         tuple[tuple[int, int, int], tuple[int, int, int]]:
@@ -339,7 +374,9 @@ def find_feasible_patch_and_halo_shapes(
     Raises:
         RuntimeError: If no feasible patch shape is found within `max_attempts` attempts.
     """
-    max_patch_shape = probe_max_patch_shape(model, in_channels, device, amp=amp)
+    max_patch_shape = probe_max_patch_shape(
+        model, in_channels, device, amp=amp, channels_last_3d=channels_last_3d
+    )
     is_2d = is_2d_model(model)
 
     if device == "cpu":
@@ -352,7 +389,14 @@ def find_feasible_patch_and_halo_shapes(
             full_volume_shape, max_patch_shape, min_halo_shape, both_sides, is_2d
         )
         if not will_CUDA_OOM(
-            model, in_channels, patch, halo, batch_size=1, device=device, amp=amp
+            model,
+            in_channels,
+            patch,
+            halo,
+            batch_size=1,
+            device=device,
+            amp=amp,
+            channels_last_3d=channels_last_3d,
         ):
             if attempt > 0:
                 logger.info(
@@ -380,9 +424,11 @@ def _probe_batch(
 ) -> None:
     """Run one forward (inference) or forward+backward (training) probe.
 
-    Runs under the resolved `amp` precision mode, like the compute it measures.
+    Runs under the resolved `amp` precision mode and with cuDNN autotuning
+    enabled, like the compute it measures (training and prediction loops both
+    run under `cudnn_benchmark()`).
     """
-    with amp_context(amp, device):
+    with amp_context(amp, device), cudnn_benchmark():
         if for_training:
             with torch.enable_grad():
                 model(x).sum().backward()
@@ -402,12 +448,15 @@ def _probe_batch_feasible(
     for_training: bool,
     amp: AmpSetting,
     device: str,
+    channels_last_3d: bool = False,
 ) -> bool:
     """Probe one batch size; True if it fits, False on OOM (or an unexpected
     error, which is logged and treated as infeasible like before)."""
     x = None
     try:
-        x = torch.randn((batch_size,) + x_shape).to(device)
+        x = _to_probe_layout(
+            torch.randn((batch_size,) + x_shape).to(device), channels_last_3d
+        )
         _probe_batch(model, x, for_training, amp, device)
         return True
     except RuntimeError as e:
@@ -437,6 +486,7 @@ def find_batch_size(
     device: str,
     for_training: bool = False,
     amp: AmpSetting = "auto",
+    channels_last_3d: bool = False,
 ) -> int:
     """Determine the maximum feasible batch size for a given model based on available GPU memory.
 
@@ -458,6 +508,8 @@ def find_batch_size(
         amp (str): precision mode the probe runs in (``"auto"``/``"off"``), to
             match the precision of the compute it measures. Defaults to
             ``"auto"``.
+        channels_last_3d (bool, optional): size the probe in the prediction's
+            channels_last_3d layout; default False (plain contiguous layout).
 
     Returns:
         int: The largest batch size that can be used without causing memory overflow.
@@ -472,10 +524,12 @@ def find_batch_size(
 
     was_training = model.training
     with _quiet_oom_probing(device), _preserve_bn_stats(model):
-        model = model.to(device)
+        model, cl3d = _to_probe_device(model, device, channels_last_3d)
         model.train(for_training)
         try:
-            if not _probe_batch_feasible(model, x_shape, 1, for_training, amp, device):
+            if not _probe_batch_feasible(
+                model, x_shape, 1, for_training, amp, device, cl3d
+            ):
                 raise RuntimeError(
                     f"Could not determine a feasible batch size for patch size "
                     f"{patch_shape} and halo {patch_halo}, even at batch size 1. "
@@ -484,7 +538,7 @@ def find_batch_size(
             feasible = 1
             candidate = 2
             while candidate <= MAX_PROBE_BATCH_SIZE and _probe_batch_feasible(
-                model, x_shape, candidate, for_training, amp, device
+                model, x_shape, candidate, for_training, amp, device, cl3d
             ):
                 feasible = candidate
                 candidate *= 2
@@ -494,7 +548,7 @@ def find_batch_size(
                 while feasible + 1 < infeasible:
                     mid = (feasible + infeasible) // 2
                     if _probe_batch_feasible(
-                        model, x_shape, mid, for_training, amp, device
+                        model, x_shape, mid, for_training, amp, device, cl3d
                     ):
                         feasible = mid
                     else:
@@ -514,12 +568,13 @@ def will_CUDA_OOM(
     batch_size: int,
     device: str,
     amp: AmpSetting = "auto",
+    channels_last_3d: bool = False,
 ) -> bool:
     """Determine if a given batch size will cause an out-of-memory (OOM)
     error on the specified device.
 
     The verification forward pass runs under the resolved `amp` precision
-    mode, like the prediction it measures.
+    mode and with cuDNN autotuning, like the prediction it measures.
 
     Args:
         model (nn.Module): The model to be used for prediction.
@@ -529,6 +584,8 @@ def will_CUDA_OOM(
         batch_size (int): Number of samples per batch.
         device (str): Device to perform the computation on ('cuda' or 'cpu').
         amp (str): precision mode the probe runs in (``"auto"``/``"off"``).
+        channels_last_3d (bool, optional): size the probe in the prediction's
+            channels_last_3d layout; default False (plain contiguous layout).
 
     Returns:
         bool: True if the batch size will cause an OOM error, False otherwise.
@@ -544,15 +601,18 @@ def will_CUDA_OOM(
         actual_patch_shape = actual_patch_shape[1:]
 
     with _quiet_oom_probing(device):
-        model = model.to(device)
+        model, cl3d = _to_probe_device(model, device, channels_last_3d)
         model.eval()
 
         OOM_error = False
         x = None
         try:
-            with torch.no_grad(), amp_context(amp, device):
-                x = torch.randn((batch_size, in_channels) + actual_patch_shape).to(
-                    device
+            with torch.no_grad(), amp_context(amp, device), cudnn_benchmark():
+                x = _to_probe_layout(
+                    torch.randn((batch_size, in_channels) + actual_patch_shape).to(
+                        device
+                    ),
+                    cl3d,
                 )
                 _ = model(x)
         except RuntimeError as e:

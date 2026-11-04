@@ -244,8 +244,9 @@ def unet_prediction(
             Outputs are fp32 in either mode. Defaults to "auto".
         channels_last_3d (bool, optional): run 3D models on CUDA in the
             channels_last_3d memory format (measured faster and leaner for
-            inference; kept off on CPU and for 2D models). Outputs are
-            unaffected. Defaults to True.
+            inference; kept off on CPU and for 2D models). The memory probes
+            size patches in the same layout. Outputs are unaffected. Defaults
+            to True.
 
     Returns:
         np.ndarray: The predicted boundaries as a 3D (Z, Y, X) or 4D (C, Z, Y, X) array, normalized between 0 and 1.
@@ -309,6 +310,7 @@ def unet_prediction(
             device,
             both_sides=False,
             amp=amp,
+            channels_last_3d=channels_last_3d,
         )
 
     oversized_dims = [

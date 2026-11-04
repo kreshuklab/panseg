@@ -23,7 +23,7 @@ import torch
 
 from panseg.functionals.prediction import prediction as prediction_module
 from panseg.functionals.prediction import unet_prediction
-from panseg.functionals.prediction.utils import array_predictor
+from panseg.functionals.prediction.utils import array_predictor, size_finder
 from panseg.functionals.prediction.utils.array_dataset import ArrayDataset
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
 from tests.functionals.prediction.helpers import (
@@ -122,12 +122,35 @@ def test_channels_last_3d_engaged_on_cuda():
     seen = _record_memory_format(model)
 
     predictor = _make_predictor(model, "cuda", in_channels=2, amp="off")
-    seen.clear()  # the sizing probe forwards run plain by design (conservative)
+    # no clear: the constructor's sizing probes must use the same layout as the
+    # prediction loop (see `test_memory_probes_use_the_prediction_memory_format`)
     predictor(_multichannel_dataset())
 
     assert seen, "no forward pass ran"
     assert all(input_cl for input_cl, _ in seen), "inputs not channels_last_3d"
     assert all(params_cl for _, params_cl in seen), "params not channels_last_3d"
+
+
+@pytest.mark.parametrize("single_batch_mode", [True, False])
+@requires_cuda
+def test_memory_probes_use_the_prediction_memory_format(monkeypatch, single_batch_mode):
+    """The probes must size in the prediction loop's memory format.
+
+    Sizing in plain contiguous layout while the loop ran in channels_last_3d
+    under-estimated the largest single allocation and prediction OOMed at
+    batch size 1 (patch 168 + halo 44 = 256^3).
+    """
+    monkeypatch.setattr(size_finder, "MAX_PROBE_BATCH_SIZE", 4)
+    model = tiny_3d_model(in_channels=2)
+    seen = _record_memory_format(model)
+
+    _make_predictor(
+        model, "cuda", in_channels=2, amp="off", single_batch_mode=single_batch_mode
+    )
+
+    assert seen, "no probe forward ran"
+    assert all(input_cl for input_cl, _ in seen), "probe inputs not channels_last_3d"
+    assert all(params_cl for _, params_cl in seen), "probe params not channels_last_3d"
 
 
 @requires_cuda
@@ -399,6 +422,7 @@ def test_unet_prediction_forwards_tuning_options(tmp_path, monkeypatch):
 
     def fake_find_feasible(*args, **kwargs):
         calls["probe_amp"] = kwargs.get("amp", "auto")
+        calls["probe_channels_last_3d"] = kwargs.get("channels_last_3d")
         return (8, 64, 64), (2, 8, 8)
 
     class FakePredictor:
@@ -427,13 +451,14 @@ def test_unet_prediction_forwards_tuning_options(tmp_path, monkeypatch):
         device="cpu",
         disable_tqdm=True,
         amp="off",
-        channels_last_3d=False,
+        channels_last_3d=True,
     )
 
     assert calls == {
         "probe_amp": "off",
+        "probe_channels_last_3d": True,
         "amp": "off",
-        "channels_last_3d": False,
+        "channels_last_3d": True,
         "has_compile_arg": False,
     }
     assert pmaps.shape == (1, 16, 96, 96)

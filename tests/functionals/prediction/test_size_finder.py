@@ -153,6 +153,7 @@ class FakeOomProbe:
         batch_size,
         device,
         amp="auto",
+        channels_last_3d=False,
     ):
         actual = tuple(patch_shape[i] + 2 * patch_halo[i] for i in range(3))
         self.verified_shapes.append(actual)
@@ -169,7 +170,7 @@ def fake_oom_probe(monkeypatch):
     monkeypatch.setattr(
         size_finder,
         "probe_max_patch_shape",
-        lambda model, in_channels, device, amp="auto": PROBED_MAX,
+        lambda model, in_channels, device, amp="auto", **kwargs: PROBED_MAX,
     )
     return probe
 
@@ -232,7 +233,7 @@ def test_find_feasible_patch_and_halo_shapes_2d_model_keeps_depth_1(
     monkeypatch.setattr(
         size_finder,
         "probe_max_patch_shape",
-        lambda model, in_channels, device, amp="auto": (1, 3200, 3200),
+        lambda model, in_channels, device, amp="auto", **kwargs: (1, 3200, 3200),
     )
 
     result = find_feasible_patch_and_halo_shapes(FakeUNet2D(), 1, VOL, HALO, device)
@@ -248,7 +249,7 @@ def test_find_feasible_patch_and_halo_shapes_2d_model_shrinks_yx_only(
     monkeypatch.setattr(
         size_finder,
         "probe_max_patch_shape",
-        lambda model, in_channels, device, amp="auto": (1, 3200, 3200),
+        lambda model, in_channels, device, amp="auto", **kwargs: (1, 3200, 3200),
     )
     fake_oom_probe.threshold = 9_000_000  # the first attempt (10.24M voxels) OOMs
 
@@ -395,6 +396,7 @@ def test_probe_max_patch_shape_3d_treats_mps_buffer_size_error_as_oom(fake_cuda)
         ("Invalid buffer size: 4.29 GiB", "mps", True),
         ("Invalid buffer size: 4.29 GiB", "mps:0", True),
         ("Invalid buffer size: 4.29 GiB", "cuda:0", False),
+        ("cuDNN error: CUDNN_STATUS_ALLOC_FAILED", "cuda:0", True),
         ("MPS backend error: illegal instruction", "mps", False),
         ("boom", "mps", False),
     ],
