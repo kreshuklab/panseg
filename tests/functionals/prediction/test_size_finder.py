@@ -212,6 +212,7 @@ def test_find_feasible_patch_and_halo_shapes_raises_when_nothing_fits(
         find_feasible_patch_and_halo_shapes(
             nn.Module(), 1, VOL, HALO, device="cuda", max_attempts=3
         )
+    # short-circuit after the first failed check of each attempt
     assert len(fake_oom_probe.verified_shapes) == 3
 
 
@@ -367,15 +368,26 @@ def fake_cuda(monkeypatch):
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
 
 
-def test_probe_max_patch_shape_3d_binary_search(fake_cuda):
-    # n=4 (64^3 voxels) fits, n=5 (80^3) OOMs
-    model = FakeUNet3D(oom_voxel_threshold=300_000)
+@pytest.mark.parametrize(
+    ("oom_voxel_threshold", "expected"),
+    [
+        (150_000, (48, 48, 48)),  # n=3: below the boundary, no headroom
+        (300_000, (64, 64, 64)),  # n=4: below the boundary, no headroom
+        (2_500_000, (128, 128, 128)),  # n=8: below the boundary, no headroom
+        # n=17 probes 272^3 successfully; one-step headroom -> 256^3 (n=16)
+        (22_000_000, (256, 256, 256)),
+    ],
+)
+def test_probe_max_patch_shape_3d_binary_search(
+    fake_cuda, oom_voxel_threshold, expected
+):
+    model = FakeUNet3D(oom_voxel_threshold=oom_voxel_threshold)
 
-    assert probe_max_patch_shape(model, 1, "cuda:0") == (64, 64, 64)
+    assert probe_max_patch_shape(model, 1, "cuda:0") == expected
 
 
-def test_probe_max_patch_shape_3d_caps_at_50(fake_cuda):
-    assert probe_max_patch_shape(FakeUNet3D(), 1, "cuda:0") == (800, 800, 800)
+def test_probe_max_patch_shape_3d_caps_at_50_with_one_step_headroom(fake_cuda):
+    assert probe_max_patch_shape(FakeUNet3D(), 1, "cuda:0") == (784, 784, 784)
 
 
 def test_probe_max_patch_shape_3d_floors_at_low_on_persistent_oom(fake_cuda):

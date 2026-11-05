@@ -64,9 +64,11 @@ class ArrayPredictor:
         verbose_logging (bool, optional): If True, enable verbose logging. Defaults to False.
         disable_tqdm (bool, optional): If True, disable tqdm progress bars. Defaults to False.
         amp (AmpSetting, optional): precision mode, see `unet_prediction`.
-        channels_last_3d (bool, optional): channels_last_3d memory format for
-            3D models on CUDA, see `unet_prediction`. The memory probes size in
-            the same layout.
+        channels_last_3d (bool, optional): opt in to the channels_last_3d
+            memory format for 3D models on CUDA, see `unet_prediction`. The
+            memory probes size in the same layout. Defaults to False because
+            the measured result is stack-dependent: on torch 2.13/CUDA
+            13/cuDNN 9.26 it is 1.7x slower than contiguous.
         compile (bool | None, optional): torch.compile control. None (default)
             compiles automatically only on CUDA and only when the number of
             prediction batches amortizes the one-time compile cost
@@ -104,7 +106,7 @@ class ArrayPredictor:
         disable_tqdm: bool = False,
         tracker=None,
         amp: AmpSetting = "auto",
-        channels_last_3d: bool = True,
+        channels_last_3d: bool = False,
         compile: bool | None = None,
     ):
         self.device = device
@@ -176,10 +178,10 @@ class ArrayPredictor:
         self.disable_tqdm = disable_tqdm
         self.is_embedding = is_embedding
 
-        # measured inference wins: channels_last_3d only pays off for 3D models
-        # on CUDA (a memory-layout change, outputs are unaffected); keep it off
-        # on CPU and for 2D models. Idempotent: the probes may have converted
-        # the model already.
+        # channels_last_3d is opt-in and, when requested, only applies to 3D
+        # models on CUDA (a memory-layout change, outputs are unaffected); keep
+        # it off on CPU and for 2D models. Idempotent: the probes may have
+        # converted the model already.
         if self.channels_last_3d:
             self.model = self.model.to(memory_format=torch.channels_last_3d)
 

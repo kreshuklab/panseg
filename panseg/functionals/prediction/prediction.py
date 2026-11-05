@@ -213,7 +213,7 @@ def unet_prediction(
     model_weights_path: Path | None = None,
     tracker=None,
     amp: AmpSetting = "auto",
-    channels_last_3d: bool = True,
+    channels_last_3d: bool = False,
 ) -> np.ndarray:
     """Generate prediction from raw data using a specified 3D U-Net model.
 
@@ -242,11 +242,12 @@ def unet_prediction(
             YAML-boolean spellings of these names also resolve, see
             `validate_amp`). The memory probes size patches in the same mode.
             Outputs are fp32 in either mode. Defaults to "auto".
-        channels_last_3d (bool, optional): run 3D models on CUDA in the
-            channels_last_3d memory format (measured faster and leaner for
-            inference; kept off on CPU and for 2D models). The memory probes
-            size patches in the same layout. Outputs are unaffected. Defaults
-            to True.
+        channels_last_3d (bool, optional): opt in to running 3D models on CUDA
+            in the channels_last_3d memory format (kept off on CPU and for 2D
+            models). The memory probes size patches in the same layout.
+            Outputs are unaffected. Defaults to False because the measured
+            result is stack-dependent: on torch 2.13/CUDA 13/cuDNN 9.26 it is
+            1.7x slower than contiguous.
 
     Returns:
         np.ndarray: The predicted boundaries as a 3D (Z, Y, X) or 4D (C, Z, Y, X) array, normalized between 0 and 1.

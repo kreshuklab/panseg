@@ -248,6 +248,15 @@ def probe_max_patch_shape(
     1. This is merely a good quick guess. However, an exact maximum size causes problems.
     2. If isotropic shape, then the `best_n` is 128 for 2080 Ti, 186 for 3090,
        but for the sake of speed, cap it at 50 and let batch size handle the rest.
+    3. The largest successful probe is at the allocator boundary and is
+       order-dependent, so a shape derived from it can fail a later verification.
+       Above 256^3 (16 voxels per step) there is also a measured performance
+       cliff for the compiled prediction loop: a 272^3 input runs ~76 s versus
+       ~37 s at 256^3 in the same cl3d-off/benchmark-off configuration on a
+       24 GB RTX 4090 (measured 2026-11-05). Shrinking a successful 3D probe by
+       one step therefore keeps a safety margin and stays below that cliff.
+       This is not a hard cap: a larger probe on a bigger GPU only loses one
+       16-voxel step.
     """
 
     nn_dim = 2 if is_2d_model(model) else 3
@@ -315,6 +324,10 @@ def probe_max_patch_shape(
                         del x
                         torch.cuda.empty_cache()
 
+        # One-step 3D headroom, only above the 256^3 boundary (see note 3 above).
+        if nn_dim == 3 and best_n > 16:
+            best_n -= 1
+
         del model
         torch.cuda.empty_cache()
 
@@ -339,12 +352,12 @@ def find_feasible_patch_and_halo_shapes(
     """Recommend a patch shape and halo size that is verified to fit on the device.
 
     `probe_max_patch_shape` probes the GPU with isotropic inputs and returns a tight maximum
-    patch shape with no safety margin. `derive_patch_and_halo_shapes` then redistributes that
-    voxel budget to match the aspect ratio of the full volume, so the shape that is actually
-    fed to the model at prediction time can require more GPU memory than the probed maximum
-    (peak memory does not depend on the voxel count alone), and the amount of free memory can
-    change between probing and prediction. On such machines the batch size determination
-    OOMs even for batch size 1 and prediction aborts (see issue #578).
+    patch shape. `derive_patch_and_halo_shapes` then redistributes that voxel budget to match
+    the aspect ratio of the full volume, so the shape that is actually fed to the model at
+    prediction time can require more GPU memory than the probed maximum (peak memory does not
+    depend on the voxel count alone), and the amount of free memory can change between probing
+    and prediction. On such machines the batch size determination OOMs even for batch size 1
+    and prediction aborts (see issue #578).
 
     To prevent that, the shape derived here is verified with an actual batch-size-1 forward
     pass via `will_CUDA_OOM`. If it does not fit, the voxel budget of the probed maximum is

@@ -2,8 +2,10 @@
 
 `channels_last_3d` is a memory-layout change, not a math change: outputs must
 match the plain layout within a tight tolerance and stay contiguous float32
-numpy arrays. It is default-on on CUDA for 3D models and must stay off on CPU
-and for 2D models.
+numpy arrays. It is opt-in and defaults to off because the measured result is
+stack-dependent (1.7x slower on torch 2.13/CUDA 13/cuDNN 9.26); when requested
+it applies only to 3D models on CUDA and must stay off on CPU and for 2D
+models.
 
 Inference does not enable cuDNN autotuning: the prediction loop and the
 inference memory probes run without `torch.backends.cudnn.benchmark` because
@@ -143,7 +145,9 @@ def test_channels_last_3d_engaged_on_cuda():
     model = tiny_3d_model(in_channels=2)
     seen = _record_memory_format(model)
 
-    predictor = _make_predictor(model, "cuda", in_channels=2, amp="off")
+    predictor = _make_predictor(
+        model, "cuda", in_channels=2, amp="off", channels_last_3d=True
+    )
     # no clear: the constructor's sizing probes must use the same layout as the
     # prediction loop (see `test_memory_probes_use_the_prediction_memory_format`)
     predictor(_multichannel_dataset())
@@ -167,7 +171,12 @@ def test_memory_probes_use_the_prediction_memory_format(monkeypatch, single_batc
     seen = _record_memory_format(model)
 
     _make_predictor(
-        model, "cuda", in_channels=2, amp="off", single_batch_mode=single_batch_mode
+        model,
+        "cuda",
+        in_channels=2,
+        amp="off",
+        single_batch_mode=single_batch_mode,
+        channels_last_3d=True,
     )
 
     assert seen, "no probe forward ran"
@@ -197,8 +206,28 @@ def test_channels_last_3d_stays_off_on_cpu():
     model = tiny_3d_model(in_channels=2)
     seen = _record_memory_format(model)
 
-    # default channels_last_3d=True must not engage on CPU
-    _predict(model, _multichannel_dataset(), "cpu", in_channels=2)
+    # an explicit channels_last_3d=True must not engage on CPU
+    _predict(
+        model,
+        _multichannel_dataset(),
+        "cpu",
+        in_channels=2,
+        channels_last_3d=True,
+    )
+
+    assert seen, "no forward pass ran"
+    assert not any(input_cl for input_cl, _ in seen)
+
+
+@requires_cuda
+def test_channels_last_3d_defaults_off_on_cuda_for_3d_models():
+    """Opt-in: the default must not engage the layout on CUDA either."""
+    model = tiny_3d_model(in_channels=2)
+    seen = _record_memory_format(model)
+
+    predictor = _make_predictor(model, "cuda", in_channels=2, amp="off")
+    assert predictor.channels_last_3d is False
+    predictor(_multichannel_dataset())
 
     assert seen, "no forward pass ran"
     assert not any(input_cl for input_cl, _ in seen)
@@ -214,6 +243,7 @@ def test_channels_last_3d_stays_off_for_2d_models_on_cuda():
         amp="off",
         patch=(1, 64, 64),
         patch_halo=(0, 8, 8),
+        channels_last_3d=True,
     )
     assert predictor.channels_last_3d is False
 
