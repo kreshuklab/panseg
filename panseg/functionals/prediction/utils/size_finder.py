@@ -239,7 +239,8 @@ def probe_max_patch_shape(
 
     The probe forward passes run under the same precision mode (`amp`) as the
     later prediction, so the probed maximum is not sized for fp32 memory when
-    the model will run in bf16.
+    the model will run in bf16. They do not use cuDNN autotuning, matching the
+    prediction loop; autotuning only pays off for the training loop.
 
     With `channels_last_3d=True` the probe runs in the prediction's
     channels_last_3d layout; default False (plain contiguous layout).
@@ -262,7 +263,7 @@ def probe_max_patch_shape(
             low, high = (2, 50)
             best_n = low
 
-            with torch.no_grad(), amp_context(amp, device), cudnn_benchmark():
+            with torch.no_grad(), amp_context(amp, device):
                 while low <= high:
                     mid = (low + high) // 2
                     patch_shape = (16 * mid,) * nn_dim
@@ -294,7 +295,7 @@ def probe_max_patch_shape(
         else:  # use linear search for 2D
             best_n = 200
 
-            with torch.no_grad(), amp_context(amp, device), cudnn_benchmark():
+            with torch.no_grad(), amp_context(amp, device):
                 while best_n > 16:
                     patch_shape = (16 * best_n,) * nn_dim
                     x = None
@@ -424,11 +425,13 @@ def _probe_batch(
 ) -> None:
     """Run one forward (inference) or forward+backward (training) probe.
 
-    Runs under the resolved `amp` precision mode and with cuDNN autotuning
-    enabled, like the compute it measures (training and prediction loops both
-    run under `cudnn_benchmark()`).
+    Runs under the resolved `amp` precision mode. Only the training probe keeps
+    cuDNN autotuning enabled, because it must measure the training loop, which
+    runs under `cudnn_benchmark()`. Inference probes and the prediction loop
+    run without autotuning.
     """
-    with amp_context(amp, device), cudnn_benchmark():
+    benchmark_context = cudnn_benchmark() if for_training else contextlib.nullcontext()
+    with amp_context(amp, device), benchmark_context:
         if for_training:
             with torch.enable_grad():
                 model(x).sum().backward()
@@ -574,7 +577,8 @@ def will_CUDA_OOM(
     error on the specified device.
 
     The verification forward pass runs under the resolved `amp` precision
-    mode and with cuDNN autotuning, like the prediction it measures.
+    mode, like the prediction it measures, but without cuDNN autotuning: the
+    prediction loop does not use it either.
 
     Args:
         model (nn.Module): The model to be used for prediction.
@@ -607,7 +611,7 @@ def will_CUDA_OOM(
         OOM_error = False
         x = None
         try:
-            with torch.no_grad(), amp_context(amp, device), cudnn_benchmark():
+            with torch.no_grad(), amp_context(amp, device):
                 x = _to_probe_layout(
                     torch.randn((batch_size, in_channels) + actual_patch_shape).to(
                         device

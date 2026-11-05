@@ -5,6 +5,12 @@ match the plain layout within a tight tolerance and stay contiguous float32
 numpy arrays. It is default-on on CUDA for 3D models and must stay off on CPU
 and for 2D models.
 
+Inference does not enable cuDNN autotuning: the prediction loop and the
+inference memory probes run without `torch.backends.cudnn.benchmark` because
+the per-shape tuning cost does not amortize at typical prediction batch counts.
+Only the training batch-size probe keeps it, to measure the benchmarked
+training loop.
+
 `torch.compile` is now automatic by default (`compile=None`): it engages only
 on CUDA and only when the number of prediction batches amortizes the one-time
 compile cost (`COMPILE_MIN_BATCHES`). An explicit `compile=True` / `False`
@@ -78,6 +84,22 @@ def _record_memory_format(model: torch.nn.Module) -> list[tuple[bool, bool]]:
 
     model.register_forward_hook(hook)
     return seen
+
+
+def test_prediction_loop_does_not_enable_cudnn_autotuning(monkeypatch):
+    """The prediction loop must not pay cuDNN autotuning per batch shape."""
+    monkeypatch.setattr(torch.backends.cudnn, "benchmark", False)
+    model = tiny_3d_model()
+    seen: list[bool] = []
+    model.register_forward_hook(
+        lambda module, inputs, output: seen.append(torch.backends.cudnn.benchmark)
+    )
+    dataset = make_dataset(raw_volume(), patch=(8, 64, 64), halo=(2, 8, 8))
+
+    _predict(model, dataset, "cpu", amp="off")
+
+    assert seen, "no prediction forward ran"
+    assert not any(seen), "the prediction loop enabled cuDNN autotuning"
 
 
 @requires_cuda

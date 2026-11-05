@@ -11,7 +11,6 @@ from panseg.functionals.precision import (
     AmpMode,
     AmpSetting,
     amp_context,
-    cudnn_benchmark,
     validate_amp,
 )
 from panseg.functionals.prediction.utils.array_dataset import (
@@ -357,9 +356,11 @@ class ArrayPredictor:
             self.tracker.total = num_batches
             self.tracker.progress = 0
         try:
-            # every patch has the same shape, so cuDNN autotuning pays off; the
-            # forward passes run in the same precision mode as the memory probes
-            with cudnn_benchmark(), amp_context(self.amp, self.device), torch.no_grad():
+            # no cuDNN autotuning: at the batch counts prediction typically sees
+            # the per-shape tuning cost does not amortize, and it gave no
+            # steady-state gain in the prediction loop either; the forward
+            # passes run in the same precision mode as the memory probes
+            with amp_context(self.amp, self.device), torch.no_grad():
                 for input_, indices in tqdm.tqdm(
                     test_loader, disable=self.disable_tqdm
                 ):

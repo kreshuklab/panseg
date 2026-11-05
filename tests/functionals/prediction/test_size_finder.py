@@ -346,6 +346,17 @@ class FakeUNet2D(_FakeUNetProbeMixin, UNet2D):
     """2D variant of `FakeUNet3D` so that `is_2d_model` routes to the 2D code paths."""
 
 
+def _record_cudnn_benchmark(model: nn.Module) -> list[bool]:
+    """Record `torch.backends.cudnn.benchmark` inside every forward pass."""
+    seen: list[bool] = []
+
+    def hook(module, inputs, output):
+        seen.append(torch.backends.cudnn.benchmark)
+
+    model.register_forward_hook(hook)
+    return seen
+
+
 @pytest.fixture()
 def fake_cuda(monkeypatch):
     """Route the torch calls the GPU probes make away from any real device, so
@@ -428,6 +439,41 @@ def test_probe_max_patch_shape_2d_reraises_non_oom_errors(fake_cuda):
 
     with pytest.raises(RuntimeError, match="boom"):
         probe_max_patch_shape(model, 1, "cuda:0")
+
+
+@pytest.mark.parametrize("model_factory", [FakeUNet3D, FakeUNet2D])
+def test_probe_max_patch_shape_runs_without_cudnn_autotuning(fake_cuda, model_factory):
+    """Inference patch probing must not enable cuDNN autotuning."""
+    model = model_factory(oom_voxel_threshold=300_000)
+    seen = _record_cudnn_benchmark(model)
+
+    probe_max_patch_shape(model, 1, "cuda:0")
+
+    assert seen, "no probe forward ran"
+    assert not any(seen), "the patch probe enabled cuDNN autotuning"
+
+
+def test_will_cuda_oom_runs_without_cudnn_autotuning(fake_cuda):
+    model = FakeUNet3D()
+    seen = _record_cudnn_benchmark(model)
+
+    assert will_CUDA_OOM(model, 1, (64, 64, 64), (0, 0, 0), 1, "cuda:0") is False
+
+    assert seen, "no verification forward ran"
+    assert not any(seen), "the OOM verification enabled cuDNN autotuning"
+
+
+@pytest.mark.parametrize(("for_training", "expected"), [(False, False), (True, True)])
+def test_probe_batch_autotuning_only_for_training(for_training, expected):
+    """The training probe measures the benchmarked training loop; inference
+    probes match the (now autotuning-free) prediction loop."""
+    model = FakeUNet3D()
+    seen = _record_cudnn_benchmark(model)
+    x = _FakeDeviceTensor((1, 1, 16, 16, 16))
+
+    size_finder._probe_batch(model, x, for_training, amp="off", device="cuda:0")
+
+    assert seen == [expected]
 
 
 def test_will_cuda_oom_detects_oom(fake_cuda):
