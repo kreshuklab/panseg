@@ -7,7 +7,6 @@ memory probes therefore always size patches/batches for the same precision the
 model will actually run in: sizing and execution cannot diverge.
 """
 
-import contextlib
 from contextlib import AbstractContextManager, nullcontext
 from typing import Literal, cast
 
@@ -79,19 +78,3 @@ def amp_context(amp: AmpSetting, device: str | torch.device) -> AbstractContextM
     ):
         return torch.autocast("cuda", dtype=torch.bfloat16)
     return nullcontext()
-
-
-@contextlib.contextmanager
-def cudnn_benchmark(enabled: bool = True):
-    """Temporarily set `torch.backends.cudnn.benchmark`, restoring it after.
-
-    cuDNN autotuning pays off where input shapes are fixed (the training and
-    inference patch loops); the flag is global, so the previous value is
-    restored when the fixed-shape loop ends.
-    """
-    previous = torch.backends.cudnn.benchmark
-    torch.backends.cudnn.benchmark = enabled
-    try:
-        yield
-    finally:
-        torch.backends.cudnn.benchmark = previous

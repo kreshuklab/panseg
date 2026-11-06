@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from panseg.functionals.precision import AmpSetting, amp_context, cudnn_benchmark
+from panseg.functionals.precision import AmpSetting, amp_context
 from panseg.functionals.training.model import UNet2D
 
 logger = logging.getLogger(__name__)
@@ -130,8 +130,8 @@ def is_oom_error(error: RuntimeError, device: str) -> bool:
     CUDA reports "CUDA out of memory", but Apple MPS reports memory failures
     with different wording: "The device has run out of memory" for general
     exhaustion, and "Invalid buffer size: N GiB" when a single allocation
-    exceeds the 4 GiB Metal buffer cap. cuDNN autotuning under memory pressure
-    reports ``CUDNN_STATUS_ALLOC_FAILED`` instead.
+    exceeds the 4 GiB Metal buffer cap. cuDNN can also report a failed
+    workspace allocation as ``CUDNN_STATUS_ALLOC_FAILED``.
     """
     message = str(error).lower()
     if "out of memory" in message or "cudnn_status_alloc_failed" in message:
@@ -239,8 +239,8 @@ def probe_max_patch_shape(
 
     The probe forward passes run under the same precision mode (`amp`) as the
     later prediction, so the probed maximum is not sized for fp32 memory when
-    the model will run in bf16. They do not use cuDNN autotuning, matching the
-    prediction loop; autotuning only pays off for the training loop.
+    the model will run in bf16. Duplicate probe forwards of the same shape do
+    not pay a per-shape cuDNN autotuning cost: autotuning is not enabled.
 
     With `channels_last_3d=True` the probe runs in the prediction's
     channels_last_3d layout; default False (plain contiguous layout).
@@ -438,13 +438,11 @@ def _probe_batch(
 ) -> None:
     """Run one forward (inference) or forward+backward (training) probe.
 
-    Runs under the resolved `amp` precision mode. Only the training probe keeps
-    cuDNN autotuning enabled, because it must measure the training loop, which
-    runs under `cudnn_benchmark()`. Inference probes and the prediction loop
-    run without autotuning.
+    Runs under the resolved `amp` precision mode, like the compute it measures.
+    cuDNN autotuning is never enabled: it is net-negative for training and
+    inference, so probes run in the same default cuDNN mode as execution.
     """
-    benchmark_context = cudnn_benchmark() if for_training else contextlib.nullcontext()
-    with amp_context(amp, device), benchmark_context:
+    with amp_context(amp, device):
         if for_training:
             with torch.enable_grad():
                 model(x).sum().backward()
@@ -589,9 +587,9 @@ def will_CUDA_OOM(
     """Determine if a given batch size will cause an out-of-memory (OOM)
     error on the specified device.
 
-    The verification forward pass runs under the resolved `amp` precision
-    mode, like the prediction it measures, but without cuDNN autotuning: the
-    prediction loop does not use it either.
+    The verification forward pass runs the real prediction forward: eval mode,
+    ``torch.no_grad()``, and under the resolved `amp` precision mode, like the
+    prediction it measures.
 
     Args:
         model (nn.Module): The model to be used for prediction.
