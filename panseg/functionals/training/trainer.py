@@ -13,13 +13,25 @@ from panseg.functionals.precision import (
     AmpMode,
     AmpSetting,
     amp_context,
+    bf16_autocast_enabled,
     validate_amp,
 )
+from panseg.functionals.prediction.utils.size_finder import is_oom_error
 from panseg.functionals.training.model import UNet2D
 from panseg.functionals.training.utils import RunningAverage
 from panseg.functionals.transfer import to_device
 
 logger = logging.getLogger(__name__)
+
+TRAIN_COMPILE_MIN_ITERS = 1000
+"""Minimum iteration budget that amortizes a training `torch.compile`.
+
+Measured on the shared RTX 4090 (patch 80x160x160 batch 1, bf16): the cold
+first-step compile costs 11.9-21.2 s and the warm cost is 1.4-1.9 s, while the
+steady-state win is 1.46x (72.27 -> 49.58 ms). fp32 is
+deliberately not compiled: the gain is only 5-8%, and compiled
+fp32 silently selects TF32 kernels.
+"""
 
 
 def load_pretrained_weights(model: nn.Module, pre_trained: Path) -> None:
@@ -68,6 +80,12 @@ class UNetTrainer:
         amp (str): precision mode (``"auto"``: bf16 autocast on supported CUDA
             devices, else fp32; ``"off"``: always fp32). Model weights and
             checkpoints stay fp32 in either mode. Defaults to "auto".
+
+    Long bf16 training runs are automatically compiled with `torch.compile`
+    (see `TRAIN_COMPILE_MIN_ITERS`). Compilation is lazy, transparent,
+    and does not changes checkpoints: `self.model` stays the plain module, the
+    compiled handle is only used for forward passes. A compile failure warns
+    and runs eager.
     """
 
     def __init__(
@@ -98,8 +116,38 @@ class UNetTrainer:
 
         self.num_iterations = 1
 
+        # keep self.model plain: checkpoint keys, optimizer parameter identity,
+        # DataParallel and isinstance(model, UNet2D) must stay intact
+        self._compiled_model: nn.Module | None = None
+        if self._should_compile():
+            try:
+                # lazy: the first forward compiles
+                self._compiled_model = torch.compile(self.model)
+            except Exception as e:  # pragma: no cover - torch.compile is lazy
+                logger.warning(
+                    f"torch.compile failed ({e}); training eagerly. Set "
+                    "C_INCLUDE_PATH=/usr/local/cuda/include if triton cannot "
+                    "find the CUDA headers."
+                )
+                self._compiled_model = None
+
         # init tensorboard logger
         self.writer = SummaryWriter(log_dir=checkpoint_dir / "logs")
+
+    def _should_compile(self) -> bool:
+        """Whether this run gets automatic `torch.compile`.
+
+        Only CUDA runs that actually resolve to bf16 autocast and are long
+        enough to amortize the compile cost qualify. DataParallel is excluded
+        (the compiled handle would wrap the wrong level); fp32 and CPU never
+        compile.
+        """
+        return (
+            torch.device(self.device).type == "cuda"
+            and bf16_autocast_enabled(self.amp, self.device)
+            and self.max_num_iterations >= TRAIN_COMPILE_MIN_ITERS
+            and not isinstance(self.model, nn.DataParallel)
+        )
 
     def train(self) -> None:
         for epoch in range(self.max_num_epochs):
@@ -212,6 +260,29 @@ class UNetTrainer:
 
             return val_losses.avg
 
+    def _forward(self, _input: torch.Tensor) -> torch.Tensor:
+        """Run the model forward, through the compiled handle when present.
+
+        A first-forward failure that is not an OOM falls back to eager
+        permanently for this trainer and retries the batch eagerly, so a
+        triton/inductor environment problem never kills a training run. CUDA
+        OOMs propagate: they mean the batch does not fit and must not be
+        silently retried.
+        """
+        if self._compiled_model is None:
+            return self.model(_input)
+        try:
+            return self._compiled_model(_input)
+        except RuntimeError as e:
+            if is_oom_error(e, self.device):
+                raise
+            logger.warning(
+                f"Compiled forward failed ({e}); falling back to eager training "
+                "for the rest of this run."
+            )
+            self._compiled_model = None
+            return self.model(_input)
+
     def _forward_pass(
         self, _input: torch.Tensor, target: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -223,12 +294,12 @@ class UNetTrainer:
                 # remove the singleton z-dimension from the input
                 _input = torch.squeeze(_input, dim=-3)
                 # forward pass
-                output = self.model(_input)
+                output = self._forward(_input)
                 # add the singleton z-dimension to the output
                 output = torch.unsqueeze(output, dim=-3)
             else:
                 # forward pass
-                output = self.model(_input)
+                output = self._forward(_input)
 
             # the loss computes in fp32 (see losses.py) even under autocast
             loss = self.loss_criterion(output, target)
@@ -263,6 +334,7 @@ class UNetTrainer:
         if self.writer is not None:
             self.writer.close()
             self.writer = None
+        self._compiled_model = None
         self.optimizer.state.clear()
         self.model.to("cpu")
         self.loaders = {}

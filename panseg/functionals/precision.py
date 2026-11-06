@@ -50,6 +50,33 @@ def _is_cuda_device(device: str | torch.device) -> bool:
     return torch.device(device).type == "cuda"
 
 
+def bf16_autocast_enabled(amp: AmpSetting, device: str | torch.device) -> bool:
+    """Whether `amp_context(amp, device)` resolves to bf16 autocast.
+
+    Single source of truth for the resolved precision: `amp_context` builds its
+    context manager from this predicate, and callers that need to branch on the
+    actual precision (e.g. the training ``torch.compile`` gate) call it instead
+    of duplicating the conditions.
+
+    Args:
+        amp: the configured precision mode (see `validate_amp` for the
+            accepted spellings).
+        device: device the compute will run on.
+
+    Returns:
+        True only for ``"auto"`` on a CUDA device where bf16 is supported.
+
+    Raises:
+        ValueError: if `amp` is not a supported mode.
+    """
+    return (
+        validate_amp(amp) == "auto"
+        and _is_cuda_device(device)
+        and torch.cuda.is_available()
+        and torch.cuda.is_bf16_supported()
+    )
+
+
 def amp_context(amp: AmpSetting, device: str | torch.device) -> AbstractContextManager:
     """Resolve ``amp: auto|off`` to the torch context manager for `device`.
 
@@ -69,12 +96,6 @@ def amp_context(amp: AmpSetting, device: str | torch.device) -> AbstractContextM
     Raises:
         ValueError: if `amp` is not a supported mode.
     """
-    amp = validate_amp(amp)
-    if (
-        amp == "auto"
-        and _is_cuda_device(device)
-        and torch.cuda.is_available()
-        and torch.cuda.is_bf16_supported()
-    ):
+    if bf16_autocast_enabled(amp, device):
         return torch.autocast("cuda", dtype=torch.bfloat16)
     return nullcontext()

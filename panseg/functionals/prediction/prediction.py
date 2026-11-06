@@ -246,8 +246,7 @@ def unet_prediction(
             in the channels_last_3d memory format (kept off on CPU and for 2D
             models). The memory probes size patches in the same layout.
             Outputs are unaffected. Defaults to False because the measured
-            result is stack-dependent: on torch 2.13/CUDA 13/cuDNN 9.26 it is
-            1.7x slower than contiguous.
+            result is stack-dependent.
 
     Returns:
         np.ndarray: The predicted boundaries as a 3D (Z, Y, X) or 4D (C, Z, Y, X) array, normalized between 0 and 1.

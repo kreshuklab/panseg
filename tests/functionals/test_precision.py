@@ -9,7 +9,11 @@ execution can never run in different precisions.
 import pytest
 import torch
 
-from panseg.functionals.precision import amp_context, validate_amp
+from panseg.functionals.precision import (
+    amp_context,
+    bf16_autocast_enabled,
+    validate_amp,
+)
 from tests.conftest import requires_cuda
 
 
@@ -64,3 +68,16 @@ def test_amp_rejects_unknown_modes(device):
 def test_amp_accepts_yaml_boolean_spellings(configured, expected):
     """YAML reads a bare `off`/`on` as a boolean; both spellings must resolve."""
     assert validate_amp(configured) == expected
+
+
+def test_bf16_autocast_enabled_is_the_resolved_precision(monkeypatch):
+    """The compile gate and `amp_context` share this one predicate."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: True)
+
+    assert bf16_autocast_enabled("auto", "cuda:0") is True
+    assert bf16_autocast_enabled("off", "cuda:0") is False
+    assert bf16_autocast_enabled("auto", "cpu") is False
+
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda: False)
+    assert bf16_autocast_enabled("auto", "cuda:0") is False

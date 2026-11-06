@@ -1342,6 +1342,7 @@ class TestUNetTrainerForwardPass:
         trainer.loss_criterion = DiceLoss()
         trainer.amp = "auto"
         trainer.device = "cpu"
+        trainer._compiled_model = None
         return trainer
 
     def test_forward_pass_unwraps_data_parallel_2d_model(self):
