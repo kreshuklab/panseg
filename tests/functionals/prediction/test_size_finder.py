@@ -268,6 +268,7 @@ class _FakeDeviceTensor:
 
     def __init__(self, shape):
         self.shape = tuple(shape)
+        self.device = torch.device("cpu")
 
     def to(self, *args, **kwargs):
         return self
@@ -347,6 +348,18 @@ class FakeUNet2D(_FakeUNetProbeMixin, UNet2D):
     """2D variant of `FakeUNet3D` so that `is_2d_model` routes to the 2D code paths."""
 
 
+def _fake_training_step(model, x, amp, device):
+    """Cheap synthetic backward used by the GPU-free search tests.
+
+    The real `_training_step` (Dice loss + Adam) needs real tensors and a real
+    device; the search-logic tests only need a backward that can raise the
+    fake backward OOM.
+    """
+    with size_finder.amp_context(amp, device):
+        with torch.enable_grad():
+            model(x).sum().backward()
+
+
 @pytest.fixture()
 def fake_cuda(monkeypatch):
     """Route the torch calls the GPU probes make away from any real device, so
@@ -355,6 +368,7 @@ def fake_cuda(monkeypatch):
         torch, "randn", lambda shape, *args, **kwargs: _FakeDeviceTensor(shape)
     )
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(size_finder, "_training_step", _fake_training_step)
 
 
 @pytest.mark.parametrize(
@@ -594,6 +608,106 @@ def test_find_batch_size_restores_bn_stats_when_batch_one_ooms(fake_cuda):
     after = _bn_buffers(model)
     for name in before:
         assert torch.equal(after[name], before[name]), name
+
+
+def test_training_step_runs_dice_loss_and_optimizer_on_cpu():
+    """The probe's training step is a real step: it must update the weights.
+
+    A synthetic `model(x).sum().backward()` cannot prove this, so this test
+    runs `_training_step` (not the search) on CPU and checks that parameters
+    changed and that the gradients were cleared afterwards.
+    """
+    torch.manual_seed(0)
+    model = UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4])
+    before = {name: p.detach().clone() for name, p in model.named_parameters()}
+    forwards = []
+    model.register_forward_hook(lambda module, inputs, output: forwards.append(1))
+
+    size_finder._training_step(model, torch.rand(1, 1, 16, 16, 16), "off", "cpu")
+
+    after = dict(model.named_parameters())
+    assert any(not torch.equal(before[name], after[name]) for name in before)
+    assert all(parameter.grad is None for parameter in model.parameters())
+    # the second step runs with the first step's gradients still live, which is
+    # what the real training loop does and what a one-step probe misses
+    assert len(forwards) == 2
+
+
+def test_training_step_supports_in_channels_different_from_out_channels(monkeypatch):
+    """The probe target follows the model output, not the input.
+
+    A 2-channel CZYX input paired with a 1-channel label is supported, but
+    `DiceLoss` asserts that input and target have the same shape. A target
+    built from `x.shape` tripped that assertion and aborted the whole
+    `find_batch_size(for_training=True)` probe.
+    """
+    torch.manual_seed(0)
+    model = UNet3D(in_channels=2, out_channels=1, final_sigmoid=True, f_maps=[8, 16])
+    before = {name: p.detach().clone() for name, p in model.named_parameters()}
+    target_shapes: list[tuple[int, ...]] = []
+    real_randint = torch.randint
+
+    def recording_randint(*args, **kwargs):
+        target_shapes.append(tuple(args[2]))  # torch.randint(low, high, size)
+        return real_randint(*args, **kwargs)
+
+    monkeypatch.setattr(size_finder.torch, "randint", recording_randint)
+
+    size_finder._training_step(model, torch.rand(1, 2, 8, 32, 32), "off", "cpu")
+
+    after = dict(model.named_parameters())
+    assert any(not torch.equal(before[name], after[name]) for name in before)
+    assert all(parameter.grad is None for parameter in model.parameters())
+    # cheap proof that the DiceLoss shape assertion is not hit: the probe's
+    # target has the output's 1 channel, not the input's 2
+    assert target_shapes == [(1, 1, 8, 32, 32)]
+
+
+class _ScalarProbeModel(nn.Module):
+    """Tiny model that runs a real training step on the fake probe tensors.
+
+    `forward` builds a real tensor from the requested shape and a scalar
+    parameter, so DiceLoss and Adam operate on real autograd state.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.weight = nn.Parameter(torch.tensor(0.5))
+
+    def to(self, *args, **kwargs):
+        return self
+
+    def forward(self, x):
+        return torch.ones(x.shape, dtype=torch.float32) * self.weight
+
+
+def test_find_batch_size_for_training_restores_parameters_bit_exact(monkeypatch):
+    """The real probe steps Adam on the weights; the search must undo that."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(
+        torch, "randn", lambda shape, *args, **kwargs: _FakeDeviceTensor(shape)
+    )
+    monkeypatch.setattr(size_finder, "MAX_PROBE_BATCH_SIZE", 2)
+    model = _ScalarProbeModel()
+    before = model.weight.detach().clone()
+    mutated: list[bool] = []
+    real_step = size_finder._training_step
+
+    def recording_step(model, x, amp, device):
+        previous = model.weight.detach().clone()
+        real_step(model, x, amp, device)
+        mutated.append(not torch.equal(model.weight, previous))
+
+    monkeypatch.setattr(size_finder, "_training_step", recording_step)
+
+    find_batch_size(
+        model, 1, (4, 4, 4), (0, 0, 0), "cuda:0", for_training=True, amp="off"
+    )
+
+    assert mutated and all(mutated), "the probe step did not update the weights"
+    assert torch.equal(model.weight, before)
+    assert model.weight.grad is None
 
 
 def test_find_batch_size_bisects_to_the_true_maximum(fake_cuda):
