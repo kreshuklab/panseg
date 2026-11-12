@@ -1,9 +1,6 @@
 # Example config for `panseg --train CONFIG_YAML`.
 # Keys are passed as keyword arguments to `panseg.functionals.training.train.unet_training`.
 # All required keys must be present; optional keys can be uncommented as needed.
-# A trained model's own `config_train.yml` is also a valid starting point: its
-# `loaders.val.slice_builder.stride_shape` is read as the validation patch stride
-# (the same knob as `val_slice_builder` below; configuring both is rejected).
 training:
   # Required:
   dataset_dir: TRAIN_DIR # contains train/ and val/ subdirectories with h5 files

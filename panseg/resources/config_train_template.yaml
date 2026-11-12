@@ -38,8 +38,8 @@ trainer:
   # amp: auto # training precision: 'auto' = bf16 autocast on supported CUDA devices (fp32 otherwise), 'off' = always fp32
 # Configuration of the training and validation loaders, as recorded in the
 # `config_train.yml` written into every checkpoint. The loaders are derived from
-# `patch_size` and `device`: when a config shaped like this one is passed to
-# `panseg --train`, only `val.slice_builder.stride_shape` is read back from this section.
+# `patch_size` and `device`; this section is a record of the run, not an input of
+# `panseg --train` (the training config format is `config_train_example.yaml`).
 loaders:
   # how many subprocesses to use for data loading, increases memory demands
   num_workers: 4
@@ -73,13 +73,11 @@ loaders:
       - PATH_TO_VAL_DIR
 
     # SliceBuilder configuration, i.e. how to iterate over the input volume patch-by-patch
-    # `stride_shape`  maps to the `val_slice_builder` argument of `unet_training`.
+    # validation patches are never threshold-filtered; they are non-overlapping by
+    # default and `stride_shape` below records the effective val grid
     slice_builder:
-      # validation patches are never filtered, so a filter name
-      # (e.g. `FilterSliceBuilder`) is rejected instead of silently ignored
       name: SliceBuilder
-      # val patch size given to the network; always the train patch size (`patch_size`),
-      # a different value is rejected
+      # val patch size given to the network (matches the train patch size)
       patch_shape: [80, 160, 160]
       # val stride between patches; defaults to the patch shape (non-overlapping)
       stride_shape: [80, 160, 160]
