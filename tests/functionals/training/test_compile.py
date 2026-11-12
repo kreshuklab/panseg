@@ -67,8 +67,11 @@ def _make_trainer(
 ):
     recorder = recorder or _CompileRecorder()
     monkeypatch.setattr(torch, "compile", recorder)
+    # mirror the real helper's contract: bf16 autocast implies a CUDA device
     monkeypatch.setattr(
-        trainer_module, "bf16_autocast_enabled", lambda amp, device: bf16
+        trainer_module,
+        "bf16_autocast_enabled",
+        lambda amp, device: bf16 and torch.device(device).type == "cuda",
     )
     model = model if model is not None else UNet3D(1, 1, f_maps=[4, 4])
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)

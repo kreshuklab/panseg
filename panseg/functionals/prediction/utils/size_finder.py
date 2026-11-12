@@ -613,7 +613,7 @@ def find_batch_size(
         return 1
 
     actual_patch_shape = tuple(patch_shape[i] + 2 * patch_halo[i] for i in range(3))
-    if isinstance(model, UNet2D):
+    if is_2d_model(model):
         actual_patch_shape = actual_patch_shape[1:]
     x_shape = (in_channels,) + actual_patch_shape
 
@@ -621,7 +621,12 @@ def find_batch_size(
     preserve_parameters = (
         _preserve_parameters(model) if for_training else contextlib.nullcontext()
     )
-    with _quiet_oom_probing(device), _preserve_bn_stats(model), preserve_parameters:
+    # BN running stats only change in train mode, so the cloning is
+    # training-only: the inference probe cannot pollute them.
+    preserve_bn_stats = (
+        _preserve_bn_stats(model) if for_training else contextlib.nullcontext()
+    )
+    with _quiet_oom_probing(device), preserve_bn_stats, preserve_parameters:
         model, cl3d = _to_probe_device(model, device, channels_last_3d)
         model.train(for_training)
         try:
@@ -696,7 +701,7 @@ def will_CUDA_OOM(
     actual_patch_shape = tuple(patch_shape[i] + 2 * patch_halo[i] for i in range(3))
 
     # If the model is a 2D UNet, adjust the patch shape to 2D
-    if isinstance(model, UNet2D):
+    if is_2d_model(model):
         actual_patch_shape = actual_patch_shape[1:]
 
     with _quiet_oom_probing(device):

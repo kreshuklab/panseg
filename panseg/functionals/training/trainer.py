@@ -124,12 +124,12 @@ class UNetTrainer:
     def _should_compile(self) -> bool:
         """Whether this run gets automatic `torch.compile`.
 
-        Only long CUDA runs that resolve to bf16 autocast qualify. DataParallel
-        is excluded because the compiled handle would wrap the wrong level.
+        Only long CUDA runs that resolve to bf16 autocast qualify;
+        `bf16_autocast_enabled` already implies a CUDA device. DataParallel is
+        excluded because the compiled handle would wrap the wrong level.
         """
         return (
-            torch.device(self.device).type == "cuda"
-            and bf16_autocast_enabled(self.amp, self.device)
+            bf16_autocast_enabled(self.amp, self.device)
             and self.max_num_iterations >= TRAIN_COMPILE_MIN_ITERS
             and not isinstance(self.model, nn.DataParallel)
         )
