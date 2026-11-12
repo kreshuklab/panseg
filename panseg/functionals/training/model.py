@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Self
+from typing import TYPE_CHECKING, Callable, Self
 
 import torch
 import torch.nn as nn
@@ -469,15 +469,15 @@ class AbstractUNet(nn.Module):
             or BCEWithLogitsLoss (two-class) respectively)
         f_maps (int, tuple): number of feature maps at each level of the encoder; if it's an integer the number
             of feature maps is given by the geometric progression: f_maps ^ k, k=1,2,3,4
-        final_sigmoid (bool): if True apply element-wise nn.Sigmoid after the final 1x1 convolution,
-            otherwise apply nn.Softmax. In effect only if `self.training == False`, i.e. during validation/testing
+        final_sigmoid (bool): if True `predict`/`activate` apply element-wise nn.Sigmoid to the
+            forward logits, otherwise nn.Softmax. `forward` itself always returns logits
         layer_order (string): determines the order of layers in `SingleConv` module.
             E.g. 'crg' stands for GroupNorm3d+Conv3d+ReLU. See `SingleConv` for more info
         num_groups (int): number of groups for the GroupNorm
         num_levels (int): number of levels in the encoder/decoder path (applied only if f_maps is an int)
             default: 4
-        is_segmentation (bool): if True and the model is in eval mode, Sigmoid/Softmax normalization is applied
-            after the final convolution; if False (regression problem) the normalization layer is skipped
+        is_segmentation (bool): if True `predict`/`activate` apply the Sigmoid/Softmax normalization
+            to the forward logits; if False (regression problem) the normalization layer is skipped
         conv_kernel_size (int or tuple): size of the convolving kernel in the conv layer
         pool_kernel_size (int or tuple): the size of the window
         conv_padding (int or tuple): add zero-padding added to all three sides of the input
@@ -564,12 +564,54 @@ class AbstractUNet(nn.Module):
 
         x = self.final_conv(x)
 
-        # apply final_activation (i.e. Sigmoid or Softmax) only during prediction.
-        # During training the network outputs logits
-        if not self.training and self.final_activation is not None:
-            x = self.final_activation(x)
-
+        # the output contract: forward() returns logits in every mode; the
+        # final activation is applied explicitly where the output leaves
+        # PanSeg (see `predict` and the `UNet*Probabilities` export classes)
         return x
+
+    def activate(self, logits: torch.Tensor) -> torch.Tensor:
+        """Map forward logits to the model's normalized output.
+
+        Applies the configured `final_activation` (Sigmoid or Softmax); a no-op
+        for regression models without one. The single place that touches
+        `final_activation`.
+
+        Args:
+            logits (torch.Tensor): output of `forward`.
+
+        Returns:
+            torch.Tensor: the normalized output (probabilities for segmentation
+            models, the input unchanged for regression models).
+        """
+        if self.final_activation is None:
+            return logits
+        return self.final_activation(logits)
+
+    def predict(self, x: torch.Tensor) -> torch.Tensor:
+        """Return the output probabilities for the input `x`.
+
+        `forward` always returns logits; `predict` is the explicit entry for
+        the points where probabilities leave PanSeg (inference probability
+        maps, packaged bioimageIO test tensors, BioImage.IO export).
+
+        Args:
+            x (torch.Tensor): model input.
+
+        Returns:
+            torch.Tensor: `activate(forward(x))`.
+        """
+        return self.activate(self(x))
+
+    def output_activation(self) -> Callable[[torch.Tensor], torch.Tensor]:
+        """The activation a consumer must apply to `forward`'s output.
+
+        `forward` returns logits, so consumers that call `forward` and need
+        probabilities (e.g. `ArrayPredictor`, which keeps control of the
+        forward pass for `torch.compile`) apply this. The identity for models
+        whose `forward` is already activated (`UNet*Probabilities`), which makes
+        a double activation impossible by construction.
+        """
+        return self.activate
 
 
 class UNet3D(AbstractUNet):
@@ -637,6 +679,56 @@ class UNet2D(AbstractUNet):
             conv_padding=conv_padding,
             is3d=False,
         )
+
+
+if TYPE_CHECKING:
+    # Typing only: each export class combines the mixin with an `AbstractUNet`
+    # subclass, so type checkers must see that API (`activate`, `forward`). The
+    # runtime base is `object`: the mixin adds behavior, the concrete class
+    # supplies the network.
+    _ProbabilitiesBase = AbstractUNet
+else:
+    _ProbabilitiesBase = object
+
+
+class ProbabilitiesForward(_ProbabilitiesBase):
+    """Mixin for `AbstractUNet` subclasses whose `forward` returns probabilities.
+
+    Combine it with a concrete architecture, e.g. `UNet3DProbabilities` mixes it
+    into `UNet3D`. Export-only variant for BioImage.IO: published models must
+    emit normalized probabilities when called through `bioimageio.core`, which
+    just calls `forward`. State-dict compatible with the base architecture — no
+    new parameters or buffers — so trained weights load unchanged.
+
+    The mixin owns the whole activation contract, so the subclasses cannot
+    diverge: `forward` activates, `predict` therefore does not activate again,
+    and `output_activation` is the identity so consumers that activate after
+    `forward` (e.g. `ArrayPredictor`) never double-activate either.
+    """
+
+    def forward(self, x):
+        return self.activate(super().forward(x))
+
+    def predict(self, x):
+        # forward() already returns probabilities; never activate twice
+        return self(x)
+
+    def output_activation(self) -> Callable[[torch.Tensor], torch.Tensor]:
+        return nn.Identity()
+
+
+class UNet3DProbabilities(ProbabilitiesForward, UNet3D):
+    """`UNet3D` whose `forward` returns probabilities instead of logits.
+
+    See `ProbabilitiesForward`.
+    """
+
+
+class UNet2DProbabilities(ProbabilitiesForward, UNet2D):
+    """`UNet2D` whose `forward` returns probabilities instead of logits.
+
+    See `ProbabilitiesForward`.
+    """
 
 
 class SpocoNet(nn.Module):

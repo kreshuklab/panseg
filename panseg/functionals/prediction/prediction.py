@@ -19,12 +19,13 @@ from panseg.functionals.dataprocessing.dataprocessing import (
     fix_layout_to_CZYX,
     fix_layout_to_ZYX,
 )
+from panseg.functionals.precision import AmpSetting, validate_amp
 from panseg.functionals.prediction.utils.array_dataset import ArrayDataset
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
 from panseg.functionals.prediction.utils.size_finder import (
-    _is_2d_model,
-    _min_input_depth,
     find_feasible_patch_and_halo_shapes,
+    is_2d_model,
+    min_input_depth,
 )
 from panseg.functionals.prediction.utils.slice_builder import SliceBuilder
 from panseg.functionals.prediction.utils.utils import get_stride_shape
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 def _check_patch_depth(model, raw_shape, patch, patch_halo) -> None:
     """Reject patch depths the model cannot run on, before probing the device."""
-    if _is_2d_model(model):  # 2D models predict one Z slice at a time
+    if is_2d_model(model):  # 2D models predict one Z slice at a time
         if patch is None:  # the derived patch has depth 1 and no Z halo
             return
         if patch[0] != 1:
@@ -50,7 +51,7 @@ def _check_patch_depth(model, raw_shape, patch, patch_halo) -> None:
                 "2D models predict one Z slice at a time. Set the Z halo to 0."
             )
         return
-    min_depth = _min_input_depth(model)
+    min_depth = min_input_depth(model)
     if patch is None and raw_shape[0] < min_depth:  # auto patches fit the image
         raise ValueError(
             f"This 3D model needs at least {min_depth} Z slices, but the image has "
@@ -211,6 +212,8 @@ def unet_prediction(
     config_path: Path | None = None,
     model_weights_path: Path | None = None,
     tracker=None,
+    amp: AmpSetting = "auto",
+    channels_last_3d: bool = False,
 ) -> np.ndarray:
     """Generate prediction from raw data using a specified 3D U-Net model.
 
@@ -234,6 +237,15 @@ def unet_prediction(
         disable_tqdm (bool, optional): If True, disables the tqdm progress bar. Defaults to False.
         config_path (Path | None, optional): Path to the model configuration file. Defaults to None.
         model_weights_path (Path | None, optional): Path to the model weights file. Defaults to None.
+        amp (AmpSetting, optional): precision mode (``"auto"``: bf16 autocast on
+            supported CUDA devices, else fp32; ``"off"``: always fp32; the
+            YAML-boolean spellings of these names also resolve, see
+            `validate_amp`). The memory probes size patches in the same mode.
+            Outputs are fp32 in either mode. Defaults to "auto".
+        channels_last_3d (bool, optional): opt in to running 3D models on CUDA
+            in the channels_last_3d memory format (kept off on CPU and for 2D
+            models). The memory probes size patches in the same layout.
+            Outputs are unaffected. Defaults to False.
 
     Returns:
         np.ndarray: The predicted boundaries as a 3D (Z, Y, X) or 4D (C, Z, Y, X) array, normalized between 0 and 1.
@@ -242,7 +254,7 @@ def unet_prediction(
         ValueError: If neither `model_name`, `model_id`, nor `config_path` are provided.
         ValueError: If the patch or halo shape cannot run on the model.
     """
-
+    amp = validate_amp(amp)
     if config_path is not None:  # Safari mode for custom models outside zoos
         logger.info("Safari prediction: Running model from custom config path.")
         model, model_config, model_path = model_zoo.get_model_by_config_path(
@@ -296,6 +308,8 @@ def unet_prediction(
             patch_halo,
             device,
             both_sides=False,
+            amp=amp,
+            channels_last_3d=channels_last_3d,
         )
 
     oversized_dims = [
@@ -326,6 +340,8 @@ def unet_prediction(
         verbose_logging=False,
         disable_tqdm=disable_tqdm,
         tracker=tracker,
+        amp=amp,
+        channels_last_3d=channels_last_3d,
     )
 
     if int(model_config["in_channels"]) > 1:  # if multi-channel input

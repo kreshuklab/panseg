@@ -25,6 +25,28 @@ VOXEL_SIZE = (0.235, 0.15, 0.15)
 KEY_ZARR = "volumes/new"
 
 IS_CUDA_AVAILABLE = torch.cuda.is_available()
+requires_cuda = pytest.mark.skipif(
+    not IS_CUDA_AVAILABLE, reason="CUDA required for this test"
+)
+
+
+@pytest.fixture
+def tensor_to_spy(monkeypatch):
+    """Record ``(shape, args, kwargs)`` of every ``torch.Tensor.to`` call.
+
+    Used to pin the host-to-device transfer contract (non-blocking copies of
+    pinned batches on CUDA). Filter by the batch shape to isolate the transfer
+    calls from torch-internal conversions (module moves, ``memory_format``).
+    """
+    calls = []
+    real_to = torch.Tensor.to
+
+    def wrapped(self, *args, **kwargs):
+        calls.append((tuple(self.shape), args, dict(kwargs)))
+        return real_to(self, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "to", wrapped)
+    return calls
 
 
 @pytest.fixture

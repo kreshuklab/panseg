@@ -141,6 +141,8 @@ def test_biio_prediction_task_mock_model_fixed_size(tmp_path):
 
     Covers model-id resolution from a local zip, real bioimageio.core
     inference, and the fixed input_block_shape branch of biio_prediction.
+    The callable is the probabilities subclass, matching what `biio.py`
+    exports: published models emit [0, 1] probabilities, not logits.
     """
     torch.manual_seed(0)
     model = UNet3D(**MOCK_UNET_KWARGS)
@@ -194,7 +196,7 @@ def test_biio_prediction_task_mock_model_fixed_size(tmp_path):
                     source=Path("weights.pytorch"),
                     architecture=ArchitectureFromLibraryDescr(
                         import_from="panseg.functionals.training.model",
-                        callable="UNet3D",
+                        callable="UNet3DProbabilities",
                         kwargs=MOCK_UNET_KWARGS,
                     ),
                     pytorch_version=Version(torch.__version__),
