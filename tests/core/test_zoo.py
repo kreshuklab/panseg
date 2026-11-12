@@ -147,7 +147,7 @@ def test_dimensionality_filter_is_spatial_only():
 
 ZOO_MODEL_NAME = "confocal_2D_unet_ovules_ds2x"
 ZOO_MODEL_URL = (
-    "https://zenodo.org/record/7772709/files/confocal_2D_unet_ovules_ds2x.pytorch"
+    "https://zenodo.org/records/7772709/files/confocal_2D_unet_ovules_ds2x.pytorch"
 )
 
 

@@ -209,11 +209,20 @@ def _ok_response(payload=b"fake-bytes"):
     return resp
 
 
+def _http_error(status: int, retry_after: int | None = None):
+    response = MagicMock()
+    response.status_code = status
+    response.headers = {} if retry_after is None else {"Retry-After": str(retry_after)}
+    error = requests.exceptions.HTTPError(f"{status} error")
+    error.response = response
+    return error
+
+
 class TestDownloadFileResilience:
     """download_file must be timeout-bound, retried, atomic and loud."""
 
     def test_success_first_attempt_writes_file(self, tmp_path, mocker):
-        url = "https://zenodo.org/record/1/files/a.pytorch"
+        url = "https://zenodo.org/records/1/files/a.pytorch"
         target = tmp_path / "a.pytorch"
         mock_get = mocker.patch.object(
             utils_mod.requests, "get", return_value=_ok_response(b"weights")
@@ -226,9 +235,14 @@ class TestDownloadFileResilience:
         for call in mock_get.call_args_list:
             timeout = call.kwargs.get("timeout")
             assert timeout is not None, "request was made without a timeout"
+            # Zenodo asks for an identifiable client, not a browser or the
+            # generic python-requests User-Agent, which may be blocked.
+            user_agent = call.kwargs["headers"]["User-Agent"]
+            assert user_agent == utils_mod.USER_AGENT
+            assert user_agent.startswith("panseg/")
 
     def test_transient_failure_then_retry_succeeds(self, tmp_path, mocker):
-        url = "https://zenodo.org/record/1/files/a.pytorch"
+        url = "https://zenodo.org/records/1/files/a.pytorch"
         target = tmp_path / "a.pytorch"
         mock_get = mocker.patch.object(
             utils_mod.requests,
@@ -249,8 +263,43 @@ class TestDownloadFileResilience:
             utils_mod.INITIAL_RETRY_DELAY
         ]
 
+    def test_rate_limit_honours_retry_after(self, tmp_path, mocker):
+        url = "https://zenodo.org/records/1/files/a.pytorch"
+        target = tmp_path / "a.pytorch"
+        mock_get = mocker.patch.object(
+            utils_mod.requests,
+            "get",
+            side_effect=[_http_error(429, retry_after=42), _ok_response(b"weights")],
+        )
+        mock_sleep = mocker.patch.object(utils_mod.time, "sleep")
+
+        download_file(url, target)
+
+        assert mock_get.call_count == 2
+        assert [c.args[0] for c in mock_sleep.call_args_list] == [42]
+        assert target.read_bytes() == b"weights"
+
+    def test_forbidden_is_not_retried(self, tmp_path, mocker):
+        """A 403 is a traffic or authorization block, not a transient error."""
+        url = "https://zenodo.org/records/1/files/a.pytorch"
+        target = tmp_path / "a.pytorch"
+        mock_get = mocker.patch.object(
+            utils_mod.requests, "get", side_effect=_http_error(403)
+        )
+        mock_sleep = mocker.patch.object(utils_mod.time, "sleep")
+        mock_logger = mocker.patch.object(utils_mod, "logger")
+
+        with pytest.raises(requests.RequestException) as excinfo:
+            download_file(url, target)
+
+        assert url in str(excinfo.value)
+        assert mock_get.call_count == 1
+        mock_sleep.assert_not_called()
+        assert mock_logger.warning.call_count == 1
+        assert not target.exists()
+
     def test_all_attempts_fail_raises_and_leaves_no_residue(self, tmp_path, mocker):
-        url = "https://zenodo.org/record/1/files/a.pytorch"
+        url = "https://zenodo.org/records/1/files/a.pytorch"
         target = tmp_path / "a.pytorch"
         mock_get = mocker.patch.object(
             utils_mod.requests,
@@ -274,3 +323,22 @@ class TestDownloadFileResilience:
         # neither the final file nor any temp-file residue remains
         assert not target.exists()
         assert list(tmp_path.iterdir()) == []
+
+    def test_download_files_skips_existing_and_downloads_in_order(
+        self, tmp_path, mocker
+    ):
+        (tmp_path / "exists.pytorch").write_bytes(b"old")
+        download = mocker.patch.object(utils_mod, "download_file")
+
+        utils_mod.download_files(
+            {
+                "exists.pytorch": "https://zenodo.org/records/1/files/exists.pytorch",
+                "missing.pytorch": "https://zenodo.org/records/1/files/missing.pytorch",
+            },
+            tmp_path,
+        )
+
+        download.assert_called_once_with(
+            "https://zenodo.org/records/1/files/missing.pytorch",
+            tmp_path / "missing.pytorch",
+        )
