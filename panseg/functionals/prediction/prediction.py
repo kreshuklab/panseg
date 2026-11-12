@@ -245,8 +245,7 @@ def unet_prediction(
         channels_last_3d (bool, optional): opt in to running 3D models on CUDA
             in the channels_last_3d memory format (kept off on CPU and for 2D
             models). The memory probes size patches in the same layout.
-            Outputs are unaffected. Defaults to False because the measured
-            result is stack-dependent.
+            Outputs are unaffected. Defaults to False.
 
     Returns:
         np.ndarray: The predicted boundaries as a 3D (Z, Y, X) or 4D (C, Z, Y, X) array, normalized between 0 and 1.

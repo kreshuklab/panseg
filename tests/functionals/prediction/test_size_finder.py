@@ -613,8 +613,7 @@ def test_find_batch_size_restores_bn_stats_when_batch_one_ooms(fake_cuda):
 def test_training_step_runs_dice_loss_and_optimizer_on_cpu():
     """The probe's training step is a real step: it must update the weights.
 
-    A synthetic `model(x).sum().backward()` cannot prove this, so this test
-    runs `_training_step` (not the search) on CPU and checks that parameters
+    Runs `_training_step` (not the search) on CPU and checks that parameters
     changed and that the gradients were cleared afterwards.
     """
     torch.manual_seed(0)
@@ -637,9 +636,7 @@ def test_training_step_supports_in_channels_different_from_out_channels(monkeypa
     """The probe target follows the model output, not the input.
 
     A 2-channel CZYX input paired with a 1-channel label is supported, but
-    `DiceLoss` asserts that input and target have the same shape. A target
-    built from `x.shape` tripped that assertion and aborted the whole
-    `find_batch_size(for_training=True)` probe.
+    `DiceLoss` requires input and target to have the same shape.
     """
     torch.manual_seed(0)
     model = UNet3D(in_channels=2, out_channels=1, final_sigmoid=True, f_maps=[8, 16])

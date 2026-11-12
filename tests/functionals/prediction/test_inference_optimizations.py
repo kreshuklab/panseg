@@ -2,15 +2,8 @@
 
 `channels_last_3d` is a memory-layout change, not a math change: outputs must
 match the plain layout within a tight tolerance and stay contiguous float32
-numpy arrays. It is opt-in and defaults to off because the measured result is
-stack-dependent (1.7x slower on torch 2.13/CUDA 13/cuDNN 9.26); when requested
-it applies only to 3D models on CUDA and must stay off on CPU and for 2D
-models.
-
-cuDNN autotuning is not enabled anywhere: its per-shape tuning cost does not
-amortize at typical prediction batch counts, and for training the first-step
-autotune plus the training batch-size probe cost far more than the steady-state
-win.
+numpy arrays. It is opt-in, defaults to off, and applies only to 3D models on
+CUDA; it must stay off on CPU and for 2D models.
 
 `torch.compile` is now automatic by default (`compile=None`): it engages only
 on CUDA and only when the number of prediction batches amortizes the one-time

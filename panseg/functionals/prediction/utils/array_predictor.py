@@ -66,9 +66,7 @@ class ArrayPredictor:
         amp (AmpSetting, optional): precision mode, see `unet_prediction`.
         channels_last_3d (bool, optional): opt in to the channels_last_3d
             memory format for 3D models on CUDA, see `unet_prediction`. The
-            memory probes size in the same layout. Defaults to False because
-            the measured result is stack-dependent: on torch 2.13/CUDA
-            13/cuDNN 9.26 it is 1.7x slower than contiguous.
+            memory probes size in the same layout. Defaults to False.
         compile (bool | None, optional): torch.compile control. None (default)
             compiles automatically only on CUDA and only when the number of
             prediction batches amortizes the one-time compile cost
@@ -358,10 +356,7 @@ class ArrayPredictor:
             self.tracker.total = num_batches
             self.tracker.progress = 0
         try:
-            # no cuDNN autotuning: at the batch counts prediction typically sees
-            # the per-shape tuning cost does not amortize, and it gave no
-            # steady-state gain in the prediction loop either; the forward
-            # passes run in the same precision mode as the memory probes
+            # forward passes run in the same precision mode as the memory probes
             with amp_context(self.amp, self.device), torch.no_grad():
                 for input_, indices in tqdm.tqdm(
                     test_loader, disable=self.disable_tqdm

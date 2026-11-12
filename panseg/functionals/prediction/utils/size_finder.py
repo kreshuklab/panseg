@@ -87,11 +87,9 @@ def _preserve_bn_stats(model: nn.Module):
 def _preserve_parameters(model: nn.Module):
     """Snapshot and restore the parameters of `model` bit-exactly.
 
-    The training-mode batch-size probe runs real optimizer steps, which mutate
-    the weights. Those updates must not leak into the training run, so the
-    weights are snapshotted to CPU (the probe is about to use the GPU; keeping
-    a second copy on the device would inflate the memory it measures) and
-    restored when the probe ends, including when it raises.
+    The training probe runs real optimizer steps, which mutate the weights.
+    The snapshot lives on CPU so it does not inflate the device memory the
+    probe measures. Restored on exit, including when the probe raises.
     """
     saved = [
         (parameter, parameter.detach().to("cpu", copy=True))
@@ -262,27 +260,15 @@ def probe_max_patch_shape(
     available GPU memory using binary search.
 
     Each probe is the real inference forward: eval mode, ``torch.no_grad()``,
-    the same precision mode (`amp`) as the later prediction, and (when
-    requested) the prediction's channels_last_3d layout. The probed maximum is
-    therefore not sized for fp32 memory when the model will run in bf16.
-    Duplicate probe forwards of the same shape do not pay a per-shape cuDNN
-    autotuning cost: autotuning is not enabled.
+    the same precision mode (`amp`) as the later prediction, and the requested
+    channels_last_3d layout. The probed maximum is therefore not sized for fp32
+    memory when the model will run in bf16.
 
-    With `channels_last_3d=True` the probe runs in the prediction's
-    channels_last_3d layout; default False (plain contiguous layout).
-
-    1. This is merely a good quick guess. However, an exact maximum size causes problems.
-    2. If isotropic shape, then the `best_n` is 128 for 2080 Ti, 186 for 3090,
-       but for the sake of speed, cap it at 50 and let batch size handle the rest.
-    3. The largest successful probe is at the allocator boundary and is
-       order-dependent, so a shape derived from it can fail a later verification.
-       Above 256^3 (16 voxels per step) there is also a measured performance
-       cliff for the compiled prediction loop: a 272^3 input runs ~76 s versus
-       ~37 s at 256^3 in the same cl3d-off/benchmark-off configuration on a
-       24 GB RTX 4090 (measured 2026-11-05). Shrinking a successful 3D probe by
-       one step therefore keeps a safety margin and stays below that cliff.
-       This is not a hard cap: a larger probe on a bigger GPU only loses one
-       16-voxel step.
+    The isotropic edge is capped at 50 * 16 voxels; larger patches are handled
+    by the batch size. The largest successful probe sits at the allocator
+    boundary and is order-dependent, so a shape derived from it can fail a
+    later verification. Above 256^3 the result also loses one 16-voxel step of
+    headroom, which keeps the prediction below the large-patch slowdown.
     """
 
     nn_dim = 2 if is_2d_model(model) else 3
@@ -350,7 +336,7 @@ def probe_max_patch_shape(
                         del x
                         torch.cuda.empty_cache()
 
-        # One-step 3D headroom, only above the 256^3 boundary (see note 3 above).
+        # one step of headroom above the 256^3 boundary (see above)
         if nn_dim == 3 and best_n > 16:
             best_n -= 1
 
@@ -462,12 +448,11 @@ def find_feasible_patch_and_halo_shapes(
 def _probe_target_channels(model: nn.Module, in_channels: int) -> int:
     """Number of channels the training probe's target must have.
 
-    `in_channels != out_channels` is supported (for example a 2-channel CZYX
-    input paired with a 1-channel label), so the target has to follow the
-    model's *output*, not its input: `DiceLoss` asserts that input and target
-    have the same shape. The U-Nets expose this as
-    ``final_conv.out_channels``; wrappers are unwrapped first. Arbitrary user
-    models without that attribute fall back to the input channel count.
+    `DiceLoss` requires input and target to have the same shape, so the target
+    follows the model's output, not its input (`in_channels` and `out_channels`
+    may differ). The U-Nets expose it as ``final_conv.out_channels``; wrappers
+    are unwrapped first. Models without that attribute fall back to
+    `in_channels`.
     """
     while True:
         if isinstance(model, nn.DataParallel):
@@ -485,31 +470,23 @@ def _training_step(
 ) -> None:
     """Run two real training steps as the memory probe.
 
-    Each step mirrors `UNetTrainer.train_epoch` for one iteration: the same
-    `DiceLoss`, an `Adam` optimizer with the training defaults
-    (``lr=1e-4, weight_decay=1e-5``), and the same autocast scope (forward and
-    loss under `amp_context`, then backward and the optimizer step under it).
+    Each step mirrors `UNetTrainer.train_epoch`: the same `DiceLoss`, an `Adam`
+    optimizer with the training defaults (``lr=1e-4, weight_decay=1e-5``), and
+    the same autocast scopes (forward and loss, then backward and step).
 
-    The first step allocates the Adam moments and leaves parameter gradients
-    behind, like an ongoing training loop. `UNetTrainer.train_epoch` zeroes
-    gradients only *after* the forward, so the next iteration runs its whole
-    forward with the previous iteration's gradients still live. The second
-    step is the one whose peak matters; a one-step probe misses that and
-    returned a batch that OOMed on the second iteration.
+    The second step matters: the trainer zeroes gradients only after the
+    forward, so an iteration runs its forward with the previous iteration's
+    gradients and the Adam moments still live. A one-step probe misses that
+    peak.
 
-    The probe is deliberately eager even when training will use
-    `torch.compile`: compilation only lowers memory, so the eager measurement
-    is conservative, and compiling every candidate shape would cost far more
-    than it saves.
+    The probe stays eager even when training will use `torch.compile`:
+    compilation lowers memory, so eager is conservative.
 
     Module-level and monkeypatchable so the GPU-free search tests can substitute
     the cheap synthetic backward.
     """
-    # allocate the target before the forward, in the same order as a training
-    # loader batch (input and target land on the device before the step). Its
-    # channel count follows the model output, not the input (`in_channels` and
-    # `out_channels` may differ), and it stays float32 so the probe measures the
-    # real training peak.
+    # allocate the target before the forward, like a loader batch; its channel
+    # count follows the model output, and it stays float32 for the real peak
     target = torch.randint(
         0,
         2,
@@ -540,8 +517,6 @@ def _probe_batch(
     """Run one inference forward or one real training step as the probe.
 
     Runs under the resolved `amp` precision mode, like the compute it measures.
-    cuDNN autotuning is never enabled: it is net-negative for training and
-    inference, so probes run in the same default cuDNN mode as execution.
     """
     if for_training:
         _training_step(model, x, amp, device)
@@ -604,18 +579,15 @@ def find_batch_size(
     """Determine the maximum feasible batch size for a given model based on available GPU memory.
 
     The search doubles the batch size until it no longer fits and then bisects
-    the last interval, so the result is the true maximum (the old power-of-2
-    search settled for e.g. 4 when 6 fitted).
+    the last interval, so the result is the true maximum.
 
     With `for_training=True` each candidate runs two real training steps
-    (`_training_step`): forward, Dice loss, backward, and an Adam optimizer
-    step, including the Adam moments and the previous iteration's gradients
-    (the training loop zeroes them only after the next forward). That is what
-    makes the result accurate; a forward-only probe under-reports memory and
-    returned batch sizes that OOMed in a real training step. The probe is eager
-    even when training will use ``torch.compile`` (compilation lowers memory,
-    so eager is conservative). The model's parameters and BatchNorm running
-    stats are restored bit-exactly after probing.
+    (`_training_step`): forward, Dice loss, backward, and an Adam step,
+    including the Adam moments and the previous iteration's gradients (the
+    training loop zeroes them only after the next forward). The probe stays
+    eager even when training will use ``torch.compile`` (compilation lowers
+    memory, so eager is conservative). The model's parameters and BatchNorm
+    running stats are restored bit-exactly after probing.
 
     Args:
         model (nn.Module): The model to be used for prediction or training.
@@ -624,10 +596,10 @@ def find_batch_size(
         patch_halo (tuple[int, int, int]): Halo size used for patch augmentation.
         device (str): Device to perform the computation on ('cuda' or 'cpu').
         for_training (bool): If True, run the real training step (forward, Dice
-            loss, backward, and Adam step) for every probe. Training needs
-            roughly 2-3 times the memory of a forward pass, and the optimizer
-            moments add more, so a forward-only probe overestimates the batch
-            size. Defaults to False (inference).
+            loss, backward, and Adam step) for every probe. Training needs more
+            memory than a forward pass (gradients and optimizer moments), so a
+            forward-only probe overestimates the batch size. Defaults to False
+            (inference).
         amp (str): precision mode the probe runs in (``"auto"``/``"off"``), to
             match the precision of the compute it measures. Defaults to
             ``"auto"``.
@@ -699,9 +671,9 @@ def will_CUDA_OOM(
     """Determine if a given batch size will cause an out-of-memory (OOM)
     error on the specified device.
 
-    The verification forward pass runs the real prediction forward: eval mode,
-    ``torch.no_grad()``, the resolved `amp` precision mode, and the prediction's
-    channels_last_3d layout (unless `channels_last_3d` is False).
+    The verification forward runs the real prediction forward: eval mode,
+    ``torch.no_grad()``, the resolved `amp` precision mode, and the requested
+    channels_last_3d layout.
 
     Args:
         model (nn.Module): The model to be used for prediction.

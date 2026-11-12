@@ -24,13 +24,10 @@ from panseg.functionals.transfer import to_device
 logger = logging.getLogger(__name__)
 
 TRAIN_COMPILE_MIN_ITERS = 1000
-"""Minimum iteration budget that amortizes a training `torch.compile`.
+"""Minimum iteration budget for automatic training `torch.compile`.
 
-Measured on the shared RTX 4090 (patch 80x160x160 batch 1, bf16): the cold
-first-step compile costs 11.9-21.2 s and the warm cost is 1.4-1.9 s, while the
-steady-state win is 1.46x (72.27 -> 49.58 ms). fp32 is
-deliberately not compiled: the gain is only 5-8%, and compiled
-fp32 silently selects TF32 kernels.
+Below this the one-time compile does not amortize. fp32 is never compiled:
+compiled fp32 silently selects TF32 kernels.
 """
 
 
@@ -81,11 +78,10 @@ class UNetTrainer:
             devices, else fp32; ``"off"``: always fp32). Model weights and
             checkpoints stay fp32 in either mode. Defaults to "auto".
 
-    Long bf16 training runs are automatically compiled with `torch.compile`
-    (see `TRAIN_COMPILE_MIN_ITERS`). Compilation is lazy, transparent,
-    and does not changes checkpoints: `self.model` stays the plain module, the
-    compiled handle is only used for forward passes. A compile failure warns
-    and runs eager.
+    Long bf16 training runs are compiled with `torch.compile` automatically
+    (see `TRAIN_COMPILE_MIN_ITERS`). Compilation is lazy and does not change
+    checkpoints: `self.model` stays the plain module and the compiled handle is
+    only used for forward passes. A compile failure warns and runs eager.
     """
 
     def __init__(
@@ -120,16 +116,7 @@ class UNetTrainer:
         # DataParallel and isinstance(model, UNet2D) must stay intact
         self._compiled_model: nn.Module | None = None
         if self._should_compile():
-            try:
-                # lazy: the first forward compiles
-                self._compiled_model = torch.compile(self.model)
-            except Exception as e:  # pragma: no cover - torch.compile is lazy
-                logger.warning(
-                    f"torch.compile failed ({e}); training eagerly. Set "
-                    "C_INCLUDE_PATH=/usr/local/cuda/include if triton cannot "
-                    "find the CUDA headers."
-                )
-                self._compiled_model = None
+            self._compiled_model = torch.compile(self.model)
 
         # init tensorboard logger
         self.writer = SummaryWriter(log_dir=checkpoint_dir / "logs")
@@ -137,10 +124,8 @@ class UNetTrainer:
     def _should_compile(self) -> bool:
         """Whether this run gets automatic `torch.compile`.
 
-        Only CUDA runs that actually resolve to bf16 autocast and are long
-        enough to amortize the compile cost qualify. DataParallel is excluded
-        (the compiled handle would wrap the wrong level); fp32 and CPU never
-        compile.
+        Only long CUDA runs that resolve to bf16 autocast qualify. DataParallel
+        is excluded because the compiled handle would wrap the wrong level.
         """
         return (
             torch.device(self.device).type == "cuda"
@@ -263,11 +248,9 @@ class UNetTrainer:
     def _forward(self, _input: torch.Tensor) -> torch.Tensor:
         """Run the model forward, through the compiled handle when present.
 
-        A first-forward failure that is not an OOM falls back to eager
-        permanently for this trainer and retries the batch eagerly, so a
-        triton/inductor environment problem never kills a training run. CUDA
-        OOMs propagate: they mean the batch does not fit and must not be
-        silently retried.
+        A compiled-forward failure that is not an OOM falls back to eager
+        permanently for this run and retries the batch eagerly. CUDA OOMs
+        propagate: they mean the batch does not fit and must not be retried.
         """
         if self._compiled_model is None:
             return self.model(_input)

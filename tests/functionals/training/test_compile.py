@@ -1,10 +1,8 @@
 """Automatic `torch.compile` for long bf16 training runs.
 
-Compile is a measured 1.3-1.5x win on the default bf16 path with 27% lower
-peak memory, but only after the cold compile cost amortizes and never on fp32
-(TF32 numerics + a 5-8% gain). The trainer keeps `self.model` plain so
-checkpoints, optimizer identities, DataParallel and `isinstance(UNet2D)` are
-unchanged; only forward passes go through the compiled handle.
+The trainer keeps `self.model` plain so checkpoints, optimizer identities,
+DataParallel and `isinstance(UNet2D)` are unchanged; only forward passes go
+through the compiled handle.
 """
 
 from pathlib import Path

@@ -53,14 +53,11 @@ def _is_cuda_device(device: str | torch.device) -> bool:
 def bf16_autocast_enabled(amp: AmpSetting, device: str | torch.device) -> bool:
     """Whether `amp_context(amp, device)` resolves to bf16 autocast.
 
-    Single source of truth for the resolved precision: `amp_context` builds its
-    context manager from this predicate, and callers that need to branch on the
-    actual precision (e.g. the training ``torch.compile`` gate) call it instead
-    of duplicating the conditions.
+    `amp_context` is built on this predicate; callers that branch on the
+    resolved precision (e.g. the training ``torch.compile`` gate) use it too.
 
     Args:
-        amp: the configured precision mode (see `validate_amp` for the
-            accepted spellings).
+        amp: precision mode (see `validate_amp`).
         device: device the compute will run on.
 
     Returns:
