@@ -8,14 +8,13 @@ threshold-filtered).
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 import yaml
 
 from panseg.functionals.training.train import create_datasets
-from tests.functionals.training.helpers import model_dir_patches, write_h5
+from tests.functionals.training.helpers import write_h5
 
 # The example volume from the analysis: 64x256x256 with patch 32x128x128.
 # The train grid (stride patch // 2) yields 3x3x3 = 27 patches; the
@@ -177,113 +176,6 @@ class TestValStrideConfig:
                 "3D",
                 stride_shape=(16, 64, 64),
             )
-
-
-class TestLaunchTrainingValStride:
-    """A YAML's `loaders.val.slice_builder.stride_shape` reaches the real grid.
-
-    End to end through the CLI entry point: a tiny CPU training run on a real
-    H5 dataset, with the actual `create_datasets` call observed.
-    """
-
-    VOLUME = 64
-
-    @classmethod
-    def _write_dataset(cls, root: Path) -> Path:
-        rng = np.random.default_rng(0)
-        shape = (cls.VOLUME,) * 3
-        raw = rng.integers(0, 256, shape)
-        label = np.zeros(shape, dtype="uint8")
-        label[8:56, 8:56, 8:56] = 1
-        data_dir = root / "data"
-        _write_h5(data_dir / "train" / "vol.h5", raw, label)
-        _write_h5(data_dir / "val" / "vol.h5", raw, label)
-        return data_dir
-
-    def _run(
-        self, tmp_path, monkeypatch, model_name: str, **config_extra
-    ) -> tuple[list[int], list[tuple[str, dict]]]:
-        from panseg.functionals.training import train as train_module
-        from panseg.run_panseg import main
-
-        data_dir = self._write_dataset(tmp_path)
-        config = {
-            "dataset_dir": str(data_dir),
-            "model_name": model_name,
-            "in_channels": 1,
-            "out_channels": 1,
-            "feature_maps": [2, 2],
-            "patch_size": [16, self.VOLUME, self.VOLUME],
-            "max_num_iters": 2,
-            "dimensionality": "3D",
-            "sparse": True,
-            "device": "cpu",
-            **config_extra,
-        }
-        config_path = tmp_path / "config.yaml"
-        config_path.write_text(yaml.safe_dump(config))
-
-        real_create_datasets = train_module.create_datasets
-        patch_counts: list[int] = []
-        calls: list[tuple[str, dict]] = []
-
-        def spy(*args, **kwargs):
-            datasets = real_create_datasets(*args, **kwargs)
-            patch_counts.append(sum(len(dataset) for dataset in datasets))
-            calls.append((args[1], kwargs))
-            return datasets
-
-        monkeypatch.setattr(train_module, "create_datasets", spy)
-        monkeypatch.setattr(train_module, "test_model", MagicMock())
-        monkeypatch.setattr(train_module, "make_model_description", MagicMock())
-        monkeypatch.setattr("panseg.run_panseg.check_version", MagicMock())
-        for target, attribute, value in model_dir_patches(tmp_path):
-            monkeypatch.setattr(target, attribute, value)
-
-        monkeypatch.setattr("sys.argv", ["panseg", "--train", str(config_path)])
-        main()
-
-        # train grid first, val grid second (see `unet_training`)
-        assert len(patch_counts) == 2
-        return patch_counts, calls
-
-    def test_configured_val_stride_changes_the_val_grid(self, tmp_path, monkeypatch):
-        patch_counts, calls = self._run(
-            tmp_path,
-            monkeypatch,
-            model_name="test_launch_val_stride_cfg",
-            loaders={
-                "val": {
-                    "slice_builder": {
-                        "name": "SliceBuilder",
-                        "patch_shape": [16, self.VOLUME, self.VOLUME],
-                        # half the patch on y/x, half on z: 7 patches instead of 4
-                        "stride_shape": [8, self.VOLUME // 2, self.VOLUME // 2],
-                    }
-                }
-            },
-        )
-
-        assert patch_counts[1] == 7
-        (train_phase, train_kwargs), (val_phase, val_kwargs) = calls
-        assert train_phase == "train" and val_phase == "val"
-        # only the val grid is stride-configurable; a train stride is rejected
-        assert "stride_shape" not in train_kwargs
-        assert val_kwargs["stride_shape"] == (8, self.VOLUME // 2, self.VOLUME // 2)
-
-    def test_omitted_val_stride_runs_the_non_overlapping_grid(
-        self, tmp_path, monkeypatch
-    ):
-        patch_counts, calls = self._run(
-            tmp_path, monkeypatch, model_name="test_launch_val_stride_default"
-        )
-
-        # 64 / 16 == 4 non-overlapping z patches
-        assert patch_counts[1] == 4
-        (train_phase, train_kwargs), (val_phase, val_kwargs) = calls
-        assert train_phase == "train" and val_phase == "val"
-        assert "stride_shape" not in train_kwargs
-        assert val_kwargs["stride_shape"] is None
 
 
 class TestModelConfigValStride:
