@@ -38,7 +38,7 @@ def ome_zarr_root_image(tmp_path):
     group = zarr.open_group(store=str(path), mode="w", zarr_format=3)
     shape = (4, 8, 8)
     group.create_array("s0", data=np.zeros(shape, dtype="float32"))
-    scale = Scale.from_lists("zyx", shape)
+    scale = Scale.from_lists("zyx", shape=shape)
     group.attrs.update(
         OmeZarrGroup.from_single(
             Multiscale.from_single(scale, scale_key="s0")

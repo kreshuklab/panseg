@@ -495,13 +495,13 @@ def _write_image_with_labels(path, key="raw", version="0.5"):
     the image group carries `labels/`, a labels container, and the label
     image with its image-label link.
     """
-    from clearscale import ChildRef, FileRef, GroupKind, Multiscale, OmeZarrGroup, Scale
+    from clearscale import ChildRef, GroupKind, Multiscale, OmeZarrGroup, Scale
     from clearscale.ome_zarr import ImageLabel, MultiscaleProperties
 
     root = zarr.open_group(
         store=str(path), mode="w", zarr_format=2 if version == "0.4" else 3
     )
-    scale = Scale.from_lists("zyx", SHAPES)
+    scale = Scale.from_lists("zyx", shape=SHAPES)
     image = root.create_group(key)
     image.create_array("s0", data=np.zeros(SHAPES, dtype="float32"))
     image.attrs.update(
@@ -513,7 +513,7 @@ def _write_image_with_labels(path, key="raw", version="0.5"):
     labels.attrs.update(
         OmeZarrGroup(
             kind=GroupKind.LABELS,
-            children=(ChildRef("label", FileRef("segmentation")),),
+            children=(ChildRef("label_multiscale", "segmentation"),),
         ).to_attrs(version=version)
     )
     label = labels.create_group("segmentation")
@@ -522,9 +522,7 @@ def _write_image_with_labels(path, key="raw", version="0.5"):
         OmeZarrGroup.from_single(
             Multiscale(
                 {"s0": scale},
-                ome=MultiscaleProperties(
-                    image_label=ImageLabel(source=FileRef("../.."))
-                ),
+                ome=MultiscaleProperties(image_label=ImageLabel(source="../..")),
             )
         ).to_attrs(version=version)
     )
@@ -563,7 +561,9 @@ def test_ambiguous_message_names_store_root(tmp_path):
     root.create_array("s0", data=np.zeros(SHAPES, dtype="float32"))
     root.attrs.update(
         OmeZarrGroup.from_single(
-            Multiscale.from_single(Scale.from_lists("zyx", SHAPES), scale_key="s0")
+            Multiscale.from_single(
+                Scale.from_lists("zyx", shape=SHAPES), scale_key="s0"
+            )
         ).to_attrs(version="0.5")
     )
     with pytest.raises(RuntimeError) as excinfo:

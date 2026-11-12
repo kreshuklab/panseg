@@ -533,7 +533,7 @@ def create_ome_zarr(
             f"Label image '{label_name}' must have an integer dtype, got {stack.dtype}."
         )
     _import_clearscale()
-    from clearscale import ChildRef, FileRef, GroupKind, Multiscale, OmeZarrGroup, Scale
+    from clearscale import ChildRef, GroupKind, Multiscale, OmeZarrGroup, Scale
     from clearscale.ome_zarr import ImageLabel, MultiscaleProperties
 
     if axis_order is None:
@@ -619,7 +619,7 @@ def create_ome_zarr(
         # source image (the parent image group, two levels up).
         multiscale = Multiscale(
             {"s0": scale},
-            ome=MultiscaleProperties(image_label=ImageLabel(source=FileRef("../.."))),
+            ome=MultiscaleProperties(image_label=ImageLabel(source="../..")),
         )
         labels_container = image_group.require_group("labels")
         names = _registered_label_names(labels_container)
@@ -630,7 +630,7 @@ def create_ome_zarr(
         labels_container.attrs.update(
             OmeZarrGroup(
                 kind=GroupKind.LABELS,
-                children=tuple(ChildRef("label", FileRef(name)) for name in names),
+                children=tuple(ChildRef("label_multiscale", name) for name in names),
             ).to_attrs(version=version)
         )
     else:
