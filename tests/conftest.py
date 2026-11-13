@@ -48,6 +48,7 @@ def tensor_to_spy(monkeypatch):
     monkeypatch.setattr(torch.Tensor, "to", wrapped)
     return calls
 
+
 try:
     import clearscale  # noqa: F401
 
