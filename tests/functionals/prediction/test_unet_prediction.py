@@ -209,7 +209,8 @@ def test_unet_prediction_2d_full_slice_auto_patch_recovers_from_loop_oom(
     prediction = _predict(dummy_model_2d, raw, "ZYX", single_batch_mode=False)
 
     assert seen_batch_sizes == [16, 16, 8, 8, 8, 8]
-    np.testing.assert_allclose(prediction, reference)
+    # due to gpu memory batch size might change
+    np.testing.assert_allclose(prediction, reference, rtol=1e-5)
 
 
 def test_unet_prediction_2d_model_auto_patch_drops_z_halo(dummy_model_2d):
