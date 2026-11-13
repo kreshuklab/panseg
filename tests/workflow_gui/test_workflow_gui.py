@@ -199,6 +199,9 @@ def test_batch_config_is_rejected_on_open(qtbot, workflow_yaml, tmp_path):
     assert len(list(gui.content)) == 1  # only the loader, no input widgets
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="Testfiles contain only posix paths"
+)
 def test_legacy_single_input_list_is_migrated(qtbot, workflow_yaml, tmp_path):
     """Workflow files with the inputs section as a list of one dict load as
     a plain dict, and saving writes the migrated form back."""

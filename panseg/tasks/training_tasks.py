@@ -118,6 +118,8 @@ def unet_training_task(
                 name="training",
                 level="warning",
             )
+        log(f"Training failed: {e}", thread="train_gui_task", level="ERROR")
+        raise
 
     checkpoint_dir = PATH_PANSEG_MODELS / model_name
     log(f"Finished training, saved model to {checkpoint_dir}", thread="train_gui_task")

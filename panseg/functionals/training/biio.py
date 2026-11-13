@@ -347,10 +347,12 @@ def make_model_description(
 
     pytorch_version = Version(torch.__version__)
 
+    # the exported callable returns probabilities (its forward applies the
+    # final activation): published models keep their [0, 1] output contract
     if dimensionality == "3D":
-        net_id = Identifier("UNet3D")
+        net_id = Identifier("UNet3DProbabilities")
     elif dimensionality == "2D":
-        net_id = Identifier("UNet2D")
+        net_id = Identifier("UNet2DProbabilities")
 
     pytorch_architecture = ArchitectureFromFileDescr(
         source=Path(__file__).parent / "model.py",

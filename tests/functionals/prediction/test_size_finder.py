@@ -144,7 +144,17 @@ class FakeOomProbe:
         self.threshold = None  # None -> never OOM
         self.verified_shapes = []
 
-    def __call__(self, model, in_channels, patch_shape, patch_halo, batch_size, device):
+    def __call__(
+        self,
+        model,
+        in_channels,
+        patch_shape,
+        patch_halo,
+        batch_size,
+        device,
+        amp="auto",
+        channels_last_3d=False,
+    ):
         actual = tuple(patch_shape[i] + 2 * patch_halo[i] for i in range(3))
         self.verified_shapes.append(actual)
         if self.threshold is None:
@@ -160,7 +170,7 @@ def fake_oom_probe(monkeypatch):
     monkeypatch.setattr(
         size_finder,
         "probe_max_patch_shape",
-        lambda model, in_channels, device: PROBED_MAX,
+        lambda model, in_channels, device, amp="auto", **kwargs: PROBED_MAX,
     )
     return probe
 
@@ -202,6 +212,7 @@ def test_find_feasible_patch_and_halo_shapes_raises_when_nothing_fits(
         find_feasible_patch_and_halo_shapes(
             nn.Module(), 1, VOL, HALO, device="cuda", max_attempts=3
         )
+    # short-circuit after the first failed check of each attempt
     assert len(fake_oom_probe.verified_shapes) == 3
 
 
@@ -223,7 +234,7 @@ def test_find_feasible_patch_and_halo_shapes_2d_model_keeps_depth_1(
     monkeypatch.setattr(
         size_finder,
         "probe_max_patch_shape",
-        lambda model, in_channels, device: (1, 3200, 3200),
+        lambda model, in_channels, device, amp="auto", **kwargs: (1, 3200, 3200),
     )
 
     result = find_feasible_patch_and_halo_shapes(FakeUNet2D(), 1, VOL, HALO, device)
@@ -239,7 +250,7 @@ def test_find_feasible_patch_and_halo_shapes_2d_model_shrinks_yx_only(
     monkeypatch.setattr(
         size_finder,
         "probe_max_patch_shape",
-        lambda model, in_channels, device: (1, 3200, 3200),
+        lambda model, in_channels, device, amp="auto", **kwargs: (1, 3200, 3200),
     )
     fake_oom_probe.threshold = 9_000_000  # the first attempt (10.24M voxels) OOMs
 
@@ -257,9 +268,28 @@ class _FakeDeviceTensor:
 
     def __init__(self, shape):
         self.shape = tuple(shape)
+        self.device = torch.device("cpu")
 
     def to(self, *args, **kwargs):
         return self
+
+
+class _FakeOutput:
+    """Stand-in for a model output: supports the `.sum().backward()` the
+    training-mode batch-size probe runs."""
+
+    def __init__(self, model, voxels):
+        self.model = model
+        self.voxels = voxels
+
+    def sum(self):
+        return self
+
+    def backward(self):
+        self.model.backward_calls += 1
+        threshold = self.model.backward_oom_threshold
+        if threshold is not None and self.voxels > threshold:
+            raise RuntimeError("CUDA out of memory. Tried to allocate 999.00 GiB.")
 
 
 def _raise_fake_device_error(model, x):
@@ -272,21 +302,32 @@ def _raise_fake_device_error(model, x):
         raise RuntimeError("unexpected error, not an OOM")
     if model.oom_voxel_threshold is not None and voxels > model.oom_voxel_threshold:
         raise RuntimeError("CUDA out of memory. Tried to allocate 999.00 GiB.")
-    return None
+    return _FakeOutput(model, voxels)
 
 
-class FakeUNet3D(UNet3D):
-    """UNet3D double for the OOM unit tests: `forward` raises a fake CUDA OOM (or
-    a non-OOM error) once the input exceeds a configured voxel count, and `to`
-    never moves the model to a real device. No forward pass ever runs."""
+class _FakeUNetProbeMixin:
+    """Shared probe double for the OOM unit tests: `forward` raises a fake CUDA
+    OOM (or a non-OOM error) once the input exceeds a configured voxel count,
+    and `to` never moves the model to a real device. No real forward pass ever
+    runs.
+
+    Both fakes keep subclassing `UNet3D`/`UNet2D` so `is_2d_model` routes to the
+    matching code path.
+    """
 
     def __init__(
-        self, oom_voxel_threshold=None, unexpected_error_above=None, failure=None
+        self,
+        oom_voxel_threshold=None,
+        unexpected_error_above=None,
+        failure=None,
+        backward_oom_threshold=None,
     ):
         super().__init__(1, 1, f_maps=8, num_levels=2)
         self.oom_voxel_threshold = oom_voxel_threshold
         self.unexpected_error_above = unexpected_error_above
         self.failure = failure
+        self.backward_oom_threshold = backward_oom_threshold
+        self.backward_calls = 0
         self.seen_input_shapes = []
 
     def to(self, *args, **kwargs):
@@ -299,26 +340,24 @@ class FakeUNet3D(UNet3D):
         return _raise_fake_device_error(self, x)
 
 
-class FakeUNet2D(UNet2D):
-    """2D variant of `FakeUNet3D` so that `_is_2d_model` routes to the 2D code paths."""
+class FakeUNet3D(_FakeUNetProbeMixin, UNet3D):
+    """3D probe double (see `_FakeUNetProbeMixin`)."""
 
-    def __init__(
-        self, oom_voxel_threshold=None, unexpected_error_above=None, failure=None
-    ):
-        super().__init__(1, 1, f_maps=8, num_levels=2)
-        self.oom_voxel_threshold = oom_voxel_threshold
-        self.unexpected_error_above = unexpected_error_above
-        self.failure = failure
-        self.seen_input_shapes = []
 
-    def to(self, *args, **kwargs):
-        return self
+class FakeUNet2D(_FakeUNetProbeMixin, UNet2D):
+    """2D variant of `FakeUNet3D` so that `is_2d_model` routes to the 2D code paths."""
 
-    def forward(self, x):
-        self.seen_input_shapes.append(tuple(x.shape))
-        if self.failure is not None:
-            raise RuntimeError(self.failure)
-        return _raise_fake_device_error(self, x)
+
+def _fake_training_step(model, x, amp, device):
+    """Cheap synthetic backward used by the GPU-free search tests.
+
+    The real `_training_step` (Dice loss + Adam) needs real tensors and a real
+    device; the search-logic tests only need a backward that can raise the
+    fake backward OOM.
+    """
+    with size_finder.amp_context(amp, device):
+        with torch.enable_grad():
+            model(x).sum().backward()
 
 
 @pytest.fixture()
@@ -329,17 +368,29 @@ def fake_cuda(monkeypatch):
         torch, "randn", lambda shape, *args, **kwargs: _FakeDeviceTensor(shape)
     )
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(size_finder, "_training_step", _fake_training_step)
 
 
-def test_probe_max_patch_shape_3d_binary_search(fake_cuda):
-    # n=4 (64^3 voxels) fits, n=5 (80^3) OOMs
-    model = FakeUNet3D(oom_voxel_threshold=300_000)
+@pytest.mark.parametrize(
+    ("oom_voxel_threshold", "expected"),
+    [
+        (150_000, (48, 48, 48)),  # n=3: below the boundary, no headroom
+        (300_000, (64, 64, 64)),  # n=4: below the boundary, no headroom
+        (2_500_000, (128, 128, 128)),  # n=8: below the boundary, no headroom
+        # n=17 probes 272^3 successfully; one-step headroom -> 256^3 (n=16)
+        (22_000_000, (256, 256, 256)),
+    ],
+)
+def test_probe_max_patch_shape_3d_binary_search(
+    fake_cuda, oom_voxel_threshold, expected
+):
+    model = FakeUNet3D(oom_voxel_threshold=oom_voxel_threshold)
 
-    assert probe_max_patch_shape(model, 1, "cuda:0") == (64, 64, 64)
+    assert probe_max_patch_shape(model, 1, "cuda:0") == expected
 
 
-def test_probe_max_patch_shape_3d_caps_at_50(fake_cuda):
-    assert probe_max_patch_shape(FakeUNet3D(), 1, "cuda:0") == (800, 800, 800)
+def test_probe_max_patch_shape_3d_caps_at_50_with_one_step_headroom(fake_cuda):
+    assert probe_max_patch_shape(FakeUNet3D(), 1, "cuda:0") == (784, 784, 784)
 
 
 def test_probe_max_patch_shape_3d_floors_at_low_on_persistent_oom(fake_cuda):
@@ -363,13 +414,6 @@ def test_probe_max_patch_shape_3d_treats_mps_buffer_size_error_as_oom(fake_cuda)
     assert probe_max_patch_shape(model, 1, "mps") == (32, 32, 32)
 
 
-def test_probe_max_patch_shape_3d_reraises_buffer_size_error_on_cuda(fake_cuda):
-    model = FakeUNet3D(failure="Invalid buffer size: 4.29 GiB")
-
-    with pytest.raises(RuntimeError, match="Invalid buffer size"):
-        probe_max_patch_shape(model, 1, "cuda:0")
-
-
 @pytest.mark.parametrize(
     ("message", "device", "expected"),
     [
@@ -378,12 +422,13 @@ def test_probe_max_patch_shape_3d_reraises_buffer_size_error_on_cuda(fake_cuda):
         ("Invalid buffer size: 4.29 GiB", "mps", True),
         ("Invalid buffer size: 4.29 GiB", "mps:0", True),
         ("Invalid buffer size: 4.29 GiB", "cuda:0", False),
+        ("cuDNN error: CUDNN_STATUS_ALLOC_FAILED", "cuda:0", True),
         ("MPS backend error: illegal instruction", "mps", False),
         ("boom", "mps", False),
     ],
 )
 def test_is_oom_error(message, device, expected):
-    assert size_finder._is_oom_error(RuntimeError(message), device) is expected
+    assert size_finder.is_oom_error(RuntimeError(message), device) is expected
 
 
 def test_probe_max_patch_shape_2d_returns_max_on_first_fit(fake_cuda):
@@ -473,11 +518,222 @@ def test_find_batch_size_raises_when_batch_one_ooms(fake_cuda):
 
 
 def test_find_batch_size_2d_model_slices_first_dim(fake_cuda):
-    # (16, 16) = 256 voxels per sample: batch 64 (16384) fits, batch 128 OOMs
+    # (16, 16) = 256 voxels per sample: 78 samples (19968) fit, 79 (20224) OOMs
     model = FakeUNet2D(oom_voxel_threshold=20_000)
 
-    assert find_batch_size(model, 1, (1, 16, 16), (0, 0, 0), "cuda:0") == 64
+    assert find_batch_size(model, 1, (1, 16, 16), (0, 0, 0), "cuda:0") == 78
     assert all(len(shape) == 4 for shape in model.seen_input_shapes)
+
+
+def test_find_batch_size_for_training_halves_on_backward_oom(fake_cuda):
+    # Forward fits up to batch 4 (16384 voxels), backward only batch 1 (4096).
+    # A forward-only probe would overestimate the training batch size.
+    model = FakeUNet3D(oom_voxel_threshold=20_000, backward_oom_threshold=5_000)
+
+    assert find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0") == 4
+    assert (
+        find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0", for_training=True)
+        == 1
+    )
+    # the inference probe never runs backward; the training probe runs it for
+    # the fitting batch 1 and for the OOMing batch 2
+    assert model.backward_calls == 2
+
+
+def test_find_batch_size_restores_training_mode(fake_cuda):
+    model = FakeUNet3D()
+    model.eval()
+
+    find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0", for_training=True)
+
+    assert not model.training
+
+
+class _BnProbeModel(nn.Module):
+    """Probe double whose forward runs a *real* BatchNorm update on a real
+    tensor before honoring the OOM oracle: train-mode probes genuinely pollute
+    `running_mean`/`running_var`/`num_batches_tracked`, like the real model."""
+
+    def __init__(self, oom_voxel_threshold=None):
+        super().__init__()
+        self.bn = nn.BatchNorm3d(2)
+        self.oom_voxel_threshold = oom_voxel_threshold
+        self.seen_input_shapes = []
+        self.bn_updates = 0
+
+    def to(self, *args, **kwargs):
+        return self
+
+    def forward(self, x):
+        self.seen_input_shapes.append(tuple(x.shape))
+        voxels = int(np.prod(x.shape))
+        # BN update first, then the oracle: even a failing probe may leave the
+        # running stats mutated
+        t = torch.arange(2 * 4**3, dtype=torch.float32).reshape(1, 2, 4, 4, 4)
+        before = int(self.bn.num_batches_tracked)
+        out = self.bn(t).sum()
+        if int(self.bn.num_batches_tracked) > before:
+            self.bn_updates += 1
+        if self.oom_voxel_threshold is not None and voxels > self.oom_voxel_threshold:
+            raise RuntimeError("CUDA out of memory. Tried to allocate 999.00 GiB.")
+        return out
+
+
+def _bn_buffers(model):
+    return {name: buf.clone() for name, buf in model.named_buffers()}
+
+
+def test_find_batch_size_for_training_restores_bn_stats_bit_exact(fake_cuda):
+    """The train-mode probe must not leak BatchNorm running stats into training."""
+    model = _BnProbeModel()
+    before = _bn_buffers(model)
+
+    find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0", for_training=True)
+
+    assert model.bn_updates > 0, "the probe must actually run train-mode forwards"
+    after = _bn_buffers(model)
+    assert after.keys() == before.keys()
+    for name in before:
+        assert torch.equal(after[name], before[name]), name
+
+
+def test_find_batch_size_restores_bn_stats_when_batch_one_ooms(fake_cuda):
+    model = _BnProbeModel(oom_voxel_threshold=0)
+    before = _bn_buffers(model)
+
+    with pytest.raises(RuntimeError, match="Could not determine a feasible batch size"):
+        find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0", for_training=True)
+
+    assert model.bn_updates > 0
+    after = _bn_buffers(model)
+    for name in before:
+        assert torch.equal(after[name], before[name]), name
+
+
+def test_training_step_runs_dice_loss_and_optimizer_on_cpu():
+    """The probe's training step is a real step: it must update the weights.
+
+    Runs `_training_step` (not the search) on CPU and checks that parameters
+    changed and that the gradients were cleared afterwards.
+    """
+    torch.manual_seed(0)
+    model = UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4])
+    before = {name: p.detach().clone() for name, p in model.named_parameters()}
+    forwards = []
+    model.register_forward_hook(lambda module, inputs, output: forwards.append(1))
+
+    size_finder._training_step(model, torch.rand(1, 1, 16, 16, 16), "off", "cpu")
+
+    after = dict(model.named_parameters())
+    assert any(not torch.equal(before[name], after[name]) for name in before)
+    assert all(parameter.grad is None for parameter in model.parameters())
+    # the second step runs with the first step's gradients still live, which is
+    # what the real training loop does and what a one-step probe misses
+    assert len(forwards) == 2
+
+
+def test_training_step_supports_in_channels_different_from_out_channels(monkeypatch):
+    """The probe target follows the model output, not the input.
+
+    A 2-channel CZYX input paired with a 1-channel label is supported, but
+    `DiceLoss` requires input and target to have the same shape.
+    """
+    torch.manual_seed(0)
+    model = UNet3D(in_channels=2, out_channels=1, final_sigmoid=True, f_maps=[8, 16])
+    before = {name: p.detach().clone() for name, p in model.named_parameters()}
+    target_shapes: list[tuple[int, ...]] = []
+    real_randint = torch.randint
+
+    def recording_randint(*args, **kwargs):
+        target_shapes.append(tuple(args[2]))  # torch.randint(low, high, size)
+        return real_randint(*args, **kwargs)
+
+    monkeypatch.setattr(size_finder.torch, "randint", recording_randint)
+
+    size_finder._training_step(model, torch.rand(1, 2, 8, 32, 32), "off", "cpu")
+
+    after = dict(model.named_parameters())
+    assert any(not torch.equal(before[name], after[name]) for name in before)
+    assert all(parameter.grad is None for parameter in model.parameters())
+    # cheap proof that the DiceLoss shape assertion is not hit: the probe's
+    # target has the output's 1 channel, not the input's 2
+    assert target_shapes == [(1, 1, 8, 32, 32)]
+
+
+class _ScalarProbeModel(nn.Module):
+    """Tiny model that runs a real training step on the fake probe tensors.
+
+    `forward` builds a real tensor from the requested shape and a scalar
+    parameter, so DiceLoss and Adam operate on real autograd state.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.weight = nn.Parameter(torch.tensor(0.5))
+
+    def to(self, *args, **kwargs):
+        return self
+
+    def forward(self, x):
+        return torch.ones(x.shape, dtype=torch.float32) * self.weight
+
+
+def test_find_batch_size_for_training_restores_parameters_bit_exact(monkeypatch):
+    """The real probe steps Adam on the weights; the search must undo that."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(
+        torch, "randn", lambda shape, *args, **kwargs: _FakeDeviceTensor(shape)
+    )
+    monkeypatch.setattr(size_finder, "MAX_PROBE_BATCH_SIZE", 2)
+    model = _ScalarProbeModel()
+    before = model.weight.detach().clone()
+    mutated: list[bool] = []
+    real_step = size_finder._training_step
+
+    def recording_step(model, x, amp, device):
+        previous = model.weight.detach().clone()
+        real_step(model, x, amp, device)
+        mutated.append(not torch.equal(model.weight, previous))
+
+    monkeypatch.setattr(size_finder, "_training_step", recording_step)
+
+    find_batch_size(
+        model, 1, (4, 4, 4), (0, 0, 0), "cuda:0", for_training=True, amp="off"
+    )
+
+    assert mutated and all(mutated), "the probe step did not update the weights"
+    assert torch.equal(model.weight, before)
+    assert model.weight.grad is None
+
+
+def test_find_batch_size_bisects_to_the_true_maximum(fake_cuda):
+    # 16^3 = 4096 voxels/sample: 6 samples (24576) fit, 7 (28672) OOMs.
+    # The old power-of-2 search settled for 4.
+    model = FakeUNet3D(oom_voxel_threshold=25_000)
+
+    assert find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0") == 6
+
+
+@pytest.mark.parametrize("max_samples", [1, 2, 3, 5, 6, 7, 12, 13, 16, 31])
+def test_find_batch_size_result_within_power_of_two_and_true_max(
+    fake_cuda, max_samples
+):
+    """The result is never below the old power-of-2 value and never above the
+    true maximum (a fake monotone OOM oracle makes both bounds exact)."""
+    model = FakeUNet3D(oom_voxel_threshold=max_samples * 4096)
+
+    result = find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0")
+
+    power_of_two = 2 ** (max_samples.bit_length() - 1)
+    assert power_of_two <= result <= max_samples
+    assert result == max_samples
+
+
+def test_find_batch_size_caps_at_2048(fake_cuda):
+    model = FakeUNet3D()  # never OOMs
+
+    assert find_batch_size(model, 1, (16, 16, 16), (0, 0, 0), "cuda:0") == 2048
 
 
 def _patch_cuda_memory(monkeypatch, previous_fraction=1.0):

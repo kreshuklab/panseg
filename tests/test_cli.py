@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from panseg.__version__ import __version__
+from panseg.functionals.precision import validate_amp
 from panseg.run_panseg import create_parser, launch_napari, main
 
 EXAMPLE_TRAIN_CONFIG = (
@@ -48,7 +49,7 @@ def test_launch_training_example_config(mock_check_version, mocker):
     assert kwargs["dataset_dir"] == "TRAIN_DIR"
     assert kwargs["model_name"] == "custom_model"
     assert kwargs["in_channels"] == 1
-    assert kwargs["out_channels"] == 2
+    assert kwargs["out_channels"] == 1
     assert kwargs["feature_maps"] == [32, 64, 128, 256, 512]
     assert kwargs["patch_size"] == [80, 160, 160]
     assert kwargs["max_num_iters"] == 50000
@@ -81,6 +82,34 @@ def test_launch_training_top_level_config(mock_check_version, mocker, tmp_path):
     m_unet_training.assert_called_once()
     assert m_unet_training.call_args.kwargs["model_name"] == "my_model"
     assert m_unet_training.call_args.kwargs["device"] == "cpu"
+
+
+def test_launch_training_accepts_amp_key(mock_check_version, mocker, tmp_path):
+    """`amp: auto|off` from the training YAML flows into `unet_training`."""
+    m_unet_training = mocker.patch(
+        "panseg.functionals.training.train.unet_training", autospec=True
+    )
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "dataset_dir: some_dir\n"
+        "model_name: my_model\n"
+        "in_channels: 1\n"
+        "out_channels: 1\n"
+        "feature_maps: 32\n"
+        "patch_size: [16, 64, 64]\n"
+        "max_num_iters: 5\n"
+        "dimensionality: 3D\n"
+        "sparse: false\n"
+        "device: cpu\n"
+        "amp: off\n"
+    )
+    sys.argv = ["panseg", "--train", str(config_path)]
+
+    main()
+
+    m_unet_training.assert_called_once()
+    # YAML parses a bare `off` as a boolean; it must resolve to the "off" mode
+    assert validate_amp(m_unet_training.call_args.kwargs["amp"]) == "off"
 
 
 def test_launch_training_unknown_keys(mock_check_version, mocker, tmp_path):

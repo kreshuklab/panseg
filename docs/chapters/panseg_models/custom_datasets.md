@@ -14,4 +14,8 @@ mydataset/
     └── val_two.h5 
 ```
 
+Each `h5` file must contain the input image under the `raw` key, and the
+segmentation under the `label` key. Both 2D and 3D data are supported, see
+[Training data layouts](../panseg_interactive_napari/unet_training.md#training-data-layouts).
+
 The recommended way to train new models is through the [napari training GUI](../panseg_interactive_napari/unet_training.md).

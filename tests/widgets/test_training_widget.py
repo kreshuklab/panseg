@@ -499,6 +499,54 @@ def test_unet_training_pretrained(training_tab, mocker, tmp_path):
     assert m_schedule.call_args[1]["task_kwargs"]["pre_trained"] == mocker.sentinel
 
 
+def test_run_training_2d_pretrained_on_3d_data(training_tab, mocker, tmp_path):
+    """A 2D pretrained model selected on 3D data must train a UNet2D."""
+    m_zoo = mocker.patch("panseg.viewer_napari.widgets.training.model_zoo")
+    m_zoo.get_model_by_name.return_value = (
+        mocker.Mock(spec=UNet2D),
+        {"f_maps": [16], "in_channels": 1, "out_channels": 1, "layer_order": "gcr"},
+        mocker.sentinel.weights,
+    )
+    m_schedule = mocker.patch("panseg.viewer_napari.widgets.training.schedule_task")
+    mocker.patch(
+        "panseg.viewer_napari.widgets.training.PATH_PANSEG_MODELS", new=tmp_path
+    )
+
+    training_tab.in_shape = (16, 64, 64)
+    training_tab.out_shape = (16, 64, 64)
+    training_tab.widget_unet_model.patch_size.value = [16, 64, 64]
+    training_tab.update_dimensionality()
+    training_tab.widget_unet_model.pretrained.choices = ["my_model"]
+    training_tab.widget_unet_model.pretrained.value = "my_model"
+
+    training_tab._run_training(
+        from_disk="Disk",
+        dataset="dataset/data",
+        image=None,
+        segmentation=None,
+        pretrained="my_model",
+        model_name="test_model",
+        description="description",
+        channels=(1, 1),
+        feature_maps=[16],
+        patch_size=training_tab.widget_unet_model.patch_size.value,
+        resolution=[1.0, 1.0, 1.0],
+        max_num_iters=100,
+        dimensionality=training_tab.widget_unet_model.dimensionality.value,
+        device="cpu",
+        modality="boundaries",
+        custom_modality="",
+        output_type="boundaries",
+        custom_output_type="",
+        pbar=None,
+    )
+
+    task_kwargs = m_schedule.call_args[1]["task_kwargs"]
+    assert task_kwargs["dimensionality"] == "2D"
+    assert task_kwargs["patch_size"][0] == 1
+    assert task_kwargs["pre_trained"] is mocker.sentinel.weights
+
+
 def test_on_from_disk_change(training_tab, mocker):
     training_tab.widget_unet_training_data.from_disk.value = "Disk"
     m_show_image = mocker.patch.object(
@@ -647,7 +695,7 @@ def test_on_pretrained_changed_channels(training_tab, mocker):
     )
 
 
-def test_on_pretrained_changed_wrong_2Dmodel(training_tab, mocker):
+def test_on_pretrained_changed_2Dmodel_on_3d_data(training_tab, mocker):
     m_zoo = mocker.patch("panseg.viewer_napari.widgets.training.model_zoo")
     m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
     m_zoo.get_model_by_name.return_value = (
@@ -655,20 +703,95 @@ def test_on_pretrained_changed_wrong_2Dmodel(training_tab, mocker):
         {"f_maps": [16], "in_channels": 1, "out_channels": 1},
         "path",
     )
-
-    training_tab.widget_unet_model.pretrained.value = None
-    m_zoo.get_model_by_name.assert_not_called()
-    m_zoo.get_model_description.assert_not_called()
+    training_tab.in_shape = (16, 64, 64)
+    training_tab.out_shape = (16, 64, 64)
+    training_tab.widget_unet_model.patch_size.value = [16, 64, 64]
+    training_tab.update_dimensionality()
 
     training_tab.widget_unet_model.pretrained.choices = ["my_model"]
     training_tab.widget_unet_model.pretrained.value = "my_model"
+
     m_zoo.get_model_by_name.assert_called_with("my_model")
     m_zoo.get_model_description.assert_called_with("my_model")
-    m_log.assert_called_with(
-        "Model incompatible with chosen data!\nModel is a 2D model, but data is 3D",
-        thread="training",
-        level="ERROR",
+    assert training_tab.pretrained_dimensionality == "2D"
+    assert training_tab.widget_unet_model.dimensionality.value == "2D"
+    assert not training_tab.widget_unet_model.dimensionality.enabled
+    assert training_tab.widget_unet_model.patch_size.value[0] == 1
+    m_log.assert_not_called()
+
+
+def test_on_pretrained_changed_3Dmodel_on_3d_data(training_tab, mocker):
+    m_zoo = mocker.patch("panseg.viewer_napari.widgets.training.model_zoo")
+    m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
+    m_zoo.get_model_by_name.return_value = (
+        mocker.Mock(spec=UNet3D),
+        {"f_maps": [16], "in_channels": 1, "out_channels": 1},
+        "path",
     )
+    training_tab.in_shape = (16, 64, 64)
+    training_tab.out_shape = (16, 64, 64)
+    training_tab.widget_unet_model.patch_size.value = [16, 64, 64]
+    training_tab.update_dimensionality()
+
+    training_tab.widget_unet_model.pretrained.choices = ["my_model"]
+    training_tab.widget_unet_model.pretrained.value = "my_model"
+
+    assert training_tab.pretrained_dimensionality == "3D"
+    assert training_tab.widget_unet_model.dimensionality.value == "3D"
+    assert not training_tab.widget_unet_model.dimensionality.enabled
+    assert training_tab.widget_unet_model.patch_size.value[0] == 16
+    m_log.assert_not_called()
+
+
+def test_on_pretrained_changed_clear_unlocks_dimensionality(training_tab, mocker):
+    m_zoo = mocker.patch("panseg.viewer_napari.widgets.training.model_zoo")
+    m_zoo.get_model_by_name.return_value = (
+        mocker.Mock(spec=UNet2D),
+        {"f_maps": [16], "in_channels": 1, "out_channels": 1},
+        "path",
+    )
+    training_tab.in_shape = (16, 64, 64)
+    training_tab.out_shape = (16, 64, 64)
+    training_tab.widget_unet_model.patch_size.value = [16, 64, 64]
+    training_tab.update_dimensionality()
+
+    training_tab.widget_unet_model.pretrained.choices = ["my_model"]
+    training_tab.widget_unet_model.pretrained.value = "my_model"
+    assert training_tab.widget_unet_model.patch_size.value[0] == 1
+
+    training_tab.widget_unet_model.pretrained.value = None
+
+    dim = training_tab.widget_unet_model.dimensionality
+    assert training_tab.pretrained_dimensionality is None
+    assert dim.value == "3D"
+    assert dim.enabled
+    assert training_tab.widget_unet_model.patch_size.value[0] == 16
+
+
+def test_update_dimensionality_keeps_pretrained_dimensionality(training_tab, mocker):
+    m_zoo = mocker.patch("panseg.viewer_napari.widgets.training.model_zoo")
+    m_zoo.get_model_by_name.return_value = (
+        mocker.Mock(spec=UNet2D),
+        {"f_maps": [16], "in_channels": 1, "out_channels": 1},
+        "path",
+    )
+    training_tab.in_shape = (16, 64, 64)
+    training_tab.out_shape = (16, 64, 64)
+    training_tab.widget_unet_model.patch_size.value = [16, 64, 64]
+    training_tab.update_dimensionality()
+
+    training_tab.widget_unet_model.pretrained.choices = ["my_model"]
+    training_tab.widget_unet_model.pretrained.value = "my_model"
+
+    # A later data change must not reset the dimensionality to 3D
+    training_tab.in_shape = (8, 64, 64)
+    training_tab.out_shape = (8, 64, 64)
+    training_tab.update_dimensionality()
+
+    dim = training_tab.widget_unet_model.dimensionality
+    assert dim.value == "2D"
+    assert not dim.enabled
+    assert training_tab.widget_unet_model.patch_size.value[0] == 1
 
 
 def test_on_pretrained_changed_wrong_3Dmodel(training_tab, mocker):
@@ -679,7 +802,9 @@ def test_on_pretrained_changed_wrong_3Dmodel(training_tab, mocker):
         {"f_maps": [16], "in_channels": 1, "out_channels": 1},
         "path",
     )
-    training_tab.widget_unet_model.dimensionality.value = "2D"
+    training_tab.in_shape = (64, 64)
+    training_tab.out_shape = (64, 64)
+    training_tab.update_dimensionality()
 
     training_tab.widget_unet_model.pretrained.value = None
     m_zoo.get_model_by_name.assert_not_called()
@@ -689,43 +814,65 @@ def test_on_pretrained_changed_wrong_3Dmodel(training_tab, mocker):
     training_tab.widget_unet_model.pretrained.value = "my_model"
     m_zoo.get_model_by_name.assert_called_with("my_model")
     m_zoo.get_model_description.assert_called_with("my_model")
+    assert training_tab.widget_unet_model.dimensionality.value == "2D"
     m_log.assert_called_with(
-        "Model incompatible with chosen data!\nModel is a 3D model, but data is 2D",
+        "Model incompatible with chosen data!\n"
+        "Model is a 3D model, but the data only supports 2D training",
         thread="training",
         level="ERROR",
     )
 
 
-def test_update_dimensionality(training_tab):
+def test_update_dimensionality(shown_training_tab):
+    training_tab = shown_training_tab
+    dim = training_tab.widget_unet_model.dimensionality
+
     # YX, ?
     training_tab.in_shape = (1, 1)
     training_tab.out_shape = (1, 1)
     training_tab.update_dimensionality()
-    assert training_tab.widget_unet_model.dimensionality.value == "2D"
+    assert dim.value == "2D"
+    assert not dim.enabled
+    assert not dim.visible
 
     # CYX, YX
     training_tab.in_shape = (1, 1, 1)
     training_tab.out_shape = (1, 1)
     training_tab.update_dimensionality()
-    assert training_tab.widget_unet_model.dimensionality.value == "2D"
+    assert dim.value == "2D"
+    assert not dim.enabled
+    assert not dim.visible
 
     # ZYX, ZYX
     training_tab.in_shape = (1, 1, 1)
     training_tab.out_shape = (1, 1, 1)
     training_tab.update_dimensionality()
-    assert training_tab.widget_unet_model.dimensionality.value == "3D"
+    assert dim.value == "3D"
+    assert dim.enabled
+    assert dim.visible
 
     # ZYX, CZYX
     training_tab.in_shape = (1, 1, 1)
     training_tab.out_shape = (1, 1, 1, 1)
     training_tab.update_dimensionality()
-    assert training_tab.widget_unet_model.dimensionality.value == "3D"
+    assert dim.value == "3D"
+    assert not dim.enabled
+    assert not dim.visible
 
     # CZYX, ?
     training_tab.in_shape = (1, 1, 1, 1)
     training_tab.out_shape = (1, 1, 1)
     training_tab.update_dimensionality()
-    assert training_tab.widget_unet_model.dimensionality.value == "3D"
+    assert dim.value == "3D"
+    assert dim.enabled
+    assert dim.visible
+
+    # unknown shapes (e.g. dataset directory not readable): not derivable
+    training_tab.in_shape = None
+    training_tab.out_shape = None
+    training_tab.update_dimensionality()
+    assert dim.enabled
+    assert dim.visible
 
 
 def test_update_dimensionality_error(training_tab):
@@ -780,6 +927,19 @@ def test_update_channels(training_tab):
     training_tab.update_channels()
     assert ch.value == (2, 1)
 
+    # ZYX, ZYX with 2D training per z-slice: z is spatial in both cases
+    training_tab.in_shape = (2, 2, 2)
+    training_tab.out_shape = (2, 2, 2)
+    training_tab.widget_unet_model.dimensionality.value = "2D"
+    training_tab.update_channels()
+    assert ch.value == (1, 1)
+
+    # CZYX, ZYX with 2D training per z-slice: z is spatial in both cases
+    training_tab.in_shape = (2, 2, 2, 2)
+    training_tab.out_shape = (2, 2, 2)
+    training_tab.update_channels()
+    assert ch.value == (2, 1)
+
 
 def test_update_channels_error(training_tab, mocker):
     m_log = mocker.patch("panseg.viewer_napari.widgets.training.log")
@@ -797,17 +957,6 @@ def test_update_channels_error(training_tab, mocker):
     training_tab.in_shape = (2, 2)
     training_tab.out_shape = (2, 2, 2, 2)
     training_tab.update_channels()
-    m_log.assert_called_once()
-    m_log.reset_mock()
-
-    # ZYX, CYX
-    training_tab.in_shape = (2, 2, 2)
-    training_tab.out_shape = (2, 2, 2)
-    training_tab.widget_unet_model.dimensionality.value = "2D"
-    m_log.assert_called_once()
-    m_log.reset_mock()
-    training_tab.update_channels()
-    assert ch.value == (2, 2)
     m_log.assert_called_once()
     m_log.reset_mock()
 

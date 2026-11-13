@@ -1,5 +1,7 @@
 import logging
+import math
 import multiprocessing
+import os
 
 import nifty
 import numpy as np
@@ -34,6 +36,106 @@ except ImportError:
     SIMPLE_ITK_INSTALLED = False
 
 
+# Conservative estimate of the temporary working set per voxel of a halo-expanded block
+# while 'distance_transform_watershed' runs on it: thresholded mask (1B) and its inverted
+# copy (1B), distance transform and smoothed copy (2x4B), seed mask and labeled seeds
+# (1B + 4B), smoothed input and weight map (2x4B), watershed height/marker/output copies
+# (3x4B), size-filter temporaries (2x1B) and the second watershed copies (2x4B), the
+# uint64 result (8B) and the pass-two relabel copies (2x8B).
+_WS_BYTES_PER_VOXEL = 64
+
+# Full-volume allocations that exist regardless of the block layout: the float32 input
+# copy, the uint64 output and the full-volume relabel copy inside the two-pass watershed.
+_FIXED_BYTES_PER_VOXEL = 24
+
+# Fraction of the currently available RAM used as the default memory budget.
+_DEFAULT_MEMORY_FRACTION = 0.5
+
+
+def _effective_cpu_count() -> int:
+    """Return the number of CPU cores available to this process.
+
+    Unlike 'multiprocessing.cpu_count', this respects CPU affinity masks and container
+    restrictions where the platform supports it (all platforms on Python >= 3.13, Linux
+    and other Unix platforms on earlier versions), so it does not report host cores that
+    the process may not use.
+
+    Returns:
+        int: The number of available CPU cores.
+    """
+    # 'os.process_cpu_count' is available on all platforms since Python 3.13.
+    process_cpu_count = getattr(os, "process_cpu_count", None)
+    if process_cpu_count is not None:
+        return process_cpu_count()
+    try:
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        return multiprocessing.cpu_count()
+
+
+def _sysconf_first(*names: str) -> int | None:
+    """Return the first 'os.sysconf' value that exists on this platform, or None.
+
+    The names exposed by 'os.sysconf' vary between Unix platforms (e.g. macOS exposes
+    'SC_PHYS_PAGES' where Linux exposes 'SC_AVPHYS_PAGES').
+    """
+    for name in names:
+        try:
+            return int(os.sysconf(name))
+        except (AttributeError, OSError, ValueError):
+            continue
+    return None
+
+
+def _available_memory_windows() -> int | None:
+    """Return the amount of available physical memory on Windows, if detectable.
+
+    Uses the WinAPI call 'GlobalMemoryStatusEx' via ctypes (no extra dependency).
+    """
+    try:
+        import ctypes
+
+        class MemoryStatusEx(ctypes.Structure):
+            _fields_ = [
+                ("dw_length", ctypes.c_ulong),
+                ("dw_memory_load", ctypes.c_ulong),
+                ("ull_total_phys", ctypes.c_ulonglong),
+                ("ull_avail_phys", ctypes.c_ulonglong),
+                ("ull_total_page_file", ctypes.c_ulonglong),
+                ("ull_avail_page_file", ctypes.c_ulonglong),
+                ("ull_total_virtual", ctypes.c_ulonglong),
+                ("ull_avail_virtual", ctypes.c_ulonglong),
+                ("ull_avail_extended_virtual", ctypes.c_ulonglong),
+            ]
+
+        windll = getattr(ctypes, "windll", None)  # only exists on Windows
+        if windll is None:
+            return None
+        stat = MemoryStatusEx()
+        stat.dw_length = ctypes.sizeof(MemoryStatusEx)
+        if windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+            return int(stat.ull_avail_phys)
+    except (AttributeError, OSError):
+        pass
+    return None
+
+
+def _available_memory_bytes() -> int | None:
+    """Return the amount of memory currently available on the system, if detectable.
+
+    Uses 'os.sysconf' on Unix and 'GlobalMemoryStatusEx' on Windows.
+
+    Returns:
+        Optional[int]: Available memory in bytes, or None if it cannot be determined
+        on this platform.
+    """
+    pages = _sysconf_first("SC_AVPHYS_PAGES", "SC_PHYS_PAGES")
+    page_size = _sysconf_first("SC_PAGE_SIZE", "SC_PAGESIZE")
+    if pages is not None and page_size is not None:
+        return pages * page_size
+    return _available_memory_windows()
+
+
 def _default_block_shape(
     shape: tuple[int, ...], n_threads: int | None
 ) -> tuple[int, ...]:
@@ -47,12 +149,12 @@ def _default_block_shape(
     Args:
         shape (tuple[int, ...]): Shape of the volume to split.
         n_threads (Optional[int]): Number of threads to target. If None, the number of
-            available CPU cores is used.
+            CPU cores available to this process is used.
 
     Returns:
         tuple[int, ...]: The derived block shape.
     """
-    n_threads = multiprocessing.cpu_count() if n_threads is None else n_threads
+    n_threads = _effective_cpu_count() if n_threads is None else n_threads
     target_blocks = max(2, 2 * n_threads)
     blocks = [1] * len(shape)
     while int(np.prod(blocks)) < target_blocks:
@@ -76,6 +178,73 @@ def _default_halo(block_shape: tuple[int, ...]) -> tuple[int, ...]:
     return tuple(min(32, b // 3) for b in block_shape)
 
 
+def _blockwise_n_workers(
+    n_voxels: int,
+    block_shape: tuple[int, ...],
+    halo: tuple[int, ...],
+    n_threads: int,
+    memory_budget: int | None,
+) -> int:
+    """Derive the number of blocks to process concurrently in the blockwise mode.
+
+    The working set of a block (the halo-expanded block plus the temporary arrays of the
+    distance transform watershed) is estimated from '_WS_BYTES_PER_VOXEL'. The number of
+    concurrently processed blocks is capped so that the total estimated working set,
+    including the full-volume allocations that exist regardless of blocking, stays within
+    the memory budget. Excess blocks are processed in waves.
+
+    Args:
+        n_voxels (int): Number of voxels of the volume.
+        block_shape (tuple[int, ...]): Block shape in voxels.
+        halo (tuple[int, ...]): Halo in voxels added around each block.
+        n_threads (int): Requested number of threads (upper bound of the return value).
+        memory_budget (Optional[int]): Memory budget in bytes. If None, 50% of the
+            currently available RAM is used, or no capping (with a warning) is applied
+            if the available memory cannot be determined.
+
+    Returns:
+        int: Number of blocks to process concurrently (at least 1, at most n_threads).
+    """
+    if memory_budget is None:
+        available = _available_memory_bytes()
+        budget = (
+            None if available is None else int(_DEFAULT_MEMORY_FRACTION * available)
+        )
+    else:
+        budget = int(memory_budget)
+
+    if budget is None:
+        logger.warning(
+            "dt_watershed: could not determine the available memory; running "
+            "without a memory budget. Pass 'memory_budget' explicitly to bound "
+            "the peak memory usage."
+        )
+        return n_threads
+
+    fixed_bytes = _FIXED_BYTES_PER_VOXEL * n_voxels
+    if fixed_bytes >= budget:
+        logger.warning(
+            "dt_watershed: the volume itself needs an estimated %.2f GB which exceeds "
+            "the memory budget of %.2f GB; blockwise processing may exhaust memory.",
+            fixed_bytes / 1e9,
+            budget / 1e9,
+        )
+        return n_threads
+
+    outer_shape = tuple(int(b) + 2 * int(h) for b, h in zip(block_shape, halo))
+    per_block_bytes = math.prod(outer_shape) * _WS_BYTES_PER_VOXEL
+    n_workers = max(1, min(n_threads, (budget - fixed_bytes) // per_block_bytes))
+    if n_workers < n_threads:
+        logger.info(
+            "dt_watershed: limiting blockwise watershed to %d concurrent blocks "
+            "(from %d threads) to stay within the memory budget of %.2f GB.",
+            n_workers,
+            n_threads,
+            budget / 1e9,
+        )
+    return n_workers
+
+
 def dt_watershed(
     boundary_pmaps: np.ndarray,
     threshold: float = 0.5,
@@ -91,6 +260,7 @@ def dt_watershed(
     block_shape: tuple[int, ...] | None = None,
     halo: tuple[int, ...] | None = None,
     mask: np.ndarray | None = None,
+    memory_budget: int | None = None,
 ) -> np.ndarray:
     """Performs watershed segmentation using distance transforms on boundary probability maps.
 
@@ -129,7 +299,7 @@ def dt_watershed(
             Defaults to False.
         n_threads (Optional[int], optional): Number of threads to use for parallel processing in
             2D mode (stacked mode) and 3D blockwise mode. If None, the default number of threads
-            (all available CPU cores) will be used. Defaults to None.
+            (all CPU cores available to this process) will be used. Defaults to None.
         blockwise (bool, optional): If True, runs the 3D watershed blockwise across multiple
             CPU cores instead of a single full-volume pass. Falls back to the single-pass
             watershed (with a warning) if the input is 2D, if the volume has fewer than
@@ -144,13 +314,20 @@ def dt_watershed(
         mask (Optional[np.ndarray], optional): A binary mask that excludes certain regions from
             segmentation. Only regions within the mask will be considered. If None, all regions
             are included. Must have the same shape as 'boundary_pmaps'. Defaults to None.
+        memory_budget (Optional[int], optional): Approximate memory budget in bytes for the
+            blockwise mode. The number of blocks processed concurrently is capped so that the
+            estimated working set stays within this budget; remaining blocks are processed in
+            waves. If None, 50% of the currently available RAM is used; if the available
+            memory cannot be determined, no capping is applied and a warning is emitted.
+            Defaults to None.
 
     Returns:
         np.ndarray: A labeled segmentation map where each region is assigned a unique label.
 
     """
     # Prepare the keyword arguments for the watershed function
-    boundary_pmaps = boundary_pmaps.astype("float32")
+    boundary_pmaps = boundary_pmaps.astype("float32", copy=False)
+    n_threads = _effective_cpu_count() if n_threads is None else n_threads
     ws_kwargs = {
         "threshold": threshold,
         "sigma_seeds": sigma_seeds,
@@ -197,17 +374,27 @@ def dt_watershed(
             and boundary_pmaps.size >= 2_000_000
             and n_blocks >= 2
         ):
+            # Cap the number of concurrently processed blocks so that the estimated
+            # working set stays within the memory budget; excess blocks run in waves.
+            n_workers = _blockwise_n_workers(
+                boundary_pmaps.size,
+                resolved_block_shape,
+                resolved_halo,
+                n_threads,
+                memory_budget,
+            )
             # Apply watershed blockwise in two passes (for large 3D data)
             logger.debug(
                 "Running blockwise watershed, "
-                f"shape:{resolved_block_shape}, halo: {resolved_halo}"
+                f"shape:{resolved_block_shape}, halo: {resolved_halo}, "
+                f"concurrent blocks: {n_workers}"
             )
             segmentation, _ = blockwise_two_pass_watershed(
                 boundary_pmaps,
                 resolved_block_shape,
                 resolved_halo,
                 ws_function=distance_transform_watershed,
-                n_threads=n_threads,
+                n_threads=n_workers,
                 mask=mask,
                 **ws_kwargs,
             )

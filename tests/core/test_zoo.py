@@ -43,7 +43,8 @@ class TestPanSegModelZoo:
             x = torch.randn(4, 1, 260, 260)
         else:
             x = torch.randn(4, 1, 80, 160, 160)
-        y = model(x)
+        # forward() returns logits; the normalized output comes from predict()
+        y = model.predict(x)
         # assert output normalized
         assert torch.all(0 <= y) and torch.all(y <= 1)
 
@@ -146,7 +147,7 @@ def test_dimensionality_filter_is_spatial_only():
 
 ZOO_MODEL_NAME = "confocal_2D_unet_ovules_ds2x"
 ZOO_MODEL_URL = (
-    "https://zenodo.org/record/7772709/files/confocal_2D_unet_ovules_ds2x.pytorch"
+    "https://zenodo.org/records/7772709/files/confocal_2D_unet_ovules_ds2x.pytorch"
 )
 
 

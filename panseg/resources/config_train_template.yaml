@@ -29,16 +29,20 @@ lr_scheduler:
   patience: 10
 trainer:
   checkpoint_dir: CHECKPOINT_DIR
-  # path to the best_checkpoint.pytorch; to be used for fine-tuning the model with additional ground truth
+  # path to the pretrained weights (e.g. best_checkpoint.pytorch); to be used for fine-tuning the model with additional ground truth
   pre_trained: null
   # how many iterations between tensorboard logging
   log_after_iters: 500
   # max number of iterations
   max_num_iterations: 50000
-# Configure training and validation loaders
+  # amp: auto # training precision: 'auto' = bf16 autocast on supported CUDA devices (fp32 otherwise), 'off' = always fp32
+# Configuration of the training and validation loaders, as recorded in the
+# `config_train.yml` written into every checkpoint. The loaders are derived from
+# `patch_size` and `device`; this section is a record of the run, not an input of
+# `panseg --train` (the training config format is `config_train_example.yaml`).
 loaders:
-  # how many subprocesses to use for data loading
-  num_workers: 8
+  # how many subprocesses to use for data loading, increases memory demands
+  num_workers: 4
   # path to the raw data within the H5
   raw_internal_path: raw
   # path to the label data within the H5
@@ -53,9 +57,10 @@ loaders:
     slice_builder:
       name: FilterSliceBuilder
       # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
-      patch_shape: [ 80, 160, 160 ]
-      # train stride between patches
-      stride_shape: [ 40, 80, 80 ]
+      patch_shape: [80, 160, 160]
+      # train stride between patches; the training loader always uses max(patch_shape // 2, 1)
+      # and drops patches with less than `threshold` non-zero labels
+      stride_shape: [40, 80, 80]
       # minimum volume of the labels in the patch
       threshold: 0.1
       # probability of accepting patches which do not fulfil the threshold criterion
@@ -68,13 +73,11 @@ loaders:
       - PATH_TO_VAL_DIR
 
     # SliceBuilder configuration, i.e. how to iterate over the input volume patch-by-patch
+    # validation patches are never threshold-filtered; they are non-overlapping by
+    # default and `stride_shape` below records the effective val grid
     slice_builder:
-      name: FilterSliceBuilder
-      # train patch size given to the network (adapt to fit in your GPU mem, generally the bigger patch the better)
-      patch_shape: [ 80, 160, 160 ]
-      # train stride between patches
-      stride_shape: [ 80, 160, 160 ]
-      # minimum volume of the labels in the patch
-      threshold: 0.1
-      # probability of accepting patches which do not fulfil the threshold criterion
-      slack_acceptance: 0.01
+      name: SliceBuilder
+      # val patch size given to the network (matches the train patch size)
+      patch_shape: [80, 160, 160]
+      # val stride between patches; defaults to the patch shape (non-overlapping)
+      stride_shape: [80, 160, 160]

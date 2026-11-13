@@ -6,19 +6,22 @@ training:
   dataset_dir: TRAIN_DIR # contains train/ and val/ subdirectories with h5 files
   model_name: custom_model # name of the new model, must not exist yet
   in_channels: 1
-  out_channels: 2
+  out_channels: 1
   feature_maps: [32, 64, 128, 256, 512] # single int enables geometric progression
-  patch_size: [80, 160, 160]
+  patch_size: [80, 160, 160] # z, y, x; for 2D training the z extent must be 1
   max_num_iters: 50000
-  dimensionality: 3D # '2D' or '3D'
+  dimensionality: 3D # '2D' or '3D'; 2D trains a UNet2D per z-slice on zyx/czyx data (patch z = 1)
   sparse: false # true for affinity/sparse target training
   device: cuda # 'cuda' or 'cpu'
   # Optional:
+  # amp: auto # training precision: 'auto' = bf16 autocast on supported CUDA devices (fp32 otherwise), 'off' = always fp32
+  # val_slice_builder: # validation patch grid; val patches are unfiltered (no threshold) and non-overlapping by default
+  #   stride_shape: [80, 160, 160] # val stride; defaults to the patch shape.
   # modality: '' # microscopy modality of the model, e.g. confocal
   # output_type: '' # prediction type, e.g. cell boundaries
   # description: '' # model description saved alongside the model
   # resolution: [1.0, 1.0, 1.0] # voxel size of the training data in um
-  # pre_trained: null # path to pretrained model weights for fine-tuning
+  # pre_trained: null # path to model weights for fine-tuning, e.g. a model's best_checkpoint.pytorch
   # layer_order: bcr # unet layer order
   # FAIR metadata:
   # authors: [] # one author per entry, 'Name' or 'Name <email>'

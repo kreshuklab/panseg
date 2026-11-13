@@ -64,6 +64,8 @@ class Training_Tab:
         self.CUSTOM = "Custom"
 
         self.previous_z_patch_size = 16
+        # Dimensionality required by the selected pretrained model, if any
+        self.pretrained_dimensionality: Literal["2D", "3D"] | None = None
 
         # Section visibility state
         self.train_data_open = True
@@ -292,9 +294,14 @@ class Training_Tab:
             "orientation": "horizontal",
             "value": "3D",
             "choices": ["3D", "2D"],
-            "tooltip": "Train a 3D unet or a 2D unet",
+            "tooltip": "Train a 3D unet or a 2D unet.\n"
+            "A 2D unet is trained per z-slice on 3D (zyx/czyx) data,\n"
+            "with the patch size in z fixed to 1.\n"
+            "Fixed to the architecture of the selected pretrained model.",
             "enabled": False,
-            "visible": False,  # output channels not supported, so it is always known
+            # only shown when 2D per-slice vs 3D training is a real choice,
+            # i.e. for volumetric (zyx/czyx) data (see update_dimensionality)
+            "visible": False,
         },
         pretrained={
             "label": "Pretrained model",
@@ -628,7 +635,11 @@ class Training_Tab:
             self.widget_unet_training_data.from_disk.value = "Current Data"
 
     def _on_dimensionality_change(self, dimensionality: Literal["3D", "2D"]):
-        """Update patch size according to chosen dimensionality."""
+        """Update patch size according to chosen dimensionality.
+
+        2D models are trained per z-slice on zyx/czyx data, so the patch size
+        in z is frozen to 1 for "2D" and restored for "3D".
+        """
         logger.debug(f"_on_dimensionality_change called with {dimensionality}")
 
         # Patch size:
@@ -650,14 +661,14 @@ class Training_Tab:
         Determination based on self.in_shape and self.out_shape, which are set
         on data change.
         This function would support output channels, but currently the training
-        does not, therefore the `dimensionality` field is not visible, as it is
-        only needed in the case of 3d in- and 3d output with an uncertain number
-        of output channels.
+        does not, therefore the output must not have a channel axis.
+        The channels do not depend on the chosen dimensionality: zyx/czyx data
+        is spatial in z for "3D" training as well as for "2D" training, where a
+        2D model is trained per z-slice.
         """
         self._automatic_channel_change = True
         try:
             logger.debug("update_channels called")
-            dimensionality = self.widget_unet_model.dimensionality.value
             ch = self.widget_unet_training_data.channels
             self.widget_unet_training_data.channels[0].enabled = False
             self.widget_unet_training_data.channels[1].enabled = False
@@ -682,12 +693,10 @@ class Training_Tab:
                     ch.value = (self.in_shape[0], 1)
 
                 elif len(self.out_shape) == 3:
-                    if dimensionality == "3D":
-                        ch.value = (1, 1)
-                        self.widget_unet_training_data.channels[0].enabled = True
-                    elif dimensionality == "2D":
-                        ch.value = (self.in_shape[0], self.out_shape[0])
-                        raise ValueError("No channels in output supported!")
+                    # ZYX input and ZYX output: z is spatial for "3D" training
+                    # as well as for "2D" training per z-slice
+                    ch.value = (1, 1)
+                    self.widget_unet_training_data.channels[0].enabled = True
 
                 elif len(self.out_shape) == 4:
                     # must be 3D!
@@ -833,44 +842,86 @@ class Training_Tab:
         This should be called whenever the input is changed, after
         setting self.in_shape and self.out_shape.
 
+        For 2D (yx/cyx) data only "2D" training is possible. For volumetric
+        (zyx/czyx) data the user can choose between "3D" training and "2D"
+        training of a 2D model per z-slice (patch z-extent 1), so the choice
+        is shown and enabled in that case (and if the data shape is unknown),
+        with "3D" as default. Otherwise it is hidden and set automatically.
+
+        A selected pretrained model fixes the dimensionality.
         Triggers _on_dimensionality_change, which calls update_channels.
         """
         logger.debug(
             f"update_dimensionality called, in/out: {self.in_shape}, {self.out_shape}"
         )
         dimensionality = self.widget_unet_model.dimensionality
+        model_dimensionality = self.pretrained_dimensionality
 
         if self.in_shape is None or self.out_shape is None:
+            # Data shape unknown, e.g. training from a dataset directory whose
+            # files could not be read (yet) -> dimensionality not derivable
+            dimensionality.visible = True
+            if model_dimensionality is None:
+                dimensionality.enabled = True
+            else:
+                dimensionality.value = model_dimensionality
+                dimensionality.enabled = False
+            dimensionality.changed.emit(dimensionality.value)
             return
         if len(self.in_shape) == 2:
+            # 2D (yx/cyx) data: only 2D training possible
+            dimensionality.visible = False
             dimensionality.enabled = False
             dimensionality.value = "2D"
             if len(self.out_shape) > 3:
                 raise ValueError(
                     f"Input/Output shapes not supported: {self.in_shape}, {self.out_shape}"
                 )
+            if model_dimensionality == "3D":
+                self._log_dimensionality_mismatch()
 
         elif len(self.in_shape) == 3:
             if len(self.out_shape) == 2:
+                # CYX raw + YX label: 2D data, only 2D training possible
+                dimensionality.visible = False
                 dimensionality.enabled = False
                 dimensionality.value = "2D"
+                if model_dimensionality == "3D":
+                    self._log_dimensionality_mismatch()
             elif len(self.out_shape) == 3:
-                # Dimensionality only ambiguouse if output could have channels
-                # Which it can't atm -> dimensionality not visible
-                dimensionality.enabled = True
-                dimensionality.value = "3D"
+                # ZYX data: 3D training or 2D training per z-slice
+                dimensionality.visible = True
+                if model_dimensionality is None:
+                    dimensionality.value = "3D"
+                    dimensionality.enabled = True
+                else:
+                    dimensionality.value = model_dimensionality
+                    dimensionality.enabled = False
             elif len(self.out_shape) == 4:
+                # ZYX raw + CZYX label: output channels not supported
+                dimensionality.visible = False
                 dimensionality.enabled = False
                 dimensionality.value = "3D"
 
         elif len(self.in_shape) == 4:
-            dimensionality.enabled = False
-            dimensionality.value = "3D"
-
             if len(self.out_shape) < 3:
                 raise ValueError(
                     f"Input/Output shapes not supported: {self.in_shape}, {self.out_shape}"
                 )
+            if len(self.out_shape) == 3:
+                # CZYX data: 3D training or 2D training per z-slice
+                dimensionality.visible = True
+                if model_dimensionality is None:
+                    dimensionality.value = "3D"
+                    dimensionality.enabled = True
+                else:
+                    dimensionality.value = model_dimensionality
+                    dimensionality.enabled = False
+            else:
+                # CZYX raw + CZYX label: output channels not supported
+                dimensionality.visible = False
+                dimensionality.enabled = False
+                dimensionality.value = "3D"
 
         if (not 1 < len(self.in_shape) < 5) or (not 1 < len(self.out_shape) < 5):
             raise ValueError(
@@ -879,12 +930,24 @@ class Training_Tab:
         # update_channels called from setting dimensionality
         dimensionality.changed.emit(dimensionality.value)
 
+    def _log_dimensionality_mismatch(self) -> None:
+        """Log that the pretrained model does not fit the chosen data."""
+        log(
+            "Model incompatible with chosen data!\n"
+            f"Model is a {self.pretrained_dimensionality} model, but the data "
+            "only supports 2D training",
+            thread="training",
+            level="ERROR",
+        )
+
     def _on_pretrained_changed(self, model_name: str | None):
         logger.debug(f"_on_model_name_changed called: {model_name}")
 
         if model_name is None:
             self.description = "No description available for this model."
             self.widget_unet_model.feature_maps.enabled = True
+            self.pretrained_dimensionality = None
+            self.update_dimensionality()
         else:
             self.widget_unet_model.feature_maps.enabled = False
             model, model_config, pre_model_path = model_zoo.get_model_by_name(
@@ -898,6 +961,16 @@ class Training_Tab:
 
             self.description = model_zoo.get_model_description(model_name)
 
+            if isinstance(model, UNet2D):
+                self.pretrained_dimensionality = "2D"
+            elif isinstance(model, UNet3D):
+                self.pretrained_dimensionality = "3D"
+            else:
+                self.pretrained_dimensionality = None
+            # Fix the dimensionality to the model architecture; this only logs
+            # an incompatibility if the chosen data cannot support it.
+            self.update_dimensionality()
+
             model_channels = (model_config["in_channels"], model_config["out_channels"])
             if model_channels != self.widget_unet_training_data.channels.value:
                 log(
@@ -907,29 +980,6 @@ class Training_Tab:
                     thread="training",
                     level="ERROR",
                 )
-            if (
-                isinstance(model, UNet3D)
-                and self.widget_unet_model.dimensionality.value != "3D"
-            ):
-                log(
-                    "Model incompatible with chosen data!\n"
-                    "Model is a 3D model, but data is "
-                    f"{self.widget_unet_model.dimensionality.value}",
-                    thread="training",
-                    level="ERROR",
-                )
-            elif (
-                isinstance(model, UNet2D)
-                and self.widget_unet_model.dimensionality.value != "2D"
-            ):
-                log(
-                    "Model incompatible with chosen data!\n"
-                    "Model is a 2D model, but data is "
-                    f"{self.widget_unet_model.dimensionality.value}",
-                    thread="training",
-                    level="ERROR",
-                )
-
         self.widget_unet_model.pretrained.tooltip = (
             "Select an existing model to retrain. Current model description:"
             f"\n\n{self.description}"

@@ -11,7 +11,7 @@ import pytest
 import torch
 
 from panseg.functionals.prediction import unet_prediction
-from panseg.functionals.prediction.utils import size_finder
+from panseg.functionals.prediction.utils import array_predictor, size_finder
 from panseg.functionals.training.model import UNet2D, UNet3D
 
 MODEL_CONFIG = """model:
@@ -70,7 +70,9 @@ def dummy_model_3d_deep(tmp_path):
     return _save_model(tmp_path, model, MODEL_CONFIG_3D_DEEP)
 
 
-def _predict(model_files, raw, layout, patch=None, patch_halo=None):
+def _predict(
+    model_files, raw, layout, patch=None, patch_halo=None, single_batch_mode=True
+):
     return unet_prediction(
         raw=raw,
         input_layout=layout,
@@ -78,6 +80,7 @@ def _predict(model_files, raw, layout, patch=None, patch_halo=None):
         model_id=None,
         patch=patch,
         patch_halo=patch_halo,
+        single_batch_mode=single_batch_mode,
         config_path=model_files[0],
         model_weights_path=model_files[1],
         device="cpu",
@@ -105,7 +108,7 @@ def test_unet_prediction_auto_patch_never_exceeds_sample(dummy_model, monkeypatc
     monkeypatch.setattr(
         size_finder,
         "probe_max_patch_shape",
-        lambda model, in_channels, device: (64, 64, 64),
+        lambda model, in_channels, device, amp="auto", **kwargs: (64, 64, 64),
     )
     raw = np.random.rand(16, 96, 256).astype("float32")
 
@@ -159,7 +162,7 @@ def test_unet_prediction_2d_model_on_3d_input(
         monkeypatch.setattr(
             size_finder,
             "probe_max_patch_shape",
-            lambda model, in_channels, device: probed_max,
+            lambda model, in_channels, device, amp="auto", **kwargs: probed_max,
         )
     raw = np.random.rand(*raw_shape).astype("float32")
 
@@ -168,6 +171,45 @@ def test_unet_prediction_2d_model_on_3d_input(
     zyx = raw_shape if layout == "ZYX" else (1, *raw_shape)
     assert pmap.shape == (2, *zyx)
     assert np.all(np.isfinite(pmap))
+
+
+def test_unet_prediction_2d_full_slice_auto_patch_recovers_from_loop_oom(
+    dummy_model_2d, monkeypatch
+):
+    """Issue #7: the batch probe fits, but a later loop iteration OOMs.
+
+    A full-slice 2D auto patch plus a batch size accepted by the probe used to
+    abort the run. The predictor must fall back to a smaller batch and produce
+    exactly the same prediction.
+    """
+    monkeypatch.setattr(
+        size_finder,
+        "probe_max_patch_shape",
+        lambda model, in_channels, device, **kwargs: (1, 3200, 3200),
+    )
+    monkeypatch.setattr(array_predictor, "find_batch_size", lambda *a, **k: 16)
+    raw = np.random.default_rng(0).random((32, 64, 64)).astype("float32")
+
+    reference = _predict(dummy_model_2d, raw, "ZYX", single_batch_mode=False)
+
+    original_forward = UNet2D.forward
+    seen_batch_sizes = []
+    calls = 0
+
+    def forward_with_one_oom(self, x):
+        nonlocal calls
+        calls += 1
+        seen_batch_sizes.append(x.shape[0])
+        if calls == 2:  # first batch succeeded, so the restart must reset the maps
+            raise RuntimeError("CUDA out of memory. Tried to allocate 999.00 GiB.")
+        return original_forward(self, x)
+
+    monkeypatch.setattr(UNet2D, "forward", forward_with_one_oom)
+
+    prediction = _predict(dummy_model_2d, raw, "ZYX", single_batch_mode=False)
+
+    assert seen_batch_sizes == [16, 16, 8, 8, 8, 8]
+    np.testing.assert_allclose(prediction, reference)
 
 
 def test_unet_prediction_2d_model_auto_patch_drops_z_halo(dummy_model_2d):

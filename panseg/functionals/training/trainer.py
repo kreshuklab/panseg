@@ -9,10 +9,56 @@ from torch.optim.optimizer import Optimizer
 from torch.utils.tensorboard.writer import SummaryWriter
 from tqdm import tqdm
 
+from panseg.functionals.precision import (
+    AmpMode,
+    AmpSetting,
+    amp_context,
+    bf16_autocast_enabled,
+    validate_amp,
+)
+from panseg.functionals.prediction.utils.size_finder import is_oom_error
 from panseg.functionals.training.model import UNet2D
 from panseg.functionals.training.utils import RunningAverage
+from panseg.functionals.transfer import to_device
 
 logger = logging.getLogger(__name__)
+
+TRAIN_COMPILE_MIN_ITERS = 1000
+"""Minimum iteration budget for automatic training `torch.compile`.
+
+Below this the one-time compile does not amortize. fp32 is never compiled:
+compiled fp32 silently selects TF32 kernels.
+"""
+
+
+def load_pretrained_weights(model: nn.Module, pre_trained: Path) -> None:
+    """Load pre-trained weights into `model` for fine-tuning.
+
+    Tolerates checkpoints wrapped in a ``{"model_state_dict": ...}`` dict (like
+    `prediction.py` does) and models wrapped in ``nn.DataParallel`` (the weights
+    are loaded into the unwrapped module).
+
+    Args:
+        model (nn.Module): model to load the weights into
+        pre_trained (Path): path to the pre-trained model weights
+
+    Raises:
+        ValueError: if the checkpoint cannot be loaded, likely because its
+            architecture or number of channels does not match the model.
+    """
+    logger.info(f"Loading pre-trained model from '{pre_trained}'...")
+    state = torch.load(pre_trained, map_location="cpu", weights_only=True)
+    if "model_state_dict" in state:  # Model weights format may vary between versions
+        state = state["model_state_dict"]
+    net = model.module if isinstance(model, nn.DataParallel) else model
+    try:
+        net.load_state_dict(state)
+    except RuntimeError as e:
+        raise ValueError(
+            f"Failed to load pre-trained weights from '{pre_trained}': {e}. "
+            "The checkpoint likely has a different architecture or a different "
+            "number of channels than the configured model."
+        ) from e
 
 
 class UNetTrainer:
@@ -28,7 +74,14 @@ class UNetTrainer:
         max_num_iterations (int): maximum number of iterations
         device (str): device to use for training
         log_after_iters (int): number of iterations before logging to tensorboard
-        pre_trained(str): path to the pre-trained model
+        amp (str): precision mode (``"auto"``: bf16 autocast on supported CUDA
+            devices, else fp32; ``"off"``: always fp32). Model weights and
+            checkpoints stay fp32 in either mode. Defaults to "auto".
+
+    Long bf16 training runs are compiled with `torch.compile` automatically
+    (see `TRAIN_COMPILE_MIN_ITERS`). Compilation is lazy and does not change
+    checkpoints: `self.model` stays the plain module and the compiled handle is
+    only used for forward passes. A compile failure warns and runs eager.
     """
 
     def __init__(
@@ -42,7 +95,7 @@ class UNetTrainer:
         max_num_iterations: int,
         device: str = "cuda",
         log_after_iters: int = 100,
-        pre_trained: Path | None = None,
+        amp: AmpSetting = "auto",
     ):
         self.model = model
         self.optimizer = optimizer
@@ -54,16 +107,32 @@ class UNetTrainer:
         self.max_num_epochs = max_num_iterations // len(loaders["train"]) + 1
         self.device = device
         self.log_after_iters = log_after_iters
+        self.amp: AmpMode = validate_amp(amp)
         self.best_eval_loss = float("+inf")
 
         self.num_iterations = 1
-        if pre_trained is not None:
-            logger.info(f"Logging pre-trained model from '{pre_trained}'...")
-            state = torch.load(pre_trained, map_location="cpu")
-            self.model.load_state_dict(state)
+
+        # keep self.model plain: checkpoint keys, optimizer parameter identity,
+        # DataParallel and isinstance(model, UNet2D) must stay intact
+        self._compiled_model: nn.Module | None = None
+        if self._should_compile():
+            self._compiled_model = torch.compile(self.model)
 
         # init tensorboard logger
         self.writer = SummaryWriter(log_dir=checkpoint_dir / "logs")
+
+    def _should_compile(self) -> bool:
+        """Whether this run gets automatic `torch.compile`.
+
+        Only long CUDA runs that resolve to bf16 autocast qualify;
+        `bf16_autocast_enabled` already implies a CUDA device. DataParallel is
+        excluded because the compiled handle would wrap the wrong level.
+        """
+        return (
+            bf16_autocast_enabled(self.amp, self.device)
+            and self.max_num_iterations >= TRAIN_COMPILE_MIN_ITERS
+            and not isinstance(self.model, nn.DataParallel)
+        )
 
     def train(self) -> None:
         for epoch in range(self.max_num_epochs):
@@ -77,7 +146,8 @@ class UNetTrainer:
             # evaluate on validation set
             eval_loss = self.validate()
             logger.info(f"Val Loss: {eval_loss}.")
-            self.writer.add_scalar("Loss/val", eval_loss, self.num_iterations)
+            if self.writer is not None:
+                self.writer.add_scalar("Loss/val", eval_loss, self.num_iterations)
             # set the model back to training mode
             self.model.train()
 
@@ -114,27 +184,32 @@ class UNetTrainer:
         self.model.train()
 
         for _input, target in tqdm(self.loaders["train"]):
-            _input, target = _input.to(self.device), target.to(self.device)
+            _input = to_device(_input, self.device)
+            target = to_device(target, self.device)
             output, loss = self._forward_pass(_input, target)
 
             train_losses.update(loss.item(), self._batch_size(_input))
 
-            # compute gradients and update parameters
+            # compute gradients and update parameters; the autocast context
+            # covers backward and the step too (per the AMP contract; gradients
+            # follow the dtypes recorded during the forward pass)
             self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+            with amp_context(self.amp, self.device):
+                loss.backward()
+                self.optimizer.step()
 
             if self.num_iterations % self.log_after_iters == 0:
                 # log stats, params and images
                 logger.info(f"Train Loss: {train_losses.avg}.")
-                self.writer.add_scalar(
-                    "Loss/train", train_losses.avg, self.num_iterations
-                )
-
-                if self.should_stop():
-                    return True
+                if self.writer is not None:
+                    self.writer.add_scalar(
+                        "Loss/train", train_losses.avg, self.num_iterations
+                    )
 
             self.num_iterations += 1
+
+            if self.should_stop():
+                return True
 
         return False
 
@@ -162,28 +237,55 @@ class UNetTrainer:
 
         with torch.no_grad():
             for _input, target in tqdm(self.loaders["val"]):
-                _input, target = _input.to(self.device), target.to(self.device)
+                _input = to_device(_input, self.device)
+                target = to_device(target, self.device)
 
                 output, loss = self._forward_pass(_input, target)
                 val_losses.update(loss.item(), self._batch_size(_input))
 
             return val_losses.avg
 
+    def _forward(self, _input: torch.Tensor) -> torch.Tensor:
+        """Run the model forward, through the compiled handle when present.
+
+        A compiled-forward failure that is not an OOM falls back to eager
+        permanently for this run and retries the batch eagerly. CUDA OOMs
+        propagate: they mean the batch does not fit and must not be retried.
+        """
+        if self._compiled_model is None:
+            return self.model(_input)
+        try:
+            return self._compiled_model(_input)
+        except RuntimeError as e:
+            if is_oom_error(e, self.device):
+                raise
+            logger.warning(
+                f"Compiled forward failed ({e}); falling back to eager training "
+                "for the rest of this run."
+            )
+            self._compiled_model = None
+            return self.model(_input)
+
     def _forward_pass(
         self, _input: torch.Tensor, target: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        if isinstance(self.model, UNet2D):
-            # remove the singleton z-dimension from the input
-            _input = torch.squeeze(_input, dim=-3)
-            # forward pass
-            output = self.model(_input)
-            # add the singleton z-dimension to the output
-            output = torch.unsqueeze(output, dim=-3)
-        else:
-            # forward pass
-            output = self.model(_input)
+        model = (
+            self.model.module if isinstance(self.model, nn.DataParallel) else self.model
+        )
+        with amp_context(self.amp, self.device):
+            if isinstance(model, UNet2D):
+                # remove the singleton z-dimension from the input
+                _input = torch.squeeze(_input, dim=-3)
+                # forward pass
+                output = self._forward(_input)
+                # add the singleton z-dimension to the output
+                output = torch.unsqueeze(output, dim=-3)
+            else:
+                # forward pass
+                output = self._forward(_input)
 
-        loss = self.loss_criterion(output, target)
+            # the loss computes in fp32 (see losses.py) even under autocast
+            loss = self.loss_criterion(output, target)
         return output, loss
 
     def _save_checkpoint(self, is_best):
@@ -200,6 +302,25 @@ class UNetTrainer:
             logger.info("Saving best checkpoint")
             best_file_path = self.checkpoint_dir / "best_checkpoint.pytorch"
             shutil.copyfile(last_file_path, best_file_path)
+
+    def cleanup(self) -> None:
+        """Release the resources held after training.
+
+        Closes the tensorboard writer, drops the optimizer state (Adam keeps
+        two moment buffers per parameter, doubling the training footprint),
+        moves the model back to CPU and drops the loader references. Call this
+        before any large allocation that follows training (e.g. the bioimageIO
+        model validation); together with dropping the caller's references and
+        ``torch.cuda.empty_cache()`` it frees the GPU memory of the training
+        run. Idempotent: repeated calls do nothing further.
+        """
+        if self.writer is not None:
+            self.writer.close()
+            self.writer = None
+        self._compiled_model = None
+        self.optimizer.state.clear()
+        self.model.to("cpu")
+        self.loaders = {}
 
     @staticmethod
     def _batch_size(_input):

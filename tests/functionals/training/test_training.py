@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from typing import Any, Literal
 from unittest.mock import MagicMock, patch
 
 import h5py
@@ -11,8 +12,11 @@ import torch
 import yaml
 
 from panseg import FILE_CONFIG_TRAIN_YAML
-from panseg.functionals.training.h5dataset import HDF5Dataset
-from panseg.functionals.training.model import UNet2D
+from panseg.core.zoo import model_zoo
+from panseg.functionals.training.augs import Augmenter
+from panseg.functionals.training.h5dataset import HDF5Dataset, resolve_dataset_layouts
+from panseg.functionals.training.losses import DiceLoss
+from panseg.functionals.training.model import UNet2D, UNet3D
 from panseg.functionals.training.train import (
     create_datasets,
     create_model_config,
@@ -20,6 +24,25 @@ from panseg.functionals.training.train import (
     unet_training,
     zero_mean_unit_variance,
 )
+from panseg.functionals.training.trainer import UNetTrainer, load_pretrained_weights
+
+
+@pytest.fixture(autouse=True)
+def _isolate_model_zoo(tmp_path_factory):
+    """Keep the zoo records of test trainings out of the user's custom zoo.
+
+    `unet_training` registers every trained model via `model_zoo.add_custom_model`,
+    which writes `model_zoo.path_zoo_custom` and appends to its DataFrame. With
+    the user's real zoo those records persist across runs and later duplicate
+    the zoo index (`test_dimensionality_filter_is_spatial_only`).
+    """
+    root = tmp_path_factory.mktemp("model_zoo")
+    with patch.multiple(
+        model_zoo,
+        path_zoo=root / "models_zoo.yaml",
+        path_zoo_custom=root / "custom_zoo.yaml",
+    ):
+        yield
 
 
 def _write_checkpoints(mock_trainer_class, checkpoint_dir, make_states=None):
@@ -43,6 +66,37 @@ def _write_checkpoints(mock_trainer_class, checkpoint_dir, make_states=None):
             torch.save(state, checkpoint_dir / name)
 
     mock_trainer_class.return_value.train.side_effect = _train
+
+
+def _dense_label(shape):
+    """Instance label with >= 50 % nonzero in every z-slice.
+
+    `FilterSliceBuilder` drops patches with < 10 % nonzero labels (plus 1 %
+    seeded random slack). With this fixture every candidate patch survives, so
+    patch counts equal the plain `SliceBuilder` counts exactly -- deterministic,
+    no filter bookkeeping needed in the assertions.
+    """
+    label = np.zeros(shape, dtype="uint8")
+    label[..., shape[-2] // 2 :, :] = 1
+    label[..., : shape[-2] // 2, : shape[-2] // 2] = 2
+    return label
+
+
+def _write_layout_h5(file_path, raw, label, axis_orders=None):
+    """Write an h5 file with raw/label datasets and optional `axis_order` attrs.
+
+    `axis_orders` maps dataset name ("raw"/"label") to a layout string, e.g.
+    {"raw": "CZYX", "label": "ZYX"}, written as the dataset attr `axis_order`
+    the way `panseg/io/h5.py` writes it on export.
+    """
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(file_path, "w") as f:
+        datasets = {
+            "raw": f.create_dataset("raw", data=raw),
+            "label": f.create_dataset("label", data=label),
+        }
+        for name, order in (axis_orders or {}).items():
+            datasets[name].attrs["axis_order"] = order
 
 
 class TestFindH5Files:
@@ -160,6 +214,40 @@ class TestCreateModelConfig:
             ]
             assert config["loaders"]["train"]["slice_builder"]["stride_shape"] == [
                 16,
+                32,
+                32,
+            ]
+
+    def test_create_model_config_2d_per_slice_stride(self):
+        """The train stride keeps the z-extent at 1 for per-slice 2D training."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            checkpoint_dir = Path(temp_dir) / "test_checkpoint"
+
+            create_model_config(
+                checkpoint_dir=checkpoint_dir,
+                in_channels=1,
+                out_channels=1,
+                patch_size=[1, 64, 64],
+                dimensionality="2D",
+                layer_order="bcr",
+                sparse=True,
+                f_maps=[2, 2],
+                max_num_iters=5,
+            )
+
+            config_path = checkpoint_dir / FILE_CONFIG_TRAIN_YAML
+            with open(config_path, "r") as f:
+                config = yaml.load(f, Loader=yaml.FullLoader)
+
+            assert config["model"]["name"] == "UNet2D"
+            assert config["loaders"]["train"]["slice_builder"]["patch_shape"] == [
+                1,
+                64,
+                64,
+            ]
+            # max(i // 2, 1): z stride is 1, never 0
+            assert config["loaders"]["train"]["slice_builder"]["stride_shape"] == [
+                1,
                 32,
                 32,
             ]
@@ -327,6 +415,27 @@ class TestCreateDatasets:
             with pytest.raises(AssertionError):
                 create_datasets(str(temp_dir), "invalid_phase", (8, 64, 64), "3D")
 
+    def test_create_datasets_channel_mismatch(self):
+        """The in_channels check names the offending file and both counts."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            train_dir = temp_path / "train"
+            train_dir.mkdir()
+            h5_file = train_dir / "data_0.h5"
+            with h5py.File(h5_file, "w") as f:
+                f.create_dataset("raw", data=np.random.rand(10, 88, 88))
+                f.create_dataset("label", data=np.random.rand(10, 88, 88))
+
+            with pytest.raises(ValueError) as excinfo:
+                create_datasets(
+                    str(temp_path), "train", (8, 64, 64), "3D", in_channels=2
+                )
+
+            message = str(excinfo.value)
+            assert "data_0.h5" in message
+            assert "has 1 channels" in message
+            assert "in_channels=2" in message
+
 
 class TestUnetTraining:
     """Tests for unet_training function."""
@@ -399,6 +508,8 @@ class TestUnetTraining:
         assert mock_create_datasets.call_count == 2
 
         mock_model_desc.assert_called_once()
+        # validation runs on the training device (not the bioimageIO default)
+        assert mock_test_model.call_args.kwargs["devices"] == ["cpu"]
         assert (tmp_path / model_name / "test_in.npy").exists()
         assert (tmp_path / model_name / "test_out.npy").exists()
 
@@ -554,6 +665,8 @@ class TestUnetTraining:
 
         # test_in is stored as produced by the loader, un-normalized
         assert np.array_equal(test_in, loader_batch.squeeze(dim=-3).numpy())
+        # test_out is a probability map (the activation is applied explicitly)
+        assert test_out.min() >= 0 and test_out.max() <= 1
 
         def _predict(state):
             model = UNet2D(
@@ -566,7 +679,7 @@ class TestUnetTraining:
             model.load_state_dict(state)
             model.eval()
             with torch.no_grad():
-                out = model(zero_mean_unit_variance(torch.from_numpy(test_in)))
+                out = model.predict(zero_mean_unit_variance(torch.from_numpy(test_in)))
             return out.numpy()
 
         best_out = _predict(torch.load(weights, map_location="cpu"))
@@ -578,6 +691,77 @@ class TestUnetTraining:
         assert np.allclose(test_out, best_out, atol=1e-6)
         # ... and not from the last training state
         assert not np.allclose(test_out, last_out, atol=1e-3)
+
+    @patch("panseg.functionals.training.train.test_model")
+    @patch("panseg.functionals.training.train.make_model_description")
+    @patch("panseg.functionals.training.train.UNetTrainer")
+    @patch("panseg.functionals.training.train.create_datasets")
+    @patch("panseg.functionals.training.train.create_model_config")
+    @patch("panseg.functionals.training.train.find_batch_size")
+    @patch("panseg.functionals.training.train.DataLoader")
+    @patch("panseg.functionals.training.train.ConcatDataset")
+    def test_test_tensors_hold_a_single_sample(
+        self,
+        mock_concat,
+        mock_data_loader,
+        mock_find_batch_size,
+        mock_create_config,
+        mock_create_datasets,
+        mock_trainer,
+        mock_model_desc,
+        mock_test_model,
+        tmp_path,
+    ):
+        """The packaged test tensors hold one sample, whatever the batch size.
+
+        The training batch is fitted to the device memory; the bioimageIO test
+        tensors must stay single-sample (one sample is all bioimageIO needs,
+        and it keeps the package small).
+        """
+        mock_dataset = MagicMock()
+        mock_dataset.__len__.return_value = 10
+        mock_create_datasets.return_value = [mock_dataset]
+        mock_create_config.side_effect = create_model_config
+
+        mock_trainer_instance = MagicMock()
+        mock_trainer.return_value = mock_trainer_instance
+        model_name = "test_model_batch"
+        _write_checkpoints(mock_trainer, tmp_path / model_name)
+
+        batch = torch.from_numpy(
+            np.random.rand(2, 1, 1, 64, 64).astype("float32")  # b, c, z, y, x
+        )
+        mock_data_loader.return_value = [(batch, None)]
+        mock_find_batch_size.return_value = 2
+
+        dataset_dir = tmp_path / "dataset"
+        (dataset_dir / "train").mkdir(parents=True)
+        (dataset_dir / "val").mkdir()
+
+        with (
+            patch("panseg.functionals.training.train.PATH_PANSEG_MODELS", tmp_path),
+            patch("panseg.core.zoo.PATH_PANSEG_MODELS", tmp_path),
+        ):
+            unet_training(
+                dataset_dir=str(dataset_dir),
+                model_name=model_name,
+                in_channels=1,
+                out_channels=1,
+                feature_maps=(2, 2),
+                patch_size=(1, 64, 64),
+                max_num_iters=100,
+                dimensionality="2D",
+                sparse=False,
+                device="cpu",
+            )
+
+        checkpoint_dir = tmp_path / model_name
+        test_in = np.load(checkpoint_dir / "test_in.npy")
+        test_out = np.load(checkpoint_dir / "test_out.npy")
+        assert test_in.shape == (1, 1, 64, 64)
+        assert test_out.shape == (1, 1, 64, 64)
+        # the sample is the first of the training batch, stored un-normalized
+        assert np.array_equal(test_in, batch[:1].squeeze(dim=-3).numpy())
 
     @patch("panseg.functionals.training.train.UNetTrainer")
     @patch("panseg.functionals.training.train.create_datasets")
@@ -616,7 +800,7 @@ class TestUnetTraining:
                         in_channels=1,
                         out_channels=2,
                         feature_maps=(16, 32),
-                        patch_size=(64, 64, 64),
+                        patch_size=(1, 64, 64),
                         max_num_iters=100,
                         dimensionality="2D",
                         sparse=False,
@@ -712,7 +896,7 @@ class TestUnetTraining:
                     in_channels=1,
                     out_channels=2,
                     feature_maps=(16, 32),
-                    patch_size=(64, 64, 64),
+                    patch_size=(1, 64, 64),
                     max_num_iters=100,
                     dimensionality="2D",
                     sparse=False,
@@ -722,11 +906,512 @@ class TestUnetTraining:
         # Verify that trainer was called
         mock_trainer_instance.train.assert_called_once()
 
+        # The batch size must be probed with a backward pass, otherwise the
+        # first training iteration can run out of memory
+        assert mock_find_batch_size.call_args.kwargs["for_training"] is True
+        # ...and at the true training patch shape: a halo slack would inflate
+        # the probed volume and waste batch-size headroom
+        assert mock_find_batch_size.call_args.kwargs["patch_halo"] == (0, 0, 0)
+
         # Verify that DataParallel was called
         mock_data_parallel.assert_called_once()
+
+        # validation is pinned to the training device (not the bioimageIO default)
+        assert mock_test_model.call_args.kwargs["devices"] == ["cuda"]
 
         # Verify that Adam optimizer was called
         mock_adam.assert_called_once()
 
         # Verify that ReduceLROnPlateau scheduler was called
         mock_reduce_lr.assert_called_once()
+
+    def test_unet_training_2d_rejects_patch_z_extent_above_1(self, tmp_path):
+        """2D models train per z-slice: a patch z-extent > 1 is rejected early."""
+        dataset_dir = tmp_path / "dataset"
+        (dataset_dir / "train").mkdir(parents=True)
+        (dataset_dir / "val").mkdir()
+
+        with pytest.raises(ValueError, match="patch z-extent must be 1"):
+            unet_training(
+                dataset_dir=str(dataset_dir),
+                model_name="test_model_2d",
+                in_channels=1,
+                out_channels=1,
+                feature_maps=(16, 16),
+                patch_size=(8, 64, 64),
+                max_num_iters=5,
+                dimensionality="2D",
+                sparse=False,
+                device="cpu",
+            )
+
+    def test_unet_training_channel_mismatch_raises(self, tmp_path):
+        """unet_training propagates the create_datasets channel check."""
+        dataset_dir = tmp_path / "dataset"
+        train_dir = dataset_dir / "train"
+        train_dir.mkdir(parents=True)
+        (dataset_dir / "val").mkdir()
+        with h5py.File(train_dir / "data_0.h5", "w") as f:
+            f.create_dataset("raw", data=np.random.rand(10, 88, 88))
+            f.create_dataset("label", data=np.random.rand(10, 88, 88))
+
+        with pytest.raises(ValueError) as excinfo:
+            unet_training(
+                dataset_dir=str(dataset_dir),
+                model_name="test_model_mismatch",
+                in_channels=2,
+                out_channels=1,
+                feature_maps=(8, 8),
+                patch_size=(8, 64, 64),
+                max_num_iters=5,
+                dimensionality="3D",
+                sparse=True,
+                device="cpu",
+            )
+
+        message = str(excinfo.value)
+        assert "data_0.h5" in message
+        assert "has 1 channels" in message
+
+
+class TestHDF5DatasetLayouts:
+    """Dataset-level tests for the on-disk layout resolution in HDF5Dataset.
+
+    2D training on volumetric data (ZYX/CZYX) is per z-slice: the real z axis
+    is kept and every z-slice is an independent 2D sample with patch z-extent
+    1. Legacy 2D data (YX/CYX) gets a fabricated singleton z instead. Raw
+    patches follow the czyx contract, label patches zyx.
+    """
+
+    @staticmethod
+    def _make_dataset(
+        file_path,
+        patch_shape=(1, 64, 64),
+        dimensionality: Literal["2D", "3D"] = "2D",
+    ):
+        return HDF5Dataset(
+            file_path=file_path,
+            augmenter=Augmenter(),
+            patch_shape=patch_shape,
+            dimensionality=dimensionality,
+        )
+
+    def test_per_slice_zyx_fallback(self, tmp_path):
+        """(3, 3) without attrs resolves as ZYX per-slice 2D training."""
+        rng = np.random.default_rng(0)
+        raw = rng.integers(0, 256, size=(8, 64, 64)).astype("uint8")
+        label = _dense_label((8, 64, 64))
+        file_path = tmp_path / "zyx.h5"
+        _write_layout_h5(file_path, raw, label)
+
+        dataset = self._make_dataset(file_path)
+
+        # loaded as czyx / zyx
+        assert dataset.raw.shape == (1, 8, 64, 64)
+        assert dataset.label.shape == (8, 64, 64)
+
+        # 8 z-slices x 1 y-step x 1 x-step; the dense label keeps every patch
+        assert len(dataset) == 8
+
+        # patches come out in the training contract: raw czyx, label zyx
+        assert dataset.raw[dataset.raw_slices[0]].shape == (1, 1, 64, 64)
+        assert dataset.label[dataset.label_slices[0]].shape == (1, 64, 64)
+
+        raw_patch, label_patch = dataset[0]
+        assert raw_patch.shape == (1, 1, 64, 64)
+        # the label transform stacks a boundary channel on the zyx patch
+        assert label_patch.shape == (1, 1, 64, 64)
+
+    def test_per_slice_czyx_two_channels(self, tmp_path):
+        """(4, 3) without attrs resolves as CZYX per-slice 2D training."""
+        rng = np.random.default_rng(0)
+        raw = rng.integers(0, 256, size=(2, 8, 64, 64)).astype("uint8")
+        label = _dense_label((8, 64, 64))
+        file_path = tmp_path / "czyx.h5"
+        _write_layout_h5(file_path, raw, label)
+
+        dataset = self._make_dataset(file_path)
+
+        assert dataset.raw.shape == (2, 8, 64, 64)
+        assert dataset.label.shape == (8, 64, 64)
+        assert len(dataset) == 8
+        assert dataset.raw[dataset.raw_slices[0]].shape == (2, 1, 64, 64)
+        assert dataset.label[dataset.label_slices[0]].shape == (1, 64, 64)
+
+        raw_patch, label_patch = dataset[0]
+        assert raw_patch.shape == (2, 1, 64, 64)
+        assert label_patch.shape == (1, 1, 64, 64)
+
+    def test_axis_order_attrs_match_fallback(self, tmp_path):
+        """`axis_order` attrs (as written by panseg/io/h5.py) change nothing."""
+        rng = np.random.default_rng(0)
+        label = _dense_label((8, 64, 64))
+
+        for raw, raw_order in (
+            (rng.integers(0, 256, size=(8, 64, 64)).astype("uint8"), "ZYX"),
+            (rng.integers(0, 256, size=(2, 8, 64, 64)).astype("uint8"), "CZYX"),
+        ):
+            plain_path = tmp_path / f"plain_{raw_order}.h5"
+            attr_path = tmp_path / f"attr_{raw_order}.h5"
+            _write_layout_h5(plain_path, raw, label)
+            _write_layout_h5(
+                attr_path,
+                raw,
+                label,
+                axis_orders={"raw": raw_order, "label": "ZYX"},
+            )
+
+            plain = self._make_dataset(plain_path)
+            attributed = self._make_dataset(attr_path)
+
+            assert np.array_equal(attributed.raw, plain.raw)
+            assert np.array_equal(attributed.label, plain.label)
+            assert attributed.raw_slices == plain.raw_slices
+            assert attributed.label_slices == plain.label_slices
+
+    def test_per_slice_keeps_real_z_axis_like_3d(self, tmp_path):
+        """Per-slice 2D loading is byte-identical to the 3D branch."""
+        rng = np.random.default_rng(0)
+        raw = rng.integers(0, 256, size=(8, 64, 64)).astype("uint8")
+        label = _dense_label((8, 64, 64))
+        file_path = tmp_path / "zyx.h5"
+        _write_layout_h5(file_path, raw, label)
+
+        dataset_2d = self._make_dataset(file_path)
+        dataset_3d = self._make_dataset(file_path, dimensionality="3D")
+
+        assert np.array_equal(dataset_2d.raw, dataset_3d.raw)
+        assert np.array_equal(dataset_2d.label, dataset_3d.label)
+        assert dataset_2d.raw_slices == dataset_3d.raw_slices
+        assert dataset_2d.label_slices == dataset_3d.label_slices
+
+    def test_legacy_fake_z_yx(self, tmp_path):
+        """(2, 2) without attrs is legacy 2D data with a fabricated z."""
+        rng = np.random.default_rng(0)
+        raw = rng.integers(0, 256, size=(64, 64)).astype("uint8")
+        label = _dense_label((64, 64))
+        file_path = tmp_path / "yx.h5"
+        _write_layout_h5(file_path, raw, label)
+
+        dataset = self._make_dataset(file_path)
+
+        assert dataset.raw.shape == (1, 1, 64, 64)  # c=1, fabricated z=1
+        assert dataset.label.shape == (1, 64, 64)
+        assert len(dataset) == 1
+        assert dataset.raw[dataset.raw_slices[0]].shape == (1, 1, 64, 64)
+        assert dataset.label[dataset.label_slices[0]].shape == (1, 64, 64)
+
+        raw_patch, label_patch = dataset[0]
+        assert raw_patch.shape == (1, 1, 64, 64)
+        assert label_patch.shape == (1, 1, 64, 64)
+
+    def test_legacy_fake_z_cyx(self, tmp_path):
+        """(3, 2) without attrs is channelled legacy 2D data."""
+        rng = np.random.default_rng(0)
+        raw = rng.integers(0, 256, size=(2, 64, 64)).astype("uint8")
+        label = _dense_label((64, 64))
+        file_path = tmp_path / "cyx.h5"
+        _write_layout_h5(file_path, raw, label)
+
+        dataset = self._make_dataset(file_path)
+
+        assert dataset.raw.shape == (2, 1, 64, 64)  # c=2, fabricated z=1
+        assert dataset.label.shape == (1, 64, 64)
+        assert len(dataset) == 1
+        assert dataset.raw[dataset.raw_slices[0]].shape == (2, 1, 64, 64)
+
+        raw_patch, label_patch = dataset[0]
+        assert raw_patch.shape == (2, 1, 64, 64)
+        assert label_patch.shape == (1, 1, 64, 64)
+
+    def test_per_slice_patch_counts_follow_stride(self, tmp_path):
+        """Patch counts follow the FilterSliceBuilder stride max(p // 2, 1)."""
+        rng = np.random.default_rng(0)
+        raw = rng.integers(0, 256, size=(4, 88, 88)).astype("uint8")
+        label = _dense_label((4, 88, 88))
+        file_path = tmp_path / "zyx_88.h5"
+        _write_layout_h5(file_path, raw, label)
+
+        dataset = self._make_dataset(file_path)
+
+        # patch (1, 64, 64) -> stride (1, 32, 32):
+        # 4 z-steps x 2 y-steps (0, 24) x 2 x-steps (0, 24); dense label keeps all
+        assert len(dataset) == 16
+
+
+class TestResolveDatasetLayouts:
+    """Tests for the pure layout-resolution helper in h5dataset."""
+
+    @pytest.mark.parametrize(
+        ("raw_ndim", "label_ndim", "expected"),
+        [
+            (2, 2, ("YX", "YX")),
+            (3, 2, ("CYX", "YX")),
+            (3, 3, ("ZYX", "ZYX")),
+            (4, 3, ("CZYX", "ZYX")),
+        ],
+    )
+    def test_fallback_pairing_2d(self, raw_ndim, label_ndim, expected):
+        assert resolve_dataset_layouts("2D", raw_ndim, label_ndim) == expected
+
+    @pytest.mark.parametrize(
+        ("raw_ndim", "label_ndim", "expected"),
+        [
+            (3, 3, ("ZYX", "ZYX")),
+            (4, 3, ("CZYX", "ZYX")),
+        ],
+    )
+    def test_fallback_pairing_3d(self, raw_ndim, label_ndim, expected):
+        assert resolve_dataset_layouts("3D", raw_ndim, label_ndim) == expected
+
+    @pytest.mark.parametrize("dimensionality", ["2D", "2d", "2"])
+    def test_dimensionality_spellings(self, dimensionality):
+        assert resolve_dataset_layouts(dimensionality, 3, 3) == ("ZYX", "ZYX")
+
+    @pytest.mark.parametrize(
+        ("dimensionality", "raw_ndim", "label_ndim"),
+        [
+            ("2D", 2, 3),
+            ("2D", 4, 2),
+            ("2D", 5, 3),
+            ("3D", 2, 2),
+            ("3D", 3, 2),
+            ("3D", 3, 4),
+            ("4D", 3, 3),
+        ],
+    )
+    def test_invalid_combinations_raise(self, dimensionality, raw_ndim, label_ndim):
+        with pytest.raises(ValueError):
+            resolve_dataset_layouts(dimensionality, raw_ndim, label_ndim)
+
+    def test_invalid_combination_names_accepted_combos(self):
+        with pytest.raises(ValueError, match=r"\(3, 3\), \(4, 3\)"):
+            resolve_dataset_layouts("3D", 3, 2)
+
+    def test_axis_order_attr_wins(self):
+        # (3, 2) would fall back to CYX/YX legacy 2D; the attrs declare a
+        # z-stack with a single 2D label instead
+        assert resolve_dataset_layouts(
+            "2D", 3, 2, raw_axis_order="ZYX", label_axis_order="YX"
+        ) == ("ZYX", "YX")
+
+    @pytest.mark.parametrize(
+        ("raw_ndim", "raw_axis_order", "label_ndim", "label_axis_order", "expected"),
+        [
+            (2, "YX", 2, None, ("YX", "YX")),
+            (3, "CYX", 2, None, ("CYX", "YX")),
+            (3, None, 3, "ZYX", ("ZYX", "ZYX")),
+            (4, "CZYX", 3, "ZYX", ("CZYX", "ZYX")),
+        ],
+    )
+    def test_partial_attrs_use_pairing_fallback(
+        self, raw_ndim, raw_axis_order, label_ndim, label_axis_order, expected
+    ):
+        assert (
+            resolve_dataset_layouts(
+                "2D", raw_ndim, label_ndim, raw_axis_order, label_axis_order
+            )
+            == expected
+        )
+
+    def test_time_axis_rejected(self):
+        with pytest.raises(ValueError, match="Time axis not supported"):
+            resolve_dataset_layouts("2D", 4, 3, raw_axis_order="TZYX")
+
+    def test_axis_order_ndim_mismatch(self):
+        with pytest.raises(ValueError, match="inconsistent"):
+            resolve_dataset_layouts("2D", 4, 3, raw_axis_order="ZYX")
+
+    def test_unsupported_axis_order(self):
+        with pytest.raises(ValueError, match="Unsupported axis_order"):
+            resolve_dataset_layouts("2D", 3, 3, raw_axis_order="XYZ")
+
+    def test_label_channel_axis_rejected(self):
+        with pytest.raises(ValueError, match="channel-less"):
+            resolve_dataset_layouts(
+                "2D", 3, 3, raw_axis_order="ZYX", label_axis_order="CYX"
+            )
+
+    def test_attr_conflicts_with_pairing(self):
+        # (3, 3) pairs as ZYX/ZYX, but the raw dataset declares CYX
+        with pytest.raises(ValueError, match="Cannot resolve"):
+            resolve_dataset_layouts("2D", 3, 3, raw_axis_order="CYX")
+
+    @pytest.mark.parametrize(
+        ("raw_ndim", "raw_axis_order", "label_ndim", "label_axis_order"),
+        [
+            (3, "CYX", 2, "YX"),
+            (2, "YX", 2, "YX"),
+            (3, "CYX", 3, "ZYX"),
+        ],
+    )
+    def test_3d_rejects_2d_layouts_with_attrs(
+        self, raw_ndim, raw_axis_order, label_ndim, label_axis_order
+    ):
+        # attrs win over the pairing fallback, but 2D-layout data must not
+        # silently get a fabricated z axis for 3D training
+        with pytest.raises(ValueError, match="3D training requires volumetric"):
+            resolve_dataset_layouts(
+                "3D", raw_ndim, label_ndim, raw_axis_order, label_axis_order
+            )
+
+    def test_non_string_axis_order_rejected(self):
+        bad_attr: Any = 5  # e.g. a corrupted h5 attribute
+        with pytest.raises(ValueError, match="must be a string"):
+            resolve_dataset_layouts("2D", 3, 3, raw_axis_order=bad_attr)
+
+
+class TestLoadPretrainedWeights:
+    """Tests for the fine-tuning weight loader in trainer."""
+
+    @staticmethod
+    def _make_model(in_channels=1):
+        return UNet2D(
+            in_channels=in_channels,
+            out_channels=1,
+            f_maps=(8, 16),
+            final_sigmoid=True,
+            layer_order="bcr",
+        )
+
+    def test_load_plain_state_dict(self, tmp_path):
+        source = self._make_model()
+        path = tmp_path / "weights.pytorch"
+        torch.save(source.state_dict(), path)
+
+        target = self._make_model()
+        load_pretrained_weights(target, path)
+
+        for expected, actual in zip(source.parameters(), target.parameters()):
+            assert torch.equal(expected, actual)
+
+    def test_load_wrapped_state_dict(self, tmp_path):
+        source = self._make_model()
+        path = tmp_path / "weights.pytorch"
+        torch.save({"model_state_dict": source.state_dict()}, path)
+
+        target = self._make_model()
+        load_pretrained_weights(target, path)
+
+        for expected, actual in zip(source.parameters(), target.parameters()):
+            assert torch.equal(expected, actual)
+
+    def test_load_into_data_parallel_wrapped_model(self, tmp_path):
+        class _DataParallelLike(torch.nn.DataParallel):
+            """nn.DataParallel stand-in that skips the GPU-dependent __init__."""
+
+            def __init__(self, module):
+                torch.nn.Module.__init__(self)
+                self.module = module
+
+        source = self._make_model()
+        path = tmp_path / "weights.pytorch"
+        torch.save(source.state_dict(), path)
+
+        target = _DataParallelLike(self._make_model())
+        load_pretrained_weights(target, path)
+
+        for expected, actual in zip(source.parameters(), target.module.parameters()):
+            assert torch.equal(expected, actual)
+
+    def test_channel_mismatch_raises_clear_error(self, tmp_path):
+        source = self._make_model(in_channels=2)
+        path = tmp_path / "weights.pytorch"
+        torch.save(source.state_dict(), path)
+
+        with pytest.raises(ValueError, match="architecture or a different"):
+            load_pretrained_weights(self._make_model(in_channels=1), path)
+
+
+class TestUNetTrainerForwardPass:
+    """The 2D singleton-z handling must also work for DataParallel-wrapped models."""
+
+    class _DataParallelLike(torch.nn.DataParallel):
+        """nn.DataParallel stand-in that skips the GPU-dependent __init__."""
+
+        def __init__(self, module):
+            torch.nn.Module.__init__(self)
+            self.module = module
+
+        def forward(self, *inputs):
+            return self.module(*inputs)
+
+    def _trainer(self, model):
+        trainer = UNetTrainer.__new__(UNetTrainer)
+        trainer.model = model
+        trainer.loss_criterion = DiceLoss()
+        trainer.amp = "auto"
+        trainer.device = "cpu"
+        trainer._compiled_model = None
+        return trainer
+
+    def test_forward_pass_unwraps_data_parallel_2d_model(self):
+        # Per-slice 2D training feeds (B, C, 1, Y, X); the model needs the z
+        # axis squeezed even when it is wrapped in nn.DataParallel
+        model = UNet2D(in_channels=1, out_channels=1, f_maps=[4, 4])
+        _input = torch.rand(2, 1, 1, 32, 32)
+        target = torch.rand(2, 1, 1, 32, 32)
+
+        output, loss = self._trainer(self._DataParallelLike(model))._forward_pass(
+            _input, target
+        )
+
+        assert output.shape == (2, 1, 1, 32, 32)
+        assert torch.isfinite(loss)
+
+    def test_forward_pass_keeps_z_axis_for_3d_model(self):
+        model = UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4])
+        _input = torch.rand(1, 1, 16, 16, 16)
+        target = torch.rand(1, 1, 16, 16, 16)
+
+        output, loss = self._trainer(model)._forward_pass(_input, target)
+
+        assert output.shape == (1, 1, 16, 16, 16)
+        assert torch.isfinite(loss)
+
+
+class TestUNetTrainerCleanup:
+    """`cleanup()` frees the resources held after training and is idempotent."""
+
+    @staticmethod
+    def _trained_trainer(tmp_path):
+        """A trainer that has seen one optimization step (Adam state allocated)."""
+        model = UNet2D(in_channels=1, out_channels=1, f_maps=[4, 4])
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+        model(torch.rand(1, 1, 32, 32)).sum().backward()
+        optimizer.step()
+
+        return UNetTrainer(
+            model=model,
+            optimizer=optimizer,
+            lr_scheduler=torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, factor=0.2, patience=10
+            ),
+            loss_criterion=DiceLoss(),
+            loaders={"train": [None, None], "val": []},
+            checkpoint_dir=tmp_path,
+            max_num_iterations=10,
+            device="cpu",
+        )
+
+    def test_cleanup_frees_training_resources(self, tmp_path):
+        trainer = self._trained_trainer(tmp_path)
+        optimizer = trainer.optimizer
+        # precondition: the Adam step allocated its moment buffers
+        assert len(optimizer.state) > 0
+
+        trainer.cleanup()
+
+        assert len(optimizer.state) == 0
+        assert trainer.writer is None  # closed and dropped
+        assert trainer.loaders == {}
+        assert all(p.device.type == "cpu" for p in trainer.model.parameters())
+
+    def test_cleanup_is_idempotent(self, tmp_path, mocker):
+        writer_cls = mocker.patch("panseg.functionals.training.trainer.SummaryWriter")
+        trainer = self._trained_trainer(tmp_path)
+
+        trainer.cleanup()
+        trainer.cleanup()  # must not raise or double-close
+
+        writer_cls.return_value.close.assert_called_once()
