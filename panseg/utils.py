@@ -4,16 +4,15 @@ import os
 import re
 import tempfile
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from shutil import rmtree
-from typing import Optional
 
 import requests
 import yaml
 from packaging.version import Version
 
 from panseg import PATH_PANSEG_MODELS
+from panseg.__version__ import __version__
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +20,14 @@ REQUEST_TIMEOUT = (10, 60)
 MAX_DOWNLOAD_ATTEMPTS = 5
 INITIAL_RETRY_DELAY = 10
 MAX_RETRY_DELAY = 30
+# Zenodo asks clients to identify themselves rather than use a browser or a
+# generic User-Agent (e.g. "python-requests"), which may be blocked.
+# https://developers.zenodo.org/#rate-limiting
+USER_AGENT = f"panseg/{__version__} (+https://github.com/kreshuklab/panseg)"
+# Transient failures worth another attempt. Rate limiting (429) and server
+# errors are documented as retryable; a 403 from Zenodo is a traffic or
+# authorization block, so retrying it quickly would only add noise.
+RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 
 
 def load_config(config_path: Path) -> dict:
@@ -37,24 +44,46 @@ def save_config(config: dict, config_path: Path) -> None:
         yaml.dump(config, file)
 
 
+def _retry_delay(error: requests.RequestException, delay: int) -> int:
+    """Delay before the next attempt, honouring a server-side Retry-After."""
+    response = getattr(error, "response", None)
+    retry_after = response.headers.get("Retry-After") if response is not None else None
+    if retry_after is None:
+        return delay
+    try:
+        return max(delay, int(retry_after))
+    except ValueError:
+        return delay
+
+
+def _is_retryable(error: requests.RequestException) -> bool:
+    """Whether another attempt can plausibly succeed.
+
+    Connection errors and timeouts carry no response; HTTP failures carry the
+    status code that `raise_for_status` rejected.
+    """
+    response = getattr(error, "response", None)
+    return response is None or response.status_code in RETRYABLE_STATUS_CODES
+
+
 def download_file(url: str, filename: Path) -> None:
     """Download a single file from a URL to a specified filename.
 
-    Each request uses an explicit (connect, read) timeout, and failed requests
-    are retried with exponential backoff (delays ramping up to
-    MAX_RETRY_DELAY). The file is streamed to a temporary file in the target
-    directory and atomically renamed on success, so an interrupted download
-    can never leave a partial file at the final path. If all attempts fail, a
-    requests.RequestException naming the URL and the underlying error is raised.
+    Each request identifies PanSeg with a descriptive User-Agent and uses an
+    explicit (connect, read) timeout. Transient failures (connection errors,
+    timeouts, 429 and 5xx responses) are retried with exponential backoff,
+    honouring a `Retry-After` header when present. Non-retryable responses such
+    as a 403 raise immediately with the URL and underlying error.
+
+    The file is streamed to a temporary file in the target directory and
+    atomically renamed on success, so an interrupted download can never leave a
+    partial file at the final path.
     """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:147.0) Gecko/20100101 Firefox/147.0",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
+    headers = {"User-Agent": USER_AGENT}
     filename = Path(filename)
     delay = INITIAL_RETRY_DELAY
-    last_error: Optional[requests.RequestException] = None
+    last_error: requests.RequestException | None = None
+    attempt = 0
     for attempt in range(1, MAX_DOWNLOAD_ATTEMPTS + 1):
         try:
             response = requests.get(
@@ -80,34 +109,36 @@ def download_file(url: str, filename: Path) -> None:
                 f"Failed to download {url} "
                 f"(attempt {attempt}/{MAX_DOWNLOAD_ATTEMPTS}): {e}"
             )
+            if not _is_retryable(e):
+                break
             if attempt < MAX_DOWNLOAD_ATTEMPTS:
-                time.sleep(delay)
+                time.sleep(_retry_delay(e, delay))
                 delay = min(MAX_RETRY_DELAY, 2 * delay)
 
     raise requests.RequestException(
-        f"Failed to download {url} after {MAX_DOWNLOAD_ATTEMPTS} attempts: {last_error}"
+        f"Failed to download {url} after {attempt} attempt(s): {last_error}"
     ) from last_error
 
 
 def download_files(urls: dict, out_dir: Path) -> None:
-    """Download files from URLs to a specified directory."""
+    """Download files from URLs to a specified directory.
+
+    Downloads run sequentially: a burst of parallel requests from one CI or
+    workstation IP is exactly the traffic shape Zenodo's abuse protection
+    reacts to.
+    """
     logger.debug(f"Queued download of files: {urls}")
     out_dir = Path(out_dir)
     if not out_dir.exists():
         out_dir.mkdir(parents=True)  # Create the directory and any parent directories
 
-    with ThreadPoolExecutor() as executor:
-        futures = []
-        for filename, url in urls.items():
-            file_path = out_dir / filename
-            if not file_path.exists():  # Skip download if file already exists
-                logger.debug(f"Downloading file {filename} from {url}...")
-                futures.append(executor.submit(download_file, url, file_path))
-            else:
-                logger.debug(f"File {filename} already exists. Skipping download.")
-
-        for future in futures:
-            future.result()  # Wait for all downloads to complete
+    for filename, url in urls.items():
+        file_path = out_dir / filename
+        if not file_path.exists():  # Skip download if file already exists
+            logger.debug(f"Downloading file {filename} from {url}...")
+            download_file(url, file_path)
+        else:
+            logger.debug(f"File {filename} already exists. Skipping download.")
 
 
 def clean_models() -> None:
