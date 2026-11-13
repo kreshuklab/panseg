@@ -14,6 +14,7 @@ from panseg.core.image import TIME_UNIT_CHOICES, PanSegImage, SemanticType
 from panseg.io import H5_EXTENSIONS, ZARR_EXTENSIONS
 from panseg.io.h5 import list_h5_keys
 from panseg.io.io import guess_stack_layout, natural_sort_key
+from panseg.io.ome_zarr import is_ome_zarr
 from panseg.io.pil import PIL_EXTENSIONS
 from panseg.io.tiff import TIFF_EXTENSIONS
 from panseg.io.zarr import list_zarr_keys
@@ -268,12 +269,31 @@ class Input_Tab:
         dataset_key = dataset_key.replace("/", "_")
 
         if self.widget_open_file.key_combo.visible:
-            if "label" in self.dataset_key.value:
+            # the selected key can be None (store without selectable keys)
+            selected_key = self.dataset_key.value or ""
+            if "label" in selected_key or "seg" in selected_key:
                 self.widget_open_file.layer_type.value = InputType.SEGMENTATION.value
-            elif "raw" in self.dataset_key.value:
+            elif "raw" in selected_key or "image" in selected_key:
+                # `image` is default group in ome-zarr
                 self.widget_open_file.layer_type.value = InputType.RAW.value
 
         return path.stem + dataset_key
+
+    def _clear_dataset_key(self) -> None:
+        """Reset the key combo to "no key", leaving no stale key behind.
+
+        magicgui resets a CategoricalWidget's value to None as soon as its
+        choices no longer hold the current value (an empty choice list
+        included), but then refuses an explicit ``value = None`` with
+        "None is not a valid choice". Keeping None as the sole choice
+        makes the cleared value explicit and settable; the combo is hidden
+        whenever the key is cleared. The import receives key=None, which
+        auto-resolves the image (e.g. the root image group of a root-image
+        OME-Zarr store).
+        """
+        self.current_dataset_keys = [None]
+        self.dataset_key.choices = [None]
+        self.dataset_key.value = None
 
     def look_up_dataset_keys(self, path: Path):
         path = _return_value_if_widget(path)
@@ -296,13 +316,26 @@ class Input_Tab:
             self.widget_open_file.key_combo.hide()
             return
 
+        # handle empty zarr/h5 files and OME-Zarr stores whose root is the
+        # image group (addressed with key=None, no selectable key)
+        if dataset_keys == [None] or not dataset_keys:
+            self._clear_dataset_key()
+            self.widget_open_file.key_combo.hide()
+            if ext in ZARR_EXTENSIONS and is_ome_zarr(path):
+                log(
+                    "The OME-Zarr store holds a single image at its root: "
+                    "it is imported without a key.",
+                    thread="Input",
+                )
+            # always regenerate the layer name: never leave the name of a
+            # previously loaded file behind
+            self.widget_open_file.new_layer_name.value = self.generate_layer_name(
+                path, ""
+            )
+            return
+
         self.current_dataset_keys = dataset_keys.copy()
         self.dataset_key.choices = dataset_keys
-
-        # handle empth zarr/h5 files
-        if dataset_keys == [None] or not dataset_keys:
-            self.widget_open_file.key_combo.hide()
-            return
 
         # change selected key only if old key is unavailable
         if self.dataset_key.value not in dataset_keys:

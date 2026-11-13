@@ -17,7 +17,7 @@ from panseg.tasks.io_tasks import (
     merge_channels_task,
 )
 from panseg.tasks.workflow_handler import Task_message
-from tests.conftest import write_still_tiff
+from tests.conftest import requires_clearscale, write_still_tiff
 
 
 @pytest.mark.parametrize(
@@ -25,10 +25,12 @@ from tests.conftest import write_still_tiff
     [
         ((2, 64, 64), ImageLayout.CYX, "tiff"),
         ((2, 64, 64), ImageLayout.CYX, "h5"),
-        ((2, 64, 64), ImageLayout.CYX, "zarr"),
+        pytest.param((2, 64, 64), ImageLayout.CYX, "zarr", marks=requires_clearscale),
         ((2, 64, 32, 32), ImageLayout.CZYX, "h5"),
         ((2, 64, 32, 32), ImageLayout.CZYX, "tiff"),
-        ((2, 64, 32, 32), ImageLayout.CZYX, "zarr"),
+        pytest.param(
+            (2, 64, 32, 32), ImageLayout.CZYX, "zarr", marks=requires_clearscale
+        ),
         # ((64, 64), ImageLayout.YX, "tiff"),
         # ((64, 64), ImageLayout.YX, "h5"),
         # ((64, 64), ImageLayout.YX, "zarr"),
@@ -67,7 +69,7 @@ def test_image_io_round_trip_multichannel(tmp_path, shape, layout, export_format
         file_path = tmp_path / "test.h5"
         key = "raw"
     else:
-        file_path = tmp_path / "test.zarr"
+        file_path = tmp_path / "test.ome.zarr"
         key = "raw"
 
     imported_image = import_image_task(
@@ -96,10 +98,10 @@ def test_image_io_round_trip_multichannel(tmp_path, shape, layout, export_format
     [
         ((32, 64, 64), ImageLayout.ZYX, "tiff"),
         ((32, 64, 64), ImageLayout.ZYX, "h5"),
-        ((32, 64, 64), ImageLayout.ZYX, "zarr"),
+        pytest.param((32, 64, 64), ImageLayout.ZYX, "zarr", marks=requires_clearscale),
         ((64, 64), ImageLayout.YX, "tiff"),
         ((64, 64), ImageLayout.YX, "h5"),
-        ((64, 64), ImageLayout.YX, "zarr"),
+        pytest.param((64, 64), ImageLayout.YX, "zarr", marks=requires_clearscale),
     ],
 )
 def test_image_io_round_trip(tmp_path, shape, layout, export_format):
@@ -131,7 +133,7 @@ def test_image_io_round_trip(tmp_path, shape, layout, export_format):
         file_path = tmp_path / "test.h5"
         key = "raw"
     else:
-        file_path = tmp_path / "test.zarr"
+        file_path = tmp_path / "test.ome.zarr"
         key = "raw"
 
     imported_image = import_image_task(
@@ -161,10 +163,10 @@ def test_image_io_round_trip(tmp_path, shape, layout, export_format):
     [
         ((32, 64, 64), ImageLayout.ZYX, "tiff"),
         ((32, 64, 64), ImageLayout.ZYX, "h5"),
-        ((32, 64, 64), ImageLayout.ZYX, "zarr"),
+        pytest.param((32, 64, 64), ImageLayout.ZYX, "zarr", marks=requires_clearscale),
         ((64, 64), ImageLayout.YX, "tiff"),
         ((64, 64), ImageLayout.YX, "h5"),
-        ((64, 64), ImageLayout.YX, "zarr"),
+        pytest.param((64, 64), ImageLayout.YX, "zarr", marks=requires_clearscale),
     ],
 )
 def test_label_io_round_trip(tmp_path, shape, layout, export_format):
@@ -202,8 +204,9 @@ def test_label_io_round_trip(tmp_path, shape, layout, export_format):
         file_path = tmp_path / "test.h5"
         key = "raw"
     else:
-        file_path = tmp_path / "test.zarr"
-        key = "raw"
+        # a segmentation exports as a label image below its parent group
+        file_path = tmp_path / "test.ome.zarr"
+        key = "raw/labels/segmentation"
 
     imported_image = import_image_task(
         input_path=file_path,

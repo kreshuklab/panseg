@@ -14,7 +14,10 @@ Import supports OME-TIFF, h5, and zarr.
 For OME-TIFF, the input tab prefills the stack layout from
 the file's OME-XML, and it reads the time spacing from the timing metadata
 (`TimeIncrement` or `Plane.DeltaT`) if the file carries it.
-OME-ZARR support is planned (#622)
+OME-Zarr (OME-NGFF) zarr stores are supported as well: the stack
+layout, the voxel size, and the time spacing are read from the NGFF
+metadata (OME-NGFF v0.4 and v0.5), and a multiscale pyramid is read at its
+base level only.
 
 ## From multiple files
 
@@ -41,8 +44,12 @@ writes it like any other time spacing.
 
 Export writes the time axis back out. Tiff export of a time series is always
 OME-TIFF, named with the `.ome.tiff` extension per the OME-TIFF naming
-convention, with `TimeIncrement` when the spacing is known. H5 and zarr export
-carry the layout and the spacing with it.
+convention, with `TimeIncrement` when the spacing is known. H5 export carries
+the layout and the spacing as PanSeg attributes; zarr export is written as an
+OME-Zarr store carrying them in the NGFF metadata. In the
+store, the key names the image group (e.g. `ovule`); a segmentation is written
+as a label image next to its image (`ovule/labels/segmentation`), so exporting
+the image and the segmentation in either order yields the same store.
 
 ## Limitations
 

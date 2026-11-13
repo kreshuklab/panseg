@@ -16,6 +16,7 @@ from panseg.io.zarr import (
     read_zarr_voxel_size,
     rename_zarr_key,
 )
+from tests.conftest import requires_clearscale
 
 SHAPES = (2, 3, 4)
 
@@ -26,11 +27,12 @@ def _fill(group, key, value, dtype="float32"):
     return array
 
 
+@requires_clearscale
 def test_create_zarr_roundtrip_small(tmp_path):
     out = tmp_path / "out.zarr"
     data = np.random.random(SHAPES).astype("float32")
     voxel_size = VoxelSize(voxels_size=(0.235, 0.15, 0.2))
-    create_zarr(out, data, "raw", voxel_size, mode="w")
+    create_zarr(out, data, "raw", voxel_size, mode="w", axis_order="ZYX")
     assert out.exists()
     assert np.array_equal(load_zarr(out, key="raw"), data)
     assert read_zarr_shape(out, key="raw") == SHAPES
@@ -38,30 +40,35 @@ def test_create_zarr_roundtrip_small(tmp_path):
     assert list_zarr_keys(out) == ["raw"]
 
 
+@requires_clearscale
 def test_create_zarr_mode_a_appends(tmp_path):
     out = tmp_path / "out.zarr"
     data = np.random.random(SHAPES).astype("float32")
     voxel_size = VoxelSize()
-    create_zarr(out, data, "raw", voxel_size, mode="w")
-    create_zarr(out, data, "prediction", voxel_size, mode="a")
+    create_zarr(out, data, "raw", voxel_size, mode="w", axis_order="ZYX")
+    create_zarr(out, data, "prediction", voxel_size, mode="a", axis_order="ZYX")
     assert sorted(list_zarr_keys(out)) == ["prediction", "raw"]
     assert np.array_equal(load_zarr(out, key="prediction"), data)
 
 
+@requires_clearscale
 def test_create_zarr_mode_w_wipes(tmp_path):
     out = tmp_path / "out.zarr"
     data = np.random.random(SHAPES).astype("float32")
     voxel_size = VoxelSize()
-    create_zarr(out, data, "raw", voxel_size, mode="w")
-    create_zarr(out, data, "prediction", voxel_size, mode="a")
-    create_zarr(out, data, "raw", voxel_size, mode="w")
+    create_zarr(out, data, "raw", voxel_size, mode="w", axis_order="ZYX")
+    create_zarr(out, data, "prediction", voxel_size, mode="a", axis_order="ZYX")
+    create_zarr(out, data, "raw", voxel_size, mode="w", axis_order="ZYX")
     assert list_zarr_keys(out) == ["raw"]
 
 
-def test_create_zarr_rejects_empty_key(tmp_path):
+def test_create_zarr_requires_key(tmp_path):
+    # PanSeg writes never put the image at the store root
     out = tmp_path / "out.zarr"
-    with pytest.raises(ValueError, match="Key cannot be"):
-        create_zarr(out, np.zeros(SHAPES, dtype="float32"), "", VoxelSize())
+    data = np.zeros(SHAPES, dtype="float32")
+    for key in (None, ""):
+        with pytest.raises(ValueError, match="Key is required for zarr format"):
+            create_zarr(out, data, key, VoxelSize(), mode="w", axis_order="ZYX")
 
 
 def test_load_zarr_missing_file(tmp_path):
@@ -76,9 +83,17 @@ def test_load_zarr_not_a_zarr_file(tmp_path):
         load_zarr(path, key="raw")
 
 
+@requires_clearscale
 def test_load_zarr_missing_key(tmp_path):
     out = tmp_path / "out.zarr"
-    create_zarr(out, np.zeros(SHAPES, dtype="float32"), "raw", VoxelSize(), mode="w")
+    create_zarr(
+        out,
+        np.zeros(SHAPES, dtype="float32"),
+        "raw",
+        VoxelSize(),
+        mode="w",
+        axis_order="ZYX",
+    )
     with pytest.raises(KeyError):
         load_zarr(out, key="nope")
 
@@ -91,10 +106,11 @@ def test_load_zarr_key_is_group(tmp_path):
         load_zarr(tmp_path / "out.zarr", key="grp")
 
 
+@requires_clearscale
 def test_load_zarr_slicing(tmp_path):
     out = tmp_path / "out.zarr"
     data = np.arange(np.prod(SHAPES), dtype="float32").reshape(SHAPES)
-    create_zarr(out, data, "raw", VoxelSize(), mode="w")
+    create_zarr(out, data, "raw", VoxelSize(), mode="w", axis_order="ZYX")
     sliced = load_zarr(out, key="raw", slices=slice(0, 1))
     assert sliced.shape == (1, 3, 4)
     assert np.array_equal(sliced, data[:1])
@@ -137,10 +153,7 @@ def test_read_zarr_axis_order_present(tmp_path):
     assert read_zarr_axis_order(tmp_path / "out.zarr") == "TZYX"
 
 
-# --- Time-aware export: PanSeg zarr exports carry the axis order
-# on every export and the time spacing attrs when known. ---
-
-
+@requires_clearscale
 def test_create_zarr_writes_axis_order_on_every_export(tmp_path):
     out = tmp_path / "out.zarr"
     create_zarr(
@@ -153,6 +166,7 @@ def test_create_zarr_writes_axis_order_on_every_export(tmp_path):
     assert read_zarr_axis_order(out, key="raw") == "ZYX"
 
 
+@requires_clearscale
 def test_create_zarr_writes_time_spacing_when_known(tmp_path):
     out = tmp_path / "out.zarr"
     create_zarr(
@@ -163,12 +177,16 @@ def test_create_zarr_writes_time_spacing_when_known(tmp_path):
         axis_order="TZYX",
         t_spacing=10.0,
     )
-    group = zarr.open_group(store=str(out), mode="r")
-    assert group["raw"].attrs["t_spacing"] == 10.0
-    assert group["raw"].attrs["t_spacing_unit"] == "s"
+    image_group = zarr.open_group(store=str(out), mode="r")["raw"]
+    multiscale = image_group.attrs["ome"]["multiscales"][0]
+    assert [axis["name"] for axis in multiscale["axes"]] == ["t", "z", "y", "x"]
+    assert multiscale["axes"][0]["unit"] == "second"
+    scale = multiscale["datasets"][0]["coordinateTransformations"][0]["scale"]
+    assert scale == [10.0, 1.0, 1.0, 1.0]
     assert read_zarr_time_spacing(out, key="raw") == (10.0, "s")
 
 
+@requires_clearscale
 def test_create_zarr_unknown_t_spacing_writes_no_time_attrs(tmp_path):
     out = tmp_path / "out.zarr"
     create_zarr(
@@ -178,14 +196,16 @@ def test_create_zarr_unknown_t_spacing_writes_no_time_attrs(tmp_path):
         VoxelSize(),
         axis_order="TZYX",
     )
-    group = zarr.open_group(store=str(out), mode="r")
-    assert "t_spacing" not in group["raw"].attrs
-    assert "t_spacing_unit" not in group["raw"].attrs
+    image_group = zarr.open_group(store=str(out), mode="r")["raw"]
+    axes = image_group.attrs["ome"]["multiscales"][0]["axes"]
+    assert axes[0]["name"] == "t"
+    assert "unit" not in axes[0]
     assert read_zarr_time_spacing(out, key="raw") == (None, "s")
 
 
+@requires_clearscale
 def test_create_zarr_time_attrs_gated_on_time_axis(tmp_path):
-    # a spacing without a T axis in the axis order writes no time attrs
+    # a spacing without a T axis in the axis order writes no time metadata
     out = tmp_path / "out.zarr"
     create_zarr(
         out,
@@ -195,15 +215,19 @@ def test_create_zarr_time_attrs_gated_on_time_axis(tmp_path):
         axis_order="ZYX",
         t_spacing=10.0,
     )
-    group = zarr.open_group(store=str(out), mode="r")
-    assert "t_spacing" not in group["raw"].attrs
-    assert "t_spacing_unit" not in group["raw"].attrs
+    image_group = zarr.open_group(store=str(out), mode="r")["raw"]
+    axes = image_group.attrs["ome"]["multiscales"][0]["axes"]
+    assert [axis["name"] for axis in axes] == ["z", "y", "x"]
 
 
 def test_read_zarr_time_spacing_absent_for_older_files(tmp_path):
-    out = tmp_path / "out.zarr"
-    create_zarr(out, np.empty((4, 5, 16, 16), dtype="float32"), "raw", VoxelSize())
-    assert read_zarr_time_spacing(out, key="raw") == (None, "s")
+    # pre-NGFF PanSeg zarr stores carry the time spacing as dataset attrs;
+    # without them the time spacing is unknown
+    path = tmp_path / "out.zarr"
+    group = zarr.open_group(store=str(path), mode="w")
+    array = group.create_array(name="raw", shape=(4, 5, 16, 16), dtype="float32")
+    array[:] = 0
+    assert read_zarr_time_spacing(path, key="raw") == (None, "s")
 
 
 def test_auto_key_single_dataset(tmp_path):

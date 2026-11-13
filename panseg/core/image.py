@@ -1444,6 +1444,31 @@ def _image_postprocessing(
     return data, new_voxel_size
 
 
+def resolve_export_name_pattern(image: PanSegImage, name_pattern: str) -> str:
+    """Apply the export name-pattern tokens ({image_name}, {file_name})."""
+    name_pattern = name_pattern.replace("{image_name}", image.name)
+    if image.source_file_name is not None:
+        name_pattern = name_pattern.replace("{file_name}", image.source_file_name)
+    return name_pattern
+
+
+def zarr_export_target(
+    image: PanSegImage, export_directory: Path, name_pattern: str
+) -> tuple[Path, str | None]:
+    """OME-Zarr write target of an export: (store path, label name).
+
+    Segmentations export as label images named after their semantic type
+    (see GLOSSARY: Label image), raw and prediction images as image groups.
+    Shared by the export writers and the GUI, which checks the target slot
+    before writing to ask about overwriting.
+    """
+    stem = resolve_export_name_pattern(image, name_pattern)
+    label_name = (
+        image.semantic_type.value if image.image_type == ImageType.LABEL else None
+    )
+    return Path(export_directory) / f"{stem}.ome.zarr", label_name
+
+
 def save_image(
     image: PanSegImage,
     export_directory: Path,
@@ -1454,6 +1479,7 @@ def save_image(
     data_type: str = "uint16",
     export_mesh: Optional[str] = None,
     close_mesh: bool = False,
+    overwrite: bool = False,
 ) -> None:
     """
     Write a PanSegImage object to disk.
@@ -1464,9 +1490,16 @@ def save_image(
         name_pattern (str): output file name pattern, can contain the {image_name} or {file_name} tokens
             to be replaced in the final file name.
         key (str | None): key for the image (used only for h5 and zarr formats).
+            For zarr, the name of the OME-Zarr image group ("raw"); a
+            segmentation is written to its labels container as
+            `<key>/labels/segmentation` (see GLOSSARY: Label image). Required
+            for h5 and zarr.
         scale_to_origin (bool): scale the voxel size to the original one
         export_format (str): file format (tiff, h5, zarr)
         data_type (str): data type to save the image.
+        overwrite (bool): replace an OME-Zarr image or label already present
+            at the target key (zarr only); without it, writing into an
+            occupied slot is a ValueError.
     """
 
     data, voxel_size = _image_postprocessing(
@@ -1476,10 +1509,7 @@ def save_image(
     directory = Path(export_directory)
     directory.mkdir(parents=True, exist_ok=True)
 
-    name_pattern = name_pattern.replace("{image_name}", image.name)
-
-    if image.source_file_name is not None:
-        name_pattern = name_pattern.replace("{file_name}", image.source_file_name)
+    name_pattern = resolve_export_name_pattern(image, name_pattern)
 
     if export_format == "tiff":
         file_path_name = directory / f"{name_pattern}.tiff"
@@ -1492,10 +1522,7 @@ def save_image(
         )
 
     elif export_format == "zarr":
-        if key is None or key == "":
-            raise ValueError("Key is required for zarr format")
-
-        file_path_name = directory / f"{name_pattern}.zarr"
+        file_path_name, label_name = zarr_export_target(image, directory, name_pattern)
         create_zarr(
             path=file_path_name,
             stack=data,
@@ -1504,6 +1531,8 @@ def save_image(
             axis_order=image.image_layout.value,
             t_spacing=image.properties.t_spacing,
             t_spacing_unit=image.properties.t_unit,
+            label_name=label_name,
+            overwrite=overwrite,
         )
 
     elif export_format == "h5":
