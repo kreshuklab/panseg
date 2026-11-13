@@ -90,9 +90,6 @@ class SliceBuilder:
     @staticmethod
     def _check_patch_shape(patch_shape):
         assert len(patch_shape) == 3, "patch_shape must be a 3D tuple"
-        assert patch_shape[1] >= 64 and patch_shape[2] >= 64, (
-            "Height and Width must be greater or equal 64"
-        )
 
 
 class FilterSliceBuilder(SliceBuilder):

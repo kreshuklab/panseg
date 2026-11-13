@@ -137,6 +137,53 @@ def test_derive_patch_and_halo_shapes_2d(
     assert result == expected
 
 
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        # a 4-level U-Net pools three times by 2 per axis
+        (UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4, 4, 4]), (8, 8, 8)),
+        # 2D models predict one Z slice at a time, so Z stays at 1
+        (UNet2D(in_channels=1, out_channels=1, f_maps=[4, 4, 4, 4]), (1, 8, 8)),
+        # anisotropic pooling kernels multiply per axis
+        (nn.Sequential(nn.MaxPool3d(kernel_size=(2, 4, 4))), (2, 4, 4)),
+    ],
+)
+def test_min_input_shape_is_pooling_kernel_product_per_axis(model, expected):
+    assert size_finder.min_input_shape(model) == expected
+
+
+def test_min_input_depth_is_the_z_minimum():
+    model = UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4, 4, 4])
+
+    assert size_finder.min_input_depth(model) == 8
+
+
+def test_model_input_shape_adds_halo_on_both_sides():
+    assert size_finder.model_input_shape((4, 8, 8), (1, 2, 3)) == (6, 12, 14)
+
+
+@pytest.mark.parametrize(
+    ("patch", "halo", "match"),
+    [
+        ((7, 8, 8), (0, 0, 0), r"Z \(7 < 8\)"),
+        ((8, 7, 7), (0, 0, 0), r"Y \(7 < 8\).*X \(7 < 8\)"),
+    ],
+)
+def test_check_min_input_shape_names_the_failing_axis(patch, halo, match):
+    model = UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4, 4, 4])
+
+    with pytest.raises(ValueError, match=match):
+        size_finder.check_min_input_shape(model, patch, halo)
+
+
+def test_check_min_input_shape_accepts_minimum_and_halo_padded_small_patch():
+    model = UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4, 4, 4])
+
+    size_finder.check_min_input_shape(model, (8, 8, 8), (0, 0, 0))
+    # the halo is part of the model input, so a 4 px patch can run
+    size_finder.check_min_input_shape(model, (4, 4, 4), (2, 2, 2))
+
+
 class FakeOomProbe:
     """Stand-in for will_CUDA_OOM: OOMs iff the actual forward shape exceeds `threshold` voxels."""
 

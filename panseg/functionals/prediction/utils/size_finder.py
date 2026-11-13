@@ -136,14 +136,82 @@ def _to_probe_layout(x: torch.Tensor, channels_last_3d: bool) -> torch.Tensor:
     return x.to(memory_format=torch.channels_last_3d) if channels_last_3d else x
 
 
+_POOLING_3D = (nn.MaxPool3d, nn.AvgPool3d)
+_POOLING_2D = (nn.MaxPool2d, nn.AvgPool2d)
+
+
+def min_input_shape(model: nn.Module) -> tuple[int, int, int]:
+    """Smallest model input shape (Z, Y, X) the model accepts.
+
+    The architectural minimum is the per-axis product of the pooling kernels:
+    each pooling layer halves (or divides by its kernel) that axis, so the
+    input must be at least that large for every pooling layer to have a
+    non-empty output. 2D models pool Y and X only, so their Z minimum is 1.
+    """
+    shape = [1, 1, 1]
+    for module in model.modules():
+        if isinstance(module, _POOLING_3D):
+            axes = (0, 1, 2)
+        elif isinstance(module, _POOLING_2D):
+            axes = (1, 2)
+        else:
+            continue
+        kernel = module.kernel_size
+        if not isinstance(kernel, tuple):
+            kernel = (kernel,) * len(axes)
+        for axis, size in zip(axes, kernel):
+            shape[axis] *= size
+    return (shape[0], shape[1], shape[2])
+
+
 def min_input_depth(model: nn.Module) -> int:
     """Smallest input depth a model accepts: the product of its Z pooling kernels."""
-    depth = 1
-    for module in model.modules():
-        if isinstance(module, (nn.MaxPool3d, nn.AvgPool3d)):
-            kernel = module.kernel_size
-            depth *= kernel[0] if isinstance(kernel, tuple) else kernel
-    return depth
+    return min_input_shape(model)[0]
+
+
+def model_input_shape(
+    patch_shape: tuple[int, int, int], patch_halo: tuple[int, int, int]
+) -> tuple[int, int, int]:
+    """Shape fed to the model for a patch: the patch plus the halo on both sides."""
+    patch_shape = (int(patch_shape[0]), int(patch_shape[1]), int(patch_shape[2]))
+    patch_halo = (int(patch_halo[0]), int(patch_halo[1]), int(patch_halo[2]))
+    return (
+        patch_shape[0] + 2 * patch_halo[0],
+        patch_shape[1] + 2 * patch_halo[1],
+        patch_shape[2] + 2 * patch_halo[2],
+    )
+
+
+def check_min_input_shape(
+    model: nn.Module,
+    patch_shape: tuple[int, int, int],
+    patch_halo: tuple[int, int, int],
+) -> None:
+    """Reject a patch whose model input is below the architectural minimum.
+
+    The model input is ``patch_shape + 2 * patch_halo``: a small patch with a
+    large halo can still run, and the halo is the part of the input that the
+    prediction later discards.
+
+    Raises:
+        ValueError: Naming the failing axis (Z, Y, X) and the minimum.
+    """
+    minimum = min_input_shape(model)
+    patch_shape = (int(patch_shape[0]), int(patch_shape[1]), int(patch_shape[2]))
+    patch_halo = (int(patch_halo[0]), int(patch_halo[1]), int(patch_halo[2]))
+    model_input = model_input_shape(patch_shape, patch_halo)
+    failing = [
+        f"{axis} ({size} < {min_size})"
+        for axis, size, min_size in zip(("Z", "Y", "X"), model_input, minimum)
+        if size < min_size
+    ]
+    if failing:
+        raise ValueError(
+            f"Patch shape {tuple(patch_shape)} with halo {tuple(patch_halo)} has "
+            f"model input shape {model_input}, which is below the model's "
+            f"architectural minimum {minimum} in: {', '.join(failing)}. "
+            "Increase the patch size or halo."
+        )
 
 
 def is_oom_error(error: RuntimeError, device: str) -> bool:
@@ -399,6 +467,8 @@ def find_feasible_patch_and_halo_shapes(
 
     Raises:
         RuntimeError: If no feasible patch shape is found within `max_attempts` attempts.
+        ValueError: If the derived patch's model input is below the model's
+            architectural minimum (see `check_min_input_shape`).
     """
     max_patch_shape = probe_max_patch_shape(
         model, in_channels, device, amp=amp, channels_last_3d=channels_last_3d
@@ -406,14 +476,17 @@ def find_feasible_patch_and_halo_shapes(
     is_2d = is_2d_model(model)
 
     if device == "cpu":
-        return derive_patch_and_halo_shapes(
+        patch, halo = derive_patch_and_halo_shapes(
             full_volume_shape, max_patch_shape, min_halo_shape, both_sides, is_2d
         )
+        check_min_input_shape(model, patch, halo)
+        return patch, halo
     patch, halo = (None, None)
     for attempt in range(max_attempts):
         patch, halo = derive_patch_and_halo_shapes(
             full_volume_shape, max_patch_shape, min_halo_shape, both_sides, is_2d
         )
+        check_min_input_shape(model, patch, halo)
         if not will_CUDA_OOM(
             model,
             in_channels,
