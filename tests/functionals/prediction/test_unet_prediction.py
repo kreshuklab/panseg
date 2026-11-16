@@ -142,7 +142,7 @@ def test_unet_prediction_auto_patch_never_exceeds_sample(dummy_model, monkeypatc
 def test_unet_prediction_auto_patch_below_64_px_warns_once(
     dummy_model, monkeypatch, caplog
 ):
-    """Issue #6: a memory-derived patch below the legacy 64 px floor is allowed,
+    """A patch below the 64 px floor is allowed,
     but its halo-dominated model input must be flagged as inefficient."""
     monkeypatch.setattr(
         size_finder,
@@ -173,7 +173,7 @@ def test_unet_prediction_auto_patch_below_64_px_warns_once(
     assert "(16, 48, 48)" in message  # resulting model input shape
     assert "(2, 2, 2)" in message  # architectural minimum
     assert "64" in message  # legacy heuristic
-    assert "Most of the model input is halo that is discarded" in message
+    assert "Most of the model input is halo" in message
     assert pmap.shape[-3:] == raw.shape
     assert np.all(np.isfinite(pmap))
 
@@ -189,7 +189,7 @@ def test_unet_prediction_auto_patch_below_64_px_without_halo_does_not_claim_halo
 
     warnings = _prediction_warnings(caplog)
     assert len(warnings) == 1
-    assert "halo that is discarded" not in warnings[0].getMessage()
+    assert "Most of the model input is halo" not in warnings[0].getMessage()
     assert pmap.shape[-3:] == raw.shape
 
 

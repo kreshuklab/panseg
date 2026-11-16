@@ -36,35 +36,27 @@ from panseg.functionals.training.augs import get_test_augmentations
 
 logger = logging.getLogger(__name__)
 
-# Legacy Y/X patch floor. Below it, most of the model input is halo that the
-# prediction discards, so the prediction is slow and memory-heavy even though
-# the model itself supports the patch.
-LEGACY_MIN_PATCH_XY = 64
+# Below WARN_MIN_PATCH_XY computation is inefficient.
+WARN_MIN_PATCH_XY = 64
 
 
 def _warn_inefficient_auto_patch(model, patch, patch_halo) -> None:
-    """Flag an auto-derived patch that is halo-dominated (see issue #6)."""
+    """Flag an auto-derived patch that is halo-dominated."""
     patch = (int(patch[0]), int(patch[1]), int(patch[2]))
     patch_halo = (int(patch_halo[0]), int(patch_halo[1]), int(patch_halo[2]))
-    if patch[1] >= LEGACY_MIN_PATCH_XY and patch[2] >= LEGACY_MIN_PATCH_XY:
+    if patch[1] >= WARN_MIN_PATCH_XY and patch[2] >= WARN_MIN_PATCH_XY:
         return
     if any(patch_halo):
-        inefficiency = (
-            "Most of the model input is halo that is discarded, so prediction "
-            "will be slow and memory-heavy. "
-        )
+        inefficiency = "Most of the model input is halo, prediction will be slow. "
     else:
-        inefficiency = (
-            "Each forward pass covers only a small Y/X area, so prediction will "
-            "be slow. "
-        )
+        inefficiency = "Small Y/X area, so prediction will be slow. "
     logger.warning(
-        f"Auto-derived patch shape {patch} with halo {patch_halo} gives a model "
-        f"input shape {model_input_shape(patch, patch_halo)}. The Y/X patch is "
-        f"below the legacy {LEGACY_MIN_PATCH_XY} px heuristic, but the model "
+        f"Patch shape {patch} with halo {patch_halo} gives a model "
+        f"input shape {model_input_shape(patch, patch_halo)}.\n"
+        f"The Y/X patch is below {WARN_MIN_PATCH_XY} px, but "
         f"input is above the model's architectural minimum "
-        f"{min_input_shape(model)}. {inefficiency}"
-        "Reduce the model size or halo, or use more GPU memory."
+        f"{min_input_shape(model)}.\n{inefficiency}\n"
+        "Reduce the model size or halo, or increase patch size."
     )
 
 

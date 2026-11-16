@@ -1,9 +1,3 @@
-"""SliceBuilder patch-shape handling.
-
-Issue #6: the legacy 64 px Y/X floor is gone. The only lower bound on a patch
-is the model's architectural minimum, which the prediction layer checks.
-"""
-
 import numpy as np
 
 from panseg.functionals.prediction.utils.slice_builder import SliceBuilder

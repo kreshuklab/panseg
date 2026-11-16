@@ -157,6 +157,7 @@ def min_input_shape(model: nn.Module) -> tuple[int, int, int]:
         else:
             continue
         kernel = module.kernel_size
+        # int or tuple, int for isotropic kernel
         if not isinstance(kernel, tuple):
             kernel = (kernel,) * len(axes)
         for axis, size in zip(axes, kernel):
@@ -189,9 +190,7 @@ def check_min_input_shape(
 ) -> None:
     """Reject a patch whose model input is below the architectural minimum.
 
-    The model input is ``patch_shape + 2 * patch_halo``: a small patch with a
-    large halo can still run, and the halo is the part of the input that the
-    prediction later discards.
+    The model input is ``patch_shape + 2 * patch_halo``
 
     Raises:
         ValueError: Naming the failing axis (Z, Y, X) and the minimum.
@@ -209,7 +208,7 @@ def check_min_input_shape(
         raise ValueError(
             f"Patch shape {tuple(patch_shape)} with halo {tuple(patch_halo)} has "
             f"model input shape {model_input}, which is below the model's "
-            f"architectural minimum {minimum} in: {', '.join(failing)}. "
+            f"architectural minimum {minimum} in: {', '.join(failing)}.\n"
             "Increase the patch size or halo."
         )
 
