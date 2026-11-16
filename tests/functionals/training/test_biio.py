@@ -7,11 +7,20 @@ import numpy as np
 import pytest
 import torch
 from bioimageio.core import test_model as biio_test_model
-from bioimageio.spec.model.v0_5 import AxisId, TensorId
+from bioimageio.spec.model.v0_5 import (
+    AxisId,
+    ParameterizedSize,
+    SizeReference,
+    SpaceOutputAxis,
+    SpaceOutputAxisWithHalo,
+    TensorId,
+)
 
+from panseg.functionals.model_geometry import ModelGeometry
 from panseg.functionals.training.biio import (
     PANSEG_CITATION,
     make_model_description,
+    pad_to_effective_minimum,
 )
 from panseg.functionals.training.model import UNet3D
 from panseg.functionals.training.train import zero_mean_unit_variance
@@ -22,6 +31,9 @@ WEIGHTS = (
     / "models"
     / "best_checkpoint.pytorch"
 )
+
+GEOMETRY = ModelGeometry(min_input=(16, 32, 64), halo=(4, 8, 12), is_2d=False)
+"""A 3D geometry whose halo fits the effective minimum on every axis."""
 
 
 @pytest.fixture
@@ -40,8 +52,7 @@ def make_description(model_dir, **overrides):
         "out_channels": 1,
         "feature_maps": 64,
         "final_sigmoid": True,
-        "axis_min_sizes": (16, 32, 64),
-        "dimensionality": "3D",
+        "geometry": GEOMETRY,
         "layer_order": "bcr",
         "modality": "mod",
         "output_type": "boundaries",
@@ -149,6 +160,162 @@ def test_axes_use_exactly_representable_scales(model_dir):
         assert (out_axes[axis_id].scale, out_axes[axis_id].unit) == (scale, unit)
 
 
+def test_input_minima_include_the_halo_floor(model_dir):
+    """A halo axis declares at least `2 * halo + 1` input pixels.
+
+    That is the smallest tile with a non-empty, artifact-free interior after
+    cropping. `min_input` alone (4 px) would leave no interior for a 20 px
+    halo.
+    """
+    geometry = ModelGeometry(min_input=(4, 4, 4), halo=(20, 20, 20), is_2d=False)
+    np.save(model_dir / "inputs.npy", np.random.rand(1, 1, 41, 50, 64))
+    np.save(model_dir / "outputs.npy", np.random.rand(1, 1, 41, 50, 64))
+
+    desc = make_description(model_dir, geometry=geometry)
+
+    in_axes = {a.id: a for a in desc.inputs[0].axes if a.id in ("z", "y", "x")}
+    for axis_id in ("z", "y", "x"):
+        size = in_axes[axis_id].size
+        assert isinstance(size, ParameterizedSize)
+        assert (size.min, size.step) == (41, 1)
+
+
+def test_input_minimum_stays_min_input_above_the_halo_floor(model_dir):
+    """`min_input` wins when it already exceeds `2 * halo + 1`."""
+    desc = make_description(model_dir)  # GEOMETRY: min_input (16,32,64), halo (4,8,12)
+
+    in_axes = {a.id: a for a in desc.inputs[0].axes if a.id in ("z", "y", "x")}
+    for axis_id, minimum in zip(("z", "y", "x"), GEOMETRY.min_input):
+        size = in_axes[axis_id].size
+        assert isinstance(size, ParameterizedSize)
+        assert (size.min, size.step) == (minimum, 1)
+
+
+def test_output_axes_declare_the_true_geometry_halo(model_dir):
+    desc = make_description(model_dir)
+
+    out_axes = {a.id: a for a in desc.outputs[0].axes if a.id in ("z", "y", "x")}
+    for axis_id, halo in zip(("z", "y", "x"), GEOMETRY.halo):
+        axis = out_axes[axis_id]
+        assert isinstance(axis, SpaceOutputAxisWithHalo)
+        assert axis.halo == halo
+        assert axis.size == SizeReference(
+            tensor_id=TensorId("input"), axis_id=AxisId(axis_id)
+        )
+
+
+def test_output_axis_without_halo_stays_plain(model_dir):
+    """`halo` must be >= 1, so a zero-halo axis keeps the plain output axis."""
+    geometry = ModelGeometry(min_input=(8, 16, 16), halo=(0, 4, 4), is_2d=False)
+
+    desc = make_description(model_dir, geometry=geometry)
+
+    in_axes = {a.id: a for a in desc.inputs[0].axes if a.id in ("z", "y", "x")}
+    out_axes = {a.id: a for a in desc.outputs[0].axes if a.id in ("z", "y", "x")}
+    assert type(out_axes["z"]) is SpaceOutputAxis
+    assert in_axes["z"].size.min == 8
+    assert isinstance(out_axes["y"], SpaceOutputAxisWithHalo)
+    assert out_axes["y"].halo == 4
+
+
+def test_true_halo_is_not_capped(model_dir):
+    """A UNet3D runs on 8 px but needs 44 px of context per side.
+
+    The halo is the whole point of `SpaceOutputAxisWithHalo`: external
+    consumers must overlap tiles by 44 px. The input minimum therefore moves up
+    to `2 * 44 + 1 = 89`, which is the smallest artifact-free tile.
+    """
+    geometry = ModelGeometry(min_input=(8, 8, 8), halo=(44, 44, 44), is_2d=False)
+    np.save(model_dir / "inputs.npy", np.random.rand(1, 1, 89, 89, 89))
+    np.save(model_dir / "outputs.npy", np.random.rand(1, 1, 89, 89, 89))
+
+    desc = make_description(model_dir, geometry=geometry)
+
+    out_axes = {a.id: a for a in desc.outputs[0].axes if a.id in ("z", "y", "x")}
+    for axis in out_axes.values():
+        assert isinstance(axis, SpaceOutputAxisWithHalo)
+        assert axis.halo == 44
+
+    in_axes = {a.id: a for a in desc.inputs[0].axes if a.id in ("z", "y", "x")}
+    assert all(axis.size.min == 89 for axis in in_axes.values())
+
+
+def test_2d_description_uses_the_yx_geometry(model_dir, tmp_path):
+    geometry = ModelGeometry(min_input=(1, 4, 4), halo=(0, 20, 20), is_2d=True)
+    np.save(tmp_path / "inputs_2d.npy", np.random.rand(1, 1, 50, 64))
+    np.save(tmp_path / "outputs_2d.npy", np.random.rand(1, 1, 50, 64))
+
+    desc = make_description(
+        model_dir,
+        geometry=geometry,
+        test_in=tmp_path / "inputs_2d.npy",
+        test_out=tmp_path / "outputs_2d.npy",
+    )
+
+    in_axes = {a.id: a for a in desc.inputs[0].axes if a.id in ("y", "x")}
+    assert {a.id: a.size.min for a in in_axes.values()} == {"y": 41, "x": 41}
+
+    out_axes = {a.id: a for a in desc.outputs[0].axes if a.id in ("y", "x")}
+    assert {a.id: a.halo for a in out_axes.values()} == {"y": 20, "x": 20}
+    assert all(isinstance(a, SpaceOutputAxisWithHalo) for a in out_axes.values())
+
+    # the exported architecture follows the geometry, not a separate flag
+    arch = desc.weights.pytorch_state_dict.architecture
+    assert str(arch.callable) == "UNet2DProbabilities"
+
+
+def test_pad_to_effective_minimum_pads_every_spatial_axis():
+    geometry = ModelGeometry(min_input=(8, 8, 8), halo=(44, 44, 44), is_2d=False)
+    test_in = torch.rand(1, 1, 16, 50, 64)
+
+    padded = pad_to_effective_minimum(test_in, geometry)
+
+    assert tuple(padded.shape) == (1, 1, 89, 89, 89)
+    # symmetric padding with the odd pixel on the right; the data is unchanged
+    assert padded[0, 0, 36:52, 19:69, 12:76].equal(test_in[0, 0])
+    assert padded[0, 0, :36].count_nonzero() == 0
+
+
+def test_pad_to_effective_minimum_is_a_no_op_above_the_minimum():
+    geometry = ModelGeometry(min_input=(8, 8, 8), halo=(44, 44, 44), is_2d=False)
+    test_in = torch.rand(1, 1, 89, 89, 89)
+
+    assert pad_to_effective_minimum(test_in, geometry) is test_in
+
+
+def test_pad_to_effective_minimum_pads_yx_only_for_2d():
+    geometry = ModelGeometry(min_input=(1, 4, 4), halo=(0, 20, 20), is_2d=True)
+    test_in = torch.rand(1, 1, 7, 20)
+
+    padded = pad_to_effective_minimum(test_in, geometry)
+
+    assert tuple(padded.shape) == (1, 1, 41, 41)
+    assert padded[0, 0, 17:24, 10:30].equal(test_in[0, 0])
+
+
+def test_padded_small_patch_produces_a_valid_description(model_dir):
+    """A training patch below `2 * halo + 1` still exports.
+
+    The packaged test input is padded up to the effective minimum instead of
+    shrinking the halo or the minimum. The description validates because the
+    stored test tensor satisfies the effective input minima.
+    """
+    geometry = ModelGeometry(min_input=(8, 8, 8), halo=(44, 44, 44), is_2d=False)
+    test_in = pad_to_effective_minimum(torch.rand(1, 1, 16, 50, 64), geometry)
+    np.save(model_dir / "inputs.npy", test_in.numpy())
+    np.save(model_dir / "outputs.npy", test_in.numpy())
+
+    desc = make_description(model_dir, geometry=geometry)
+
+    minima = {a.id: a.size.min for a in desc.inputs[0].axes if a.id in ("z", "y", "x")}
+    assert minima == {"z": 89, "y": 89, "x": 89}
+    assert (
+        np.load(model_dir / "inputs.npy").shape
+        == np.load(model_dir / "outputs.npy").shape
+        == tuple(test_in.shape)
+    )
+
+
 def test_output_sizes_match_input_sizes(model_dir):
     """Output sizes must equal input sizes for every size parameter n.
 
@@ -161,7 +328,7 @@ def test_output_sizes_match_input_sizes(model_dir):
     desc = make_description(
         model_dir,
         resolution=(0.24, 0.24, 0.24),
-        axis_min_sizes=(16, 43, 44),
+        geometry=ModelGeometry(min_input=(16, 43, 44), halo=(4, 5, 6), is_2d=False),
     )
 
     for n in (0, 1, 2):
@@ -252,7 +419,7 @@ def test_packaged_model_reproduces_probability_test_out(model_dir):
         model_dir,
         feature_maps=(8, 16),
         layer_order="gcr",
-        axis_min_sizes=(16, 50, 64),
+        geometry=ModelGeometry(min_input=(16, 50, 64), halo=(2, 4, 4), is_2d=False),
         resolution=(1.0, 1.0, 1.0),
     )
     summary = biio_test_model(desc, devices=["cpu"])

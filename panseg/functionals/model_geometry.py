@@ -1,6 +1,6 @@
 """Architecture-dependent input geometry shared by training, inference and probes.
 
-A model's *architecture* fixes two spatial facts:
+A model's *architecture* fixes three spatial facts:
 
 - ``min_input``: the smallest input shape each axis accepts, i.e. the product
   of the pooling kernels that downsample that axis. Below it, the deepest
@@ -8,14 +8,19 @@ A model's *architecture* fixes two spatial facts:
 - ``halo``: the context each side needs for an exact output, i.e. how far a
   convolution in the decoder path can see. Without it, predictions at patch
   borders carry artifacts.
+- ``effective_min_input``: the smallest input that both runs *and* leaves a
+  non-empty artifact-free interior, i.e. ``max(min_input, 2 * halo + 1)``. This
+  is the smallest tile a consumer that crops the halo should use, and therefore
+  the minimum a model description declares.
 
-They are independent: a model with only 1x1 convolutions has zero halo but can
-still require a pooled minimum. Both are derived here from a single per-axis
-traversal of the model, so the two notions of "level" cannot diverge, and 2D
-models fall out of the traversal (they only pool Y and X) instead of needing
-per-call special cases.
+The first two are independent: a model with only 1x1 convolutions has zero halo
+but can still require a pooled minimum. Both are derived here from a single
+per-axis traversal of the model, so the two notions of "level" cannot diverge,
+and 2D models fall out of the traversal (they only pool Y and X) instead of
+needing per-call special cases. ``effective_min_input`` is derived from them,
+so it cannot drift either.
 
-The one invariant that ties them together is::
+The invariant that ties running and cropping together is::
 
     model_input_shape(patch, halo) >= min_input
 
@@ -91,6 +96,23 @@ class ModelGeometry:
     is_2d: bool
     """Whether the model consumes one Z slice at a time."""
 
+    @property
+    def effective_min_input(self) -> tuple[int, int, int]:
+        """Smallest (Z, Y, X) input with a non-empty, artifact-free interior.
+
+        `min_input` on its own is only the smallest input that *runs*; a tile
+        that small can leave nothing to crop after removing `halo`. The
+        effective minimum is therefore `max(min_input, 2 * halo + 1)` per axis,
+        i.e. the smallest tile whose cropped interior still has one pixel. An
+        axis without halo keeps its `min_input`.
+        """
+        return _as_3d(
+            tuple(
+                max(minimum, 2 * halo + 1)
+                for minimum, halo in zip(self.min_input, self.halo)
+            )
+        )
+
     def model_input_shape(
         self,
         patch: tuple[int, int, int],
@@ -110,6 +132,10 @@ class ModelGeometry:
     ) -> tuple[int, ...]:
         """The tensor's spatial shape: the model input without Z for 2D."""
         return _without_z(self.model_input_shape(patch, halo), self.is_2d)
+
+    def tensor_effective_min_input(self) -> tuple[int, ...]:
+        """The tensor's smallest spatial shape: `effective_min_input` sans Z for 2D."""
+        return _without_z(self.effective_min_input, self.is_2d)
 
     def check_patch(
         self,
@@ -147,6 +173,10 @@ def model_geometry(model: nn.Module) -> ModelGeometry:
     Pooling multiplies the axis minimum and moves one level down; a decoder
     upsampling moves one level back up. Each convolution then contributes
     ``2**level * (kernel // 2)`` to the halo of each axis it operates on.
+
+    References:
+        - For further details on how halos are calculated in the context of neural networks,
+        see: https://doi.org/10.6028/jres.126.009
     """
     min_input = [1, 1, 1]
     halo = [0, 0, 0]

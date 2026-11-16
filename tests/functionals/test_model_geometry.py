@@ -3,14 +3,17 @@
 `model_geometry` is the single place that derives architecture-dependent input
 geometry from a model: the smallest input each axis accepts (`min_input`) and
 the context each side needs for an exact output (`halo`). Both come from one
-per-axis traversal so they cannot diverge, and every consumer (prediction,
-training, the viewer, the model zoo) asks the same module.
+per-axis traversal so they cannot diverge, and `effective_min_input` combines
+them into the smallest tile that both runs and can be cropped. Every consumer
+(prediction, training, the viewer, the model zoo) asks the same module.
 """
 
 import pytest
+import torch
 from torch import nn
 
 from panseg.functionals.model_geometry import (
+    ModelGeometry,
     is_2d_model,
     model_geometry,
     model_input_shape,
@@ -132,6 +135,78 @@ class TestModelGeometryTraversal:
             if geometry.is_2d and axis == 0:
                 continue
             assert halo + 1 >= minimum
+
+
+class TestEffectiveMinInput:
+    """`effective_min_input` = smallest input that runs *and* can be cropped."""
+
+    def test_applies_the_halo_floor(self):
+        geometry = ModelGeometry(min_input=(8, 8, 8), halo=(44, 44, 44), is_2d=False)
+
+        assert geometry.effective_min_input == (89, 89, 89)
+
+    def test_keeps_min_input_where_it_already_exceeds_the_floor(self):
+        geometry = ModelGeometry(min_input=(16, 32, 64), halo=(4, 8, 12), is_2d=False)
+
+        assert geometry.effective_min_input == (16, 32, 64)
+
+    def test_a_zero_halo_axis_keeps_its_min_input(self):
+        geometry = ModelGeometry(min_input=(8, 16, 16), halo=(0, 4, 4), is_2d=False)
+
+        assert geometry.effective_min_input == (8, 16, 16)
+
+    def test_tensor_variant_uses_yx_for_2d(self):
+        geometry = ModelGeometry(min_input=(1, 4, 4), halo=(0, 20, 20), is_2d=True)
+
+        assert geometry.effective_min_input == (1, 41, 41)
+        assert geometry.tensor_effective_min_input() == (41, 41)
+
+    def test_tensor_variant_keeps_z_for_3d(self):
+        geometry = ModelGeometry(min_input=(8, 8, 8), halo=(44, 44, 44), is_2d=False)
+
+        assert geometry.tensor_effective_min_input() == (89, 89, 89)
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"f_maps": [4, 4, 4, 4]},
+            {"f_maps": 8, "num_levels": 5},
+            {"f_maps": [4, 4, 4, 4], "conv_kernel_size": 5, "pool_kernel_size": 2},
+        ],
+    )
+    @pytest.mark.parametrize("model_class", [UNet3D, UNet2D])
+    def test_leaves_one_pixel_of_interior_that_the_model_accepts(
+        self, model_class, config
+    ):
+        geometry = model_geometry(model_class(1, 1, **config))
+        # cropping the halo from a tile of the effective minimum leaves the
+        # patch the model actually produces artifact-free
+        effective, halo = geometry.effective_min_input, geometry.halo
+        patch = (
+            effective[0] - 2 * halo[0],
+            effective[1] - 2 * halo[1],
+            effective[2] - 2 * halo[2],
+        )
+
+        assert all(pixels >= 1 for pixels in patch)
+        # and that cropped tile is still a valid model input
+        geometry.check_patch(patch)
+
+    @pytest.mark.parametrize("model_class", [UNet3D, UNet2D], ids=["3d", "2d"])
+    def test_the_effective_minimum_runs_through_a_real_unet(self, model_class):
+        """`2 * halo + 1` is odd, so the decoder must cope with odd sizes.
+
+        The decoder resizes to the encoder feature maps instead of assuming a
+        factor-2 relationship, which is why an odd artifact-free tile runs.
+        """
+        model = model_class(in_channels=1, out_channels=1, f_maps=[4, 4, 4, 4])
+        geometry = model_geometry(model)
+        shape = geometry.tensor_effective_min_input()
+
+        with torch.no_grad():
+            out = model(torch.zeros(1, 1, *shape))
+
+        assert tuple(out.shape[2:]) == shape
 
 
 class TestModelInputShape:
