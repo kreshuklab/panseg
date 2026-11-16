@@ -3,6 +3,7 @@ import pytest
 import torch
 from torch import nn
 
+from panseg.functionals.model_geometry import model_geometry
 from panseg.functionals.prediction.utils import size_finder
 from panseg.functionals.prediction.utils.size_finder import (
     derive_patch_and_halo_shapes,
@@ -135,6 +136,22 @@ def test_derive_patch_and_halo_shapes_2d(
         is_2d=True,
     )
     assert result == expected
+
+
+@pytest.mark.parametrize(
+    "full_volume_shape",
+    [(8, 8, 8), (100, 1000, 1000), (5000, 120, 95)],
+)
+def test_auto_derived_shapes_pass_check_patch(full_volume_shape):
+    """The theoretical halo makes every auto-derived shape a valid model input."""
+    model = UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4, 4, 4])
+    geometry = model_geometry(model)
+
+    patch, halo = derive_patch_and_halo_shapes(
+        full_volume_shape, (256, 256, 256), geometry.halo, is_2d=geometry.is_2d
+    )
+
+    geometry.check_patch(patch, halo)
 
 
 class FakeOomProbe:

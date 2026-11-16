@@ -6,9 +6,14 @@ import torch
 from torch import nn
 from torch.optim.adam import Adam
 
+from panseg.functionals.model_geometry import (
+    ModelGeometry,
+    is_2d_model,
+    model_geometry,
+    tensor_input_shape,
+)
 from panseg.functionals.precision import AmpSetting, amp_context
 from panseg.functionals.training.losses import DiceLoss
-from panseg.functionals.training.model import UNet2D
 
 logger = logging.getLogger(__name__)
 
@@ -103,16 +108,6 @@ def _preserve_parameters(model: nn.Module):
                 parameter.copy_(snapshot)
 
 
-def is_2d_model(model: nn.Module) -> bool:
-    while True:
-        if isinstance(model, nn.DataParallel):
-            model = model.module
-        elif hasattr(model, "_orig_mod"):  # torch.compile's OptimizedModule
-            model = model._orig_mod
-        else:
-            return isinstance(model, UNet2D)
-
-
 def channels_last_3d_enabled(model: nn.Module, device: str, requested: bool) -> bool:
     """Whether the model actually runs in channels_last_3d: 3D models on CUDA only."""
     return requested and torch.device(device).type == "cuda" and not is_2d_model(model)
@@ -134,16 +129,6 @@ def _to_probe_device(
 
 def _to_probe_layout(x: torch.Tensor, channels_last_3d: bool) -> torch.Tensor:
     return x.to(memory_format=torch.channels_last_3d) if channels_last_3d else x
-
-
-def min_input_depth(model: nn.Module) -> int:
-    """Smallest input depth a model accepts: the product of its Z pooling kernels."""
-    depth = 1
-    for module in model.modules():
-        if isinstance(module, (nn.MaxPool3d, nn.AvgPool3d)):
-            kernel = module.kernel_size
-            depth *= kernel[0] if isinstance(kernel, tuple) else kernel
-    return depth
 
 
 def is_oom_error(error: RuntimeError, device: str) -> bool:
@@ -360,6 +345,7 @@ def find_feasible_patch_and_halo_shapes(
     both_sides: bool = False,
     amp: AmpSetting = "auto",
     channels_last_3d: bool = False,
+    geometry: ModelGeometry | None = None,
 ) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     """Recommend a patch shape and halo size that is verified to fit on the device.
 
@@ -391,6 +377,8 @@ def find_feasible_patch_and_halo_shapes(
             ``"auto"``.
         channels_last_3d (bool, optional): size the probes in the prediction's
             channels_last_3d layout; default False (plain contiguous layout).
+        geometry (ModelGeometry | None, optional): the model's input geometry,
+            already resolved by the caller. Derived here when omitted.
 
     Returns:
         tuple[tuple[int, int, int], tuple[int, int, int]]:
@@ -399,21 +387,27 @@ def find_feasible_patch_and_halo_shapes(
 
     Raises:
         RuntimeError: If no feasible patch shape is found within `max_attempts` attempts.
+        ValueError: If the derived patch's model input is below the model's
+            architectural minimum (see `ModelGeometry.check_patch`).
     """
+    geometry = model_geometry(model) if geometry is None else geometry
     max_patch_shape = probe_max_patch_shape(
         model, in_channels, device, amp=amp, channels_last_3d=channels_last_3d
     )
-    is_2d = is_2d_model(model)
+    is_2d = geometry.is_2d
 
     if device == "cpu":
-        return derive_patch_and_halo_shapes(
+        patch, halo = derive_patch_and_halo_shapes(
             full_volume_shape, max_patch_shape, min_halo_shape, both_sides, is_2d
         )
+        geometry.check_patch(patch, halo)
+        return patch, halo
     patch, halo = (None, None)
     for attempt in range(max_attempts):
         patch, halo = derive_patch_and_halo_shapes(
             full_volume_shape, max_patch_shape, min_halo_shape, both_sides, is_2d
         )
+        geometry.check_patch(patch, halo)
         if not will_CUDA_OOM(
             model,
             in_channels,
@@ -612,9 +606,7 @@ def find_batch_size(
     if device == "cpu":
         return 1
 
-    actual_patch_shape = tuple(patch_shape[i] + 2 * patch_halo[i] for i in range(3))
-    if is_2d_model(model):
-        actual_patch_shape = actual_patch_shape[1:]
+    actual_patch_shape = tensor_input_shape(model, patch_shape, patch_halo)
     x_shape = (in_channels,) + actual_patch_shape
 
     was_training = model.training
@@ -697,12 +689,8 @@ def will_CUDA_OOM(
     if device == "cpu":
         return False  # CPU does not have CUDA OOM errors
 
-    # Calculate the actual patch shape including the halo
-    actual_patch_shape = tuple(patch_shape[i] + 2 * patch_halo[i] for i in range(3))
-
-    # If the model is a 2D UNet, adjust the patch shape to 2D
-    if is_2d_model(model):
-        actual_patch_shape = actual_patch_shape[1:]
+    # The tensor's spatial shape: patch plus halo, without Z for 2D models
+    actual_patch_shape = tensor_input_shape(model, patch_shape, patch_halo)
 
     with _quiet_oom_probing(device):
         model, cl3d = _to_probe_device(model, device, channels_last_3d)

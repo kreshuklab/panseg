@@ -582,6 +582,10 @@ class TestUnetTraining:
 
         mock_model_desc.assert_called_once()
         assert mock_model_desc.call_args.kwargs["final_sigmoid"] is False
+        # the description is built from the architecture's geometry, resolved once
+        geometry = mock_model_desc.call_args.kwargs["geometry"]
+        assert geometry.min_input == (4, 4, 4)
+        assert geometry.halo == (20, 20, 20)
         assert (tmp_path / model_name / "test_in.npy").exists()
         assert (tmp_path / model_name / "test_out.npy").exists()
 
@@ -808,7 +812,6 @@ class TestUnetTraining:
                     )
 
     @patch("panseg.functionals.training.train.test_model")
-    @patch("panseg.functionals.training.train.isinstance")
     @patch("panseg.functionals.training.train.make_model_description")
     @patch("panseg.functionals.training.train.DataLoader")
     @patch("panseg.functionals.training.train.ConcatDataset")
@@ -835,7 +838,6 @@ class TestUnetTraining:
         mock_concat,
         mock_data_loader,
         mock_description,
-        mock_isinstance,
         mock_test_model,
         tmp_path,
     ):
@@ -876,8 +878,6 @@ class TestUnetTraining:
                 None,
             )
         ]
-
-        mock_isinstance.return_value = False
 
         mock_find_batch_size.return_value = 1
 

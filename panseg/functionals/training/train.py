@@ -19,10 +19,14 @@ from panseg import (
     PATH_TRAIN_TEMPLATE,
 )
 from panseg.core.zoo import model_zoo
+from panseg.functionals.model_geometry import model_geometry
 from panseg.functionals.precision import AmpSetting, validate_amp
 from panseg.functionals.prediction.utils.size_finder import find_batch_size
 from panseg.functionals.training.augs import Augmenter
-from panseg.functionals.training.biio import make_model_description
+from panseg.functionals.training.biio import (
+    make_model_description,
+    pad_to_effective_minimum,
+)
 from panseg.functionals.training.h5dataset import HDF5Dataset
 from panseg.functionals.training.losses import DiceLoss
 from panseg.functionals.training.model import UNet2D, UNet3D
@@ -390,6 +394,8 @@ def unet_training(
     net.load_state_dict(torch.load(weights, map_location="cpu", weights_only=True))
     net.eval()
 
+    geometry = model_geometry(net)
+
     # Obtain and save test in- and output for biio.
     # test_in is stored un-normalized: the model description declares
     # ZeroMeanUnitVariance preprocessing, which bioimageio.core applies to the test
@@ -402,12 +408,17 @@ def unet_training(
     # bioimageIO needs a single sample; keep the packaged tensors small
     test_in = test_in[:1]
 
-    if isinstance(net, UNet2D):
+    if geometry.is_2d:
         # remove the singleton z-dimension from the input
         # Extra dim was only added in the panseg loader for the augmentations
         # Stored data and model are true 2D models
         # Note the loader adds a batch dimension
         test_in = torch.squeeze(test_in, dim=-3)
+
+    # The description declares `geometry.effective_min_input` as the input
+    # minimum (at least 2 * halo + 1 on halo axes), which can exceed the
+    # training patch; bioimageio.spec rejects a test tensor below it.
+    test_in = pad_to_effective_minimum(test_in, geometry)
 
     with torch.no_grad():
         # probabilities: `test_out` must match the output of the exported
@@ -416,13 +427,6 @@ def unet_training(
 
     np.save(checkpoint_dir / "test_in.npy", test_in.numpy())
     np.save(checkpoint_dir / "test_out.npy", test_out.detach().cpu().numpy())
-
-    try:
-        axis_min_sizes = np.min(
-            (model_zoo.compute_3D_halo_for_pytorch3dunet(net), patch_size), axis=0
-        )
-    except ValueError:
-        axis_min_sizes = patch_size
 
     # Release everything the training run still holds before bioimageIO
     # validation: `test_model` instantiates a second full model on the training
@@ -442,8 +446,7 @@ def unet_training(
             out_channels=out_channels,
             feature_maps=feature_maps,
             final_sigmoid=final_sigmoid,
-            axis_min_sizes=axis_min_sizes,
-            dimensionality=dimensionality,
+            geometry=geometry,
             layer_order=layer_order,
             modality=modality,
             output_type=output_type,

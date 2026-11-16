@@ -147,9 +147,10 @@ class TestUnetTrainingIntegration:
 
         test_in = np.load(model_dir / "test_in.npy")
         test_out = np.load(model_dir / "test_out.npy")
-        # the packaged test tensors hold a single sample: b, c, z, y, x
-        assert test_in.shape == (1, 1, 16, 64, 64)
-        assert test_out.shape == (1, 1, 16, 64, 64)
+        # the 16-slice training patch is below the effective 2*8+1 minimum, so
+        # the packaged test input is padded up to 17; the pair stays consistent
+        assert test_in.shape == (1, 1, 17, 64, 64)
+        assert test_out.shape == test_in.shape
 
         mocker.stopall()
 
@@ -206,8 +207,8 @@ class TestUnetTrainingIntegration:
         test_in = np.load(model_dir / "test_in.npy")
         test_out = np.load(model_dir / "test_out.npy")
         # single sample even though the GPU training batch may be larger
-        assert test_in.shape == (1, 1, 16, 64, 64)
-        assert test_out.shape == (1, 1, 16, 64, 64)
+        assert test_in.shape == (1, 1, 17, 64, 64)
+        assert test_out.shape == test_in.shape
 
         mocker.stopall()
         assert not (PATH_PANSEG_MODELS / model_name).exists()
