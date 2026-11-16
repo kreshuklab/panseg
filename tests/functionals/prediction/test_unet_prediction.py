@@ -368,7 +368,7 @@ def test_unet_prediction_2d_model_rejects_z_patch_or_halo(
             "needs at least 8 Z slices, but the image has 4",
         ),
         ((64, 64), "YX", None, (0, 0, 0), "the image has 1"),
-        ((16, 64, 64), "ZYX", (4, 64, 64), (1, 0, 0), "has 6"),
+        ((16, 64, 64), "ZYX", (4, 64, 64), (1, 0, 0), r"Z \(6 < 8\)"),
     ],
 )
 def test_unet_prediction_3d_model_rejects_thin_image(
@@ -411,7 +411,7 @@ def test_unet_prediction_3d_model_rejects_patch_below_architectural_minimum(
 ):
     raw = np.random.rand(8, 8, 8).astype("float32")
 
-    with pytest.raises(ValueError, match="needs at least 8 Z slices"):
+    with pytest.raises(ValueError, match=r"Z \(7 < 8\).*Y \(7 < 8\).*X \(7 < 8\)"):
         _predict(dummy_model_3d_deep, raw, "ZYX", patch=(7, 7, 7), patch_halo=(0, 0, 0))
 
 

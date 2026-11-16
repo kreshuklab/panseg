@@ -19,16 +19,12 @@ from panseg.functionals.dataprocessing.dataprocessing import (
     fix_layout_to_CZYX,
     fix_layout_to_ZYX,
 )
+from panseg.functionals.model_geometry import ModelGeometry, model_geometry
 from panseg.functionals.precision import AmpSetting, validate_amp
 from panseg.functionals.prediction.utils.array_dataset import ArrayDataset
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
 from panseg.functionals.prediction.utils.size_finder import (
-    check_min_input_shape,
     find_feasible_patch_and_halo_shapes,
-    is_2d_model,
-    min_input_depth,
-    min_input_shape,
-    model_input_shape,
 )
 from panseg.functionals.prediction.utils.slice_builder import SliceBuilder
 from panseg.functionals.prediction.utils.utils import get_stride_shape
@@ -40,7 +36,7 @@ logger = logging.getLogger(__name__)
 WARN_MIN_PATCH_XY = 64
 
 
-def _warn_inefficient_auto_patch(model, patch, patch_halo) -> None:
+def _warn_inefficient_auto_patch(geometry: ModelGeometry, patch, patch_halo) -> None:
     """Flag an auto-derived patch that is halo-dominated."""
     patch = (int(patch[0]), int(patch[1]), int(patch[2]))
     patch_halo = (int(patch_halo[0]), int(patch_halo[1]), int(patch_halo[2]))
@@ -52,17 +48,17 @@ def _warn_inefficient_auto_patch(model, patch, patch_halo) -> None:
         inefficiency = "Small Y/X area, so prediction will be slow. "
     logger.warning(
         f"Patch shape {patch} with halo {patch_halo} gives a model "
-        f"input shape {model_input_shape(patch, patch_halo)}.\n"
+        f"input shape {geometry.model_input_shape(patch, patch_halo)}.\n"
         f"The Y/X patch is below {WARN_MIN_PATCH_XY} px, but "
         f"input is above the model's architectural minimum "
-        f"{min_input_shape(model)}.\n{inefficiency}\n"
+        f"{geometry.min_input}.\n{inefficiency}\n"
         "Reduce the model size or halo, or increase patch size."
     )
 
 
-def _check_patch_depth(model, raw_shape, patch, patch_halo) -> None:
-    """Reject patch depths the model cannot run on, before probing the device."""
-    if is_2d_model(model):  # 2D models predict one Z slice at a time
+def _check_patch_axes(geometry: ModelGeometry, raw_shape, patch, patch_halo) -> None:
+    """Reject patch layouts the model cannot run on, before probing the device."""
+    if geometry.is_2d:  # 2D models predict one Z slice at a time
         if patch is None:  # the derived patch has depth 1 and no Z halo
             return
         if patch[0] != 1:
@@ -77,17 +73,11 @@ def _check_patch_depth(model, raw_shape, patch, patch_halo) -> None:
                 "2D models predict one Z slice at a time. Set the Z halo to 0."
             )
         return
-    min_depth = min_input_depth(model)
+    min_depth = geometry.min_input[0]
     if patch is None and raw_shape[0] < min_depth:  # auto patches fit the image
         raise ValueError(
             f"This 3D model needs at least {min_depth} Z slices, but the image has "
             f"{raw_shape[0]}. Use a 2D model for images with fewer Z slices."
-        )
-    if patch is not None and patch[0] + 2 * patch_halo[0] < min_depth:
-        raise ValueError(
-            f"This 3D model needs at least {min_depth} Z slices per patch including "
-            f"halo, but patch {tuple(patch)} with halo {tuple(patch_halo)} has "
-            f"{patch[0] + 2 * patch_halo[0]}. Increase the Z patch size or halo."
         )
 
 
@@ -304,15 +294,12 @@ def unet_prediction(
         state = state["model_state_dict"]
     model.load_state_dict(state)
 
+    # One architecture traversal per prediction: the default halo, the
+    # pre-probe checks and the final validation all share this geometry.
+    geometry = model_geometry(model)
     if patch_halo is None:
-        try:
-            patch_halo = model_zoo.compute_3D_halo_for_pytorch3dunet(model)
-            logger.info(f"Computed theoretical minimum halo from model: {patch_halo}")
-        except Exception:
-            logger.warning(
-                "Could not compute halo from model. Using 0 halo size, you may experience edge artifacts."
-            )
-            patch_halo = (0, 0, 0)
+        patch_halo = geometry.halo
+        logger.info(f"Computed theoretical minimum halo from model: {patch_halo}")
 
     if input_layout == "YX":
         raw_shape = (1,) + raw.shape
@@ -324,7 +311,7 @@ def unet_prediction(
         raw_shape = raw.shape[1:]
 
     assert len(raw_shape) == 3
-    _check_patch_depth(model, raw_shape, patch, patch_halo)
+    _check_patch_axes(geometry, raw_shape, patch, patch_halo)
 
     auto_patch = patch is None
     if auto_patch:
@@ -337,11 +324,12 @@ def unet_prediction(
             both_sides=False,
             amp=amp,
             channels_last_3d=channels_last_3d,
+            geometry=geometry,
         )
 
-    check_min_input_shape(model, patch, patch_halo)
+    geometry.check_patch(patch, patch_halo)
     if auto_patch:
-        _warn_inefficient_auto_patch(model, patch, patch_halo)
+        _warn_inefficient_auto_patch(geometry, patch, patch_halo)
 
     oversized_dims = [
         f"{dim}: patch {p} > sample {s}"

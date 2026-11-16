@@ -8,7 +8,8 @@ import torch
 import panseg.core.zoo as zoo_module
 from panseg import FILE_BEST_MODEL_PYTORCH, FILE_CONFIG_TRAIN_YAML
 from panseg.core.zoo import Author, model_zoo
-from panseg.functionals.training.model import UNet2D, UNet3D
+from panseg.functionals.model_geometry import model_geometry
+from panseg.functionals.training.model import UNet2D
 from tests.conftest import IS_CUDA_AVAILABLE
 
 IN_GITHUB_ACTIONS = os.getenv("GITHUB_ACTIONS") == "true"
@@ -94,35 +95,20 @@ class TestBioImageIOModelZoo:
             state = state["model_state_dict"]
         model.load_state_dict(state)
 
-    @pytest.mark.parametrize("model_id", MODEL_IDS)
-    def test_halo_computation_for_bioimageio_model(self, model_id, biio_model):
+    @pytest.mark.parametrize(
+        ("model_id", "expected"),
+        [
+            ("efficient-chipmunk", (44, 44, 44)),
+            # 2D models predict one Z slice at a time
+            ("pioneering-rhino", (0, 44, 44)),
+        ],
+    )
+    def test_halo_computation_for_bioimageio_model(
+        self, model_id, expected, biio_model
+    ):
         """Compute the halo for a BioImage.IO model."""
         model, _ = biio_model(model_id)
-        halo = model_zoo.compute_halo(model)
-        assert halo == 44
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        # architecture kwargs of the efficient-chipmunk RDF
-        UNet3D(in_channels=1, out_channels=2, f_maps=16),
-        # architecture kwargs of the pioneering-rhino RDF
-        UNet2D(
-            in_channels=1,
-            out_channels=1,
-            final_sigmoid=True,
-            f_maps=64,
-            layer_order="gcr",
-            num_groups=8,
-            is_segmentation=True,
-        ),
-    ],
-    ids=["efficient-chipmunk", "pioneering-rhino"],
-)
-def test_halo_computation_local_models(model):
-    """Compute the halo for locally built models with the real models' RDF kwargs."""
-    assert model_zoo.compute_halo(model) == 44
+        assert model_geometry(model).halo == expected
 
 
 def test_dimensionality_filter_is_spatial_only():

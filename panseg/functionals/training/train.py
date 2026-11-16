@@ -19,6 +19,7 @@ from panseg import (
     PATH_TRAIN_TEMPLATE,
 )
 from panseg.core.zoo import model_zoo
+from panseg.functionals.model_geometry import model_geometry
 from panseg.functionals.precision import AmpSetting, validate_amp
 from panseg.functionals.prediction.utils.size_finder import find_batch_size
 from panseg.functionals.training.augs import Augmenter
@@ -417,12 +418,7 @@ def unet_training(
     np.save(checkpoint_dir / "test_in.npy", test_in.numpy())
     np.save(checkpoint_dir / "test_out.npy", test_out.detach().cpu().numpy())
 
-    try:
-        axis_min_sizes = np.min(
-            (model_zoo.compute_3D_halo_for_pytorch3dunet(net), patch_size), axis=0
-        )
-    except ValueError:
-        axis_min_sizes = patch_size
+    axis_min_sizes = np.min((model_geometry(net).halo, patch_size), axis=0)
 
     # Release everything the training run still holds before bioimageIO
     # validation: `test_model` instantiates a second full model on the training

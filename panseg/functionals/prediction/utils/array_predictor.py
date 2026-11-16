@@ -7,6 +7,7 @@ import tqdm
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
+from panseg.functionals.model_geometry import is_2d_model
 from panseg.functionals.precision import (
     AmpMode,
     AmpSetting,
@@ -21,7 +22,6 @@ from panseg.functionals.prediction.utils.array_dataset import (
 from panseg.functionals.prediction.utils.size_finder import (
     channels_last_3d_enabled,
     find_batch_size,
-    is_2d_model,
     is_oom_error,
     will_CUDA_OOM,
 )
