@@ -424,6 +424,21 @@ def test_unet_prediction_names_failing_yx_axes_below_architectural_minimum(
         _predict(dummy_model_3d_deep, raw, "ZYX", patch=(8, 7, 7), patch_halo=(0, 0, 0))
 
 
+def test_unet_prediction_auto_patch_rejects_small_image_before_probing(
+    dummy_model_3d_deep, monkeypatch
+):
+    """The image check must fail before any device probe is spent on it."""
+
+    def _probe_must_not_run(*args, **kwargs):
+        raise AssertionError("probed the device before rejecting the small image")
+
+    monkeypatch.setattr(size_finder, "probe_max_patch_shape", _probe_must_not_run)
+    raw = np.random.rand(8, 7, 7).astype("float32")
+
+    with pytest.raises(ValueError, match=r"Y \(7 < 8\)"):
+        _predict(dummy_model_3d_deep, raw, "ZYX", patch=None, patch_halo=(0, 0, 0))
+
+
 def test_unet_prediction_auto_patch_rejects_below_architectural_minimum(
     dummy_model_3d_deep,
 ):

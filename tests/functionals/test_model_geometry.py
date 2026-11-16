@@ -11,6 +11,7 @@ import pytest
 from torch import nn
 
 from panseg.functionals.model_geometry import (
+    is_2d_model,
     model_geometry,
     model_input_shape,
 )
@@ -18,6 +19,14 @@ from panseg.functionals.training.model import UNet2D, UNet3D
 
 
 class TestModelGeometryTraversal:
+    def test_is_2d_model_is_decided_by_the_spatial_layers(self):
+        model = UNet2D(1, 1, f_maps=[4, 4])
+
+        assert is_2d_model(model)
+        # wrappers are transparent: the spatial layers decide
+        assert is_2d_model(nn.Sequential(model))
+        assert not is_2d_model(UNet3D(1, 1, f_maps=[4, 4]))
+
     def test_unet3d_halo_and_min_input(self):
         model = UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4, 4, 4])
 

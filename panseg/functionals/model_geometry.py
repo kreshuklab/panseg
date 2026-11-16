@@ -29,7 +29,7 @@ from dataclasses import dataclass
 
 from torch import nn
 
-from panseg.functionals.training.model import InterpolateUpsampling, UNet2D
+from panseg.functionals.training.model import InterpolateUpsampling
 
 _POOLING_2D = (nn.MaxPool2d, nn.AvgPool2d)
 _POOLING_3D = (nn.MaxPool3d, nn.AvgPool3d)
@@ -40,18 +40,40 @@ _AXES_2D = (1, 2)
 _AXES_3D = (0, 1, 2)
 
 
+def _spatial_layer(module: nn.Module) -> tuple[tuple[int, ...], bool] | None:
+    """Return `(axes, is_pooling)` for a spatial layer, or None."""
+    if isinstance(module, _POOLING_3D):
+        return _AXES_3D, True
+    if isinstance(module, _POOLING_2D):
+        return _AXES_2D, True
+    if isinstance(module, _CONV_3D):
+        return _AXES_3D, False
+    if isinstance(module, _CONV_2D):
+        return _AXES_2D, False
+    return None
+
+
 def is_2d_model(model: nn.Module) -> bool:
-    """Whether `model` is a 2D U-Net, looking through transparent wrappers."""
-    while True:
-        if isinstance(model, nn.DataParallel):
-            model = model.module
-        elif hasattr(model, "_orig_mod"):  # torch.compile's OptimizedModule
-            model = model._orig_mod
-        else:
-            return isinstance(model, UNet2D)
+    """Whether `model` operates on 2D spatial data.
+
+    Decided by the model's own conv/pool layers, so wrappers such as
+    ``nn.DataParallel`` and ``torch.compile`` are transparent.
+    """
+    saw_2d = False
+    saw_3d = False
+    for module in model.modules():
+        spatial = _spatial_layer(module)
+        if spatial is None:
+            continue
+        axes, _ = spatial
+        saw_2d = saw_2d or len(axes) == 2
+        saw_3d = saw_3d or len(axes) == 3
+    return saw_2d and not saw_3d
 
 
-def _per_axis(kernel_size: int | tuple[int, ...], axes: tuple[int, ...]):
+def _per_axis(
+    kernel_size: int | tuple[int, ...], axes: tuple[int, ...]
+) -> tuple[int, ...]:
     """Broadcast an isotropic kernel size to one value per spatial axis."""
     if isinstance(kernel_size, int):
         return (kernel_size,) * len(axes)
@@ -133,30 +155,21 @@ def model_geometry(model: nn.Module) -> ModelGeometry:
     saw_3d = False
 
     for module in model.modules():
-        if isinstance(module, _POOLING_3D + _POOLING_2D):
-            is_3d = isinstance(module, _POOLING_3D)
-            axes = _AXES_3D if is_3d else _AXES_2D
-            for axis, size in zip(
-                axes,
-                _per_axis(module.kernel_size, axes),  # type: ignore[arg-type]
-            ):
+        spatial = _spatial_layer(module)
+        if spatial is None:
+            if isinstance(module, InterpolateUpsampling):
+                level -= 1
+            continue
+        axes, is_pooling = spatial
+        for axis, size in zip(axes, _per_axis(module.kernel_size, axes)):
+            if is_pooling:
                 min_input[axis] *= size
-            level += 1
-        elif isinstance(module, InterpolateUpsampling):
-            level -= 1
-            continue
-        elif isinstance(module, _CONV_3D + _CONV_2D):
-            is_3d = isinstance(module, _CONV_3D)
-            axes = _AXES_3D if is_3d else _AXES_2D
-            for axis, size in zip(
-                axes,
-                _per_axis(module.kernel_size, axes),  # type: ignore[arg-type]
-            ):
+            else:
                 halo[axis] += 2**level * (size // 2)
-        else:
-            continue
-        saw_3d = saw_3d or is_3d
-        saw_2d = saw_2d or not is_3d
+        if is_pooling:
+            level += 1
+        saw_2d = saw_2d or len(axes) == 2
+        saw_3d = saw_3d or len(axes) == 3
 
     return ModelGeometry(
         min_input=(min_input[0], min_input[1], min_input[2]),
