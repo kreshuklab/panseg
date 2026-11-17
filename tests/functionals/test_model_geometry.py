@@ -127,6 +127,10 @@ class TestModelGeometryTraversal:
         assert geometry.increment == (2, 2, 2)
         assert geometry.min_input != geometry.increment
         assert geometry.halo == (6, 6, 6)
+        # a kernel-3, stride-2 pool leaves a coarser output grid: only the
+        # aligned phase exists, and the replay must not invent others
+        table, _ = _reach_table(_ordered_ops(model), axis=0, increment=2)
+        assert set(table) == {0}
 
     def test_one_by_one_convs_get_their_reach_from_pooling(self):
         model = nn.Sequential(
@@ -217,27 +221,37 @@ def _avg_pool_oracle(model: nn.Module, model_input: int, axis: int, positions):
 class TestReachReplay:
     """The production reach table against a real autograd support."""
 
-    @pytest.mark.parametrize("seed", [0, 1, 2])
+    @pytest.mark.parametrize("f_maps", [[2, 2, 2], [2, 2, 2, 2]], ids=["3lvl", "4lvl"])
     @pytest.mark.parametrize("model_class", [UNet3D, UNet2D], ids=["3d", "2d"])
-    def test_the_reach_table_matches_the_autograd_support(self, seed, model_class):
-        torch.manual_seed(seed)
-        model = model_class(
-            in_channels=1,
-            out_channels=1,
-            f_maps=[2, 2, 2, 2],
-            layer_order="c",
-            final_sigmoid=True,
-        )
-        ops = _ordered_ops(model)
+    def test_the_reach_table_matches_the_autograd_support(self, f_maps, model_class):
         axis = 0 if model_class is UNet3D else 1
-        table, _ = _reach_table(ops, axis, increment=8)
+        increment = 2 ** (len(f_maps) - 1)
+        # sample one full period in the middle of the full-resolution grid,
+        # far enough from both edges for the deepest reach
+        positions = range(64, 64 + increment)
 
-        # M=128, positions 64..71: far enough from both edges for a 51 px reach
-        oracle = _avg_pool_oracle(
-            model, model_input=128, axis=axis, positions=range(64, 72)
-        )
-        for p, reach in oracle.items():
-            assert table[p % 8] == reach, (p, table[p % 8], reach)
+        supports = []
+        table = None
+        for seed in range(2):
+            torch.manual_seed(seed)
+            model = model_class(
+                in_channels=1,
+                out_channels=1,
+                f_maps=f_maps,
+                layer_order="c",
+                final_sigmoid=True,
+            )
+            table, _ = _reach_table(_ordered_ops(model), axis, increment)
+            supports.append(
+                _avg_pool_oracle(model, model_input=128, axis=axis, positions=positions)
+            )
+
+        # the union over seeds is the structural support; random weights only
+        # affect which of it has non-zero gradient
+        for position in positions:
+            left = min(support[position][0] for support in supports)
+            right = max(support[position][1] for support in supports)
+            assert table[position % increment] == (left, right), position
 
     def test_the_reach_table_matches_an_anisotropic_conv_stack(self):
         model = nn.Sequential(

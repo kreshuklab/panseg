@@ -330,8 +330,12 @@ def probe_max_patch_shape(
     channels_last_3d: bool = False,
     # ) -> tuple[int, int, int] | tuple[int, int]:
 ) -> tuple[int, int, int]:
-    """Determine the maximum feasible patch shape for a given model based on
+    """Determine the maximum feasible model-input shape for a given model based on
     available GPU memory using binary search.
+
+    The probe feeds an isotropic tensor of exactly this shape to the model, so
+    the result is a *model-input* budget: patch derivation treats its voxel
+    product as the budget for ``patch + 2 * halo``, not for the patch alone.
 
     Each probe is the real inference forward: eval mode, ``torch.no_grad()``,
     the same precision mode (`amp`) as the later prediction, and the requested
@@ -439,12 +443,12 @@ def find_feasible_patch_and_halo_shapes(
     """Recommend a patch shape and halo size that is verified to fit on the device.
 
     `probe_max_patch_shape` probes the GPU with isotropic inputs and returns a tight maximum
-    patch shape. `derive_patch_and_halo_shapes` then redistributes that voxel budget to match
-    the aspect ratio of the full volume, so the shape that is actually fed to the model at
-    prediction time can require more GPU memory than the probed maximum (peak memory does not
-    depend on the voxel count alone), and the amount of free memory can change between probing
-    and prediction. On such machines the batch size determination OOMs even for batch size 1
-    and prediction aborts (see issue #578).
+    model-input shape. `derive_patch_and_halo_shapes` then redistributes that voxel budget
+    to match the aspect ratio of the full volume, so the shape that is actually fed to the
+    model at prediction time can require more GPU memory than the probed maximum (peak memory
+    does not depend on the voxel count alone), and the amount of free memory can change
+    between probing and prediction. On such machines the batch size determination OOMs even
+    for batch size 1 and prediction aborts (see issue #578).
 
     To prevent that, the shape derived here is verified with an actual batch-size-1 forward
     pass via `will_CUDA_OOM`. If it does not fit, the voxel budget of the probed maximum is

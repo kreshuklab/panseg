@@ -240,6 +240,16 @@ def test_unet_prediction_manual_patch_below_64_px_does_not_warn(dummy_model, cap
     assert _prediction_warnings(caplog) == []
 
 
+def test_unet_prediction_pads_an_unaligned_input_to_the_phase_grid(dummy_model):
+    """The automatic path predicts on the aligned domain and crops back."""
+    raw = np.random.rand(15, 95, 97).astype("float32")
+
+    pmap = _predict(dummy_model, raw, "ZYX")
+
+    assert pmap.shape[-3:] == raw.shape
+    assert np.all(np.isfinite(pmap))
+
+
 def test_unet_prediction_manual_unaligned_halo_is_used_as_is(dummy_model):
     """Manual halos override the automatic derivation: no rounding, no clamping."""
     raw = np.random.rand(16, 96, 96).astype("float32")
@@ -397,6 +407,8 @@ def test_unet_prediction_3d_model_rejects_thin_image(
 def test_unet_prediction_3d_model_accepts_min_depth(
     dummy_model_3d_deep, raw_shape, patch, patch_halo
 ):
+    # The manual (2, 0, 0) halo is used verbatim: the Z model input is
+    # 4 + 2 * 2 = 8, exactly the architectural minimum.
     raw = np.random.rand(*raw_shape).astype("float32")
 
     pmap = _predict(dummy_model_3d_deep, raw, "ZYX", patch=patch, patch_halo=patch_halo)

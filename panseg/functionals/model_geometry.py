@@ -292,7 +292,6 @@ def _reach_table(
         positions = range(lo, max(lo + 1, hi))
         table: dict[int, tuple[int, int]] = {}
         interior = True
-        scale = model_input / final_size
         for q in positions:
             voxels = support[q]
             if not voxels:
@@ -300,10 +299,12 @@ def _reach_table(
             if min(voxels) <= 0 or max(voxels) >= model_input - 1:
                 interior = False
                 break
-            # The final output grid may be coarser than the model input (a
-            # model without upsampling); report the reach around the input
-            # position that cell represents.
-            anchor = int(round(q * scale))
+            # A U-Net output sits at full resolution and its index is the input
+            # position. A model without upsampling has a coarser output grid,
+            # where output `q` represents input cell `increment * q` (the
+            # per-axis product of the pooling strides); other phases do not
+            # occur and must not be invented.
+            anchor = q if final_size == model_input else q * increment
             phase = anchor % increment
             table.setdefault(phase, (anchor - min(voxels), max(voxels) - anchor))
         if interior and table:
