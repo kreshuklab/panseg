@@ -244,9 +244,7 @@ def test_unet_prediction_manual_unaligned_halo_is_used_as_is(dummy_model):
     """Manual halos override the automatic derivation: no rounding, no clamping."""
     raw = np.random.rand(16, 96, 96).astype("float32")
 
-    pmap = _predict(
-        dummy_model, raw, "ZYX", patch=(16, 40, 40), patch_halo=(1, 3, 3)
-    )
+    pmap = _predict(dummy_model, raw, "ZYX", patch=(16, 40, 40), patch_halo=(1, 3, 3))
 
     assert pmap.shape[-3:] == raw.shape
     assert np.all(np.isfinite(pmap))

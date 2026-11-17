@@ -79,9 +79,7 @@ class TestModelGeometryTraversal:
         assert model_geometry(model).halo in {STANDARD_HALO, (0, 48, 48)}
 
     def test_anisotropic_conv_kernels_contribute_per_axis(self):
-        model = nn.Sequential(
-            nn.Conv3d(1, 1, kernel_size=(1, 3, 5), padding=(0, 1, 2))
-        )
+        model = nn.Sequential(nn.Conv3d(1, 1, kernel_size=(1, 3, 5), padding=(0, 1, 2)))
 
         geometry = model_geometry(model)
 
@@ -224,7 +222,9 @@ class TestReachReplay:
         table, _ = _reach_table(ops, axis, increment=8)
 
         # M=128, positions 64..71: far enough from both edges for a 51 px reach
-        oracle = _avg_pool_oracle(model, model_input=128, axis=axis, positions=range(64, 72))
+        oracle = _avg_pool_oracle(
+            model, model_input=128, axis=axis, positions=range(64, 72)
+        )
         for p, reach in oracle.items():
             assert table[p % 8] == reach, (p, table[p % 8], reach)
 
@@ -249,8 +249,7 @@ class TestReachReplay:
         h, q = 40, 8
         m = q + 2 * h
         assert any(
-            h + t - table[t][0] <= 0 or h + t + table[t][1] >= m - 1
-            for t in range(8)
+            h + t - table[t][0] <= 0 or h + t + table[t][1] >= m - 1 for t in range(8)
         )
 
 
@@ -323,15 +322,12 @@ class TestEffectiveMinInput:
         assert all(pixels >= 1 for pixels in patch)
         # and that cropped tile is still a valid model input, aligned to the phase
         geometry.check_patch(patch)
-        assert (
-            tuple(
-                size % increment
-                for size, increment in zip(
-                    geometry.model_input_shape(patch), geometry.increment
-                )
+        assert tuple(
+            size % increment
+            for size, increment in zip(
+                geometry.model_input_shape(patch), geometry.increment
             )
-            == (0, 0, 0)
-        )
+        ) == (0, 0, 0)
 
     @pytest.mark.parametrize("model_class", [UNet3D, UNet2D], ids=["3d", "2d"])
     def test_the_effective_minimum_runs_through_a_real_unet(self, model_class):

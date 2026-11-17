@@ -585,7 +585,7 @@ class TestUnetTraining:
         # the description is built from the architecture's geometry, resolved once
         geometry = mock_model_desc.call_args.kwargs["geometry"]
         assert geometry.min_input == (4, 4, 4)
-        assert geometry.halo == (20, 20, 20)
+        assert geometry.halo == (24, 24, 24)
         assert (tmp_path / model_name / "test_in.npy").exists()
         assert (tmp_path / model_name / "test_out.npy").exists()
 

@@ -8,8 +8,8 @@ borders.
 
 This page derives, from the architecture alone, how many voxels of context a
 patch really needs. For the 4-level 3D U-Net used by the PanSeg models the
-answer is: the value computed today, 44 voxels per side, is a lower bound, not
-the receptive field. The receptive field reaches 51 voxels per side, and the
+answer is: the classic symmetric radius, 44 voxels per side, is a lower bound,
+not the receptive field. The receptive field reaches 51 voxels per side, and the
 smallest halo that is exact for the usual aligned patch sizes is 48.
 
 !!! note
@@ -35,7 +35,7 @@ two convolutions per level.
 | `k_pool` | Kernel size of the encoder pooling. | 2 |
 | `s_pool` | Stride of the encoder pooling; equals `k_pool` because `MaxPool` is created without an explicit stride. Each pooling cell reads the `k_pool` input cells below it, beginning with the one at its own index times `s_pool`. | 2 |
 | `P` | Phase period along an axis: the total downsampling, `2^(n_lev - 1)`. For this architecture it is also the axis entry of `min_input`, because every pooling layer halves; it is the number of output positions after which the network's behaviour repeats. | 8 |
-| `S` | Conv radius sum: every convolution's radius scaled by its level stride, `Σ r · s_ℓ` over all layers. This is the value `ModelGeometry.halo` returns today. | 44 |
+| `S` | Conv radius sum: every convolution's radius scaled by its level stride, `Σ r · s_ℓ` over all layers. This is the classic lower bound on each side's reach. | 44 |
 | `Q` | Patch size along the axis: the part of the predicted volume that is kept. | problem-specific |
 | `h` | Halo per side along the axis (`patch_halo`). | problem-specific |
 | `M` | Model input size along the axis, `M = Q + 2h`: the length of the tensor that is actually fed to the network. | `Q + 2h` |
@@ -59,11 +59,12 @@ interpolation to the size of the matching encoder feature map, concatenated with
 that encoder feature map, and then passed through `c` convolutions. A final 1×1
 convolution maps to the output channels and does not change the spatial layout.
 
-## How the halo is computed today
+## The classic halo bound
 
-`panseg.functionals.model_geometry.model_geometry` makes a single pass over the
-modules. It tracks the level `ℓ`, multiplies `min_input` by the pooling kernel
-when it meets a pool, decrements `ℓ` when it meets an upsampling layer, and adds
+`panseg.functionals.model_geometry` used to make a single pass over the
+modules and track the level `ℓ`: it multiplied `min_input`, i.e. the product of
+the pooling kernels, by the pooling kernel when it met a pool, decremented `ℓ`
+when it met an upsampling layer, and added
 
 ```
 halo[axis] += 2**level * (kernel_size // 2)
@@ -79,7 +80,9 @@ decoder:  2 · (4 + 2 + 1)     = 14
 
 This is the classic symmetric receptive-field radius. It is correct for a
 network made only of stride-1 convolutions, and it is the *smallest* reach the
-network ever has — but it is not the receptive field.
+network ever has — but it is not the receptive field. The implementation now
+replays the propagation rules below per axis and per phase and derives the
+exact halo from them; `S` survives only as the lower bound in this derivation.
 
 ## Computing the real receptive field
 
@@ -168,7 +171,7 @@ functions of `φ` here. With `S = 44` and `P = 8`:
 
 So the reach is not one number:
 
-* the **minimum** is `S = 44`, the value computed today;
+* the **minimum** is `S = 44`, the classic symmetric radius;
 * the **maximum** is `S + P - 1 = 51` per side;
 * the total width `L(p) + R(p)` is 91 or 99 voxels, never `2 · S = 88`.
 
@@ -310,28 +313,34 @@ value used below.
 
 ## Practical rule
 
-For a model whose per-axis `min_input` is `P` and whose conv radius sum is `S`:
+For a model whose per-axis phase period is `P` — the product of the pooling
+strides, which the implementation calls `increment` — and whose conv radius sum
+is `S`:
 
 1. compute the reach table per phase from the architecture, as above, or use the
    closed form when it applies;
-2. require `M % P == 0` for the model input, i.e. `patch + 2 · halo` is a
-   multiple of `min_input` on every axis, otherwise the reach grows;
-3. require `halo % P == 0` so that every crop starts at phase 0 of its model
-   input. Together with 2 this forces `patch % P == 0`, and the smallest such
-   halo is the first multiple of `P` that is at least `S + 2`, which is 48 here.
-   Align the patch origins (i.e. the stride) to `P` as well: otherwise
-   overlapping patches compute the same voxel at different phases, and a voxel
-   that is exact in one patch can be inexact in the next. If the exact minimum
-   matters, use the per-residue table above instead — it allows 46 or 47 for
-   some patch sizes, at the cost of that phase consistency;
-4. if the patch or the stride is not aligned to `P`, fall back to the
-   alignment-free 53, rounded up to a multiple of `P` → 56.
+2. pad the raw volume up to a multiple of `P` on every spatial axis, so the
+   patch, the stride and `patch + 2 · halo` are all multiples of `P`. Otherwise
+   the reach grows (`M mod P != 0` in the table above), and overlapping patches
+   compute the same voxel at different phases;
+3. apply the halo on **every** spatial axis, including axes that fit in a single
+   patch, and use the smallest multiple of `P` whose aligned crop is clean.
+   Together with 2 this forces `patch % P == 0`, and for the standard net the
+   smallest such halo is 48. If the exact minimum matters and the phase may vary
+   between patches, use the per-residue table above instead — it allows 46 or 47
+   for some patch sizes, at the cost of that phase consistency;
+4. manual patch/halo overrides are used verbatim: no rounding, no alignment
+   check, no clamping. Artefacts and inefficiency then are the caller's choice.
+
+The alignment-free 53 (rounded up to 56) is the fallback for consumers that
+cannot align their model input. PanSeg does not use it: it pads the input domain
+instead, so the declared BioImage.IO step is the contract.
 
 For the 4-level 3D U-Net of the PanSeg models this yields
 
 | Quantity | Value |
 | --- | --- |
-| `S` (today's `ModelGeometry.halo`) | 44 |
+| `S` (classic symmetric radius) | 44 |
 | worst-case reach per side, `S + P - 1` | 51 |
 | smallest halo, aligned (`patch` a multiple of 8) | 48 |
 | smallest alignment-free halo | 53 |
@@ -339,7 +348,15 @@ For the 4-level 3D U-Net of the PanSeg models this yields
 
 A 2D U-Net does not pool along z, so the z entry of `P` is 1, the z reach has a
 single phase, and the z halo is 0. The y and x axes behave exactly like the z
-axis of the 3D model: 44 today, 48 when the patch dimension is a multiple of 8.
+axis of the 3D model: 44 as the classic radius, 48 when the patch dimension is a
+multiple of 8.
+
+!!! note
+    `GroupNorm` couples all spatial positions of a feature map, so for models
+    with `gcr` layers "exact" means free of *convolution-border* artefacts: the
+    support argument bounds what a convolution can see, not the normalization
+    statistics. The z-slice regression test below is unaffected because its
+    data is constant along z.
 
 ## Verification
 
@@ -348,8 +365,8 @@ volume made of one z slice repeated 64 times. Every z slice of the input is
 identical, so every predicted z slice must be identical too; the only way a
 slice can differ is by seeing the artificial border of a patch. With a patch
 depth and a halo satisfying the rules above the maximum deviation is at most
-`1e-9`, while a model input that is not a multiple of `P` leaves deviations up
-to `2 · 10^-4`:
+`6e-8` (float32 noise), while a model input that is not a multiple of `P` leaves
+deviations up to `2 · 10^-4`:
 
 | patch `Q` | halo `h` | model input `M` | identical slices (atol `1e-4`) |
 | --- | --- | --- | --- |
@@ -361,8 +378,9 @@ to `2 · 10^-4`:
 
 ## References
 
-* `panseg.functionals.model_geometry` — the implementation that computes `S`
-  today, and the source of the notation used here.
+* `panseg.functionals.model_geometry` — the implementation that replays the
+  supports, derives `increment` and computes the exact halo, and the source of
+  the notation used here.
 * For the classic receptive-field argument behind `S`, see
   <https://doi.org/10.6028/jres.126.009>.
 * The z-slice invariance test in `tests/tasks/test_prediction_tasks.py`

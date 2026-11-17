@@ -263,9 +263,7 @@ def derive_patch_and_halo_shapes(
             tuple(int(h) for h in halo_shape),
         )
 
-    max_patch = _round_down(
-        np.minimum(shape_volume, shape_patch_max), shape_increment
-    )
+    max_patch = _round_down(np.minimum(shape_volume, shape_patch_max), shape_increment)
     max_patch = np.maximum(max_patch, shape_increment)
     max_model_input = max_patch + 2 * halo_shape
 

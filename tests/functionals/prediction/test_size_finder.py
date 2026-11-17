@@ -87,7 +87,9 @@ def test_the_budget_sizes_the_model_input_not_the_patch():
 
 
 def test_minimum_model_input_above_the_budget_raises():
-    with pytest.raises(RuntimeError, match="already exceeds the available voxel budget"):
+    with pytest.raises(
+        RuntimeError, match="already exceeds the available voxel budget"
+    ):
         derive_patch_and_halo_shapes(
             (16, 10, 10), (10, 10, 10), (4, 4, 4), increment=INCREMENT_3D
         )
@@ -115,7 +117,9 @@ def test_derived_shapes_are_aligned_and_fit_the_budget_2d(
 
     assert patch[0] == 1 and halo[0] == 0
     assert all(p % i == 0 for p, i in zip(patch, INCREMENT_2D))
-    assert all(p <= s for p, s in zip(patch[1:], _aligned(full_volume_shape, INCREMENT_2D)[1:]))
+    assert all(
+        p <= s for p, s in zip(patch[1:], _aligned(full_volume_shape, INCREMENT_2D)[1:])
+    )
     assert np.prod(np.array(patch) + np.array(halo) * 2) <= np.prod(max_patch_shape)
     # the halo is applied to Y/X even when the volume fits in one patch
     assert halo[1:] == min_halo_shape[1:]
@@ -169,7 +173,9 @@ def test_auto_derived_shapes_pass_check_patch(full_volume_shape):
     geometry.check_patch(patch, halo)
     assert all(
         size % period == 0
-        for size, period in zip(geometry.model_input_shape(patch, halo), geometry.increment)
+        for size, period in zip(
+            geometry.model_input_shape(patch, halo), geometry.increment
+        )
     )
 
 

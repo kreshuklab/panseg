@@ -316,6 +316,7 @@ def unet_prediction(
     # One architecture traversal per prediction: the default halo, the
     # pre-probe checks and the final validation all share this geometry.
     geometry = model_geometry(model)
+    user_halo = patch_halo is not None
     if patch_halo is None:
         patch_halo = geometry.halo
         logger.info(f"Computed theoretical minimum halo from model: {patch_halo}")
@@ -338,6 +339,11 @@ def unet_prediction(
     domain_shape = geometry.aligned_shape(raw_shape)
     auto_patch = patch is None
     if auto_patch:
+        if user_halo:
+            logger.info(
+                f"Using the manually specified halo {patch_halo} while deriving a "
+                "phase-aligned patch."
+            )
         patch, patch_halo = find_feasible_patch_and_halo_shapes(
             model,
             model_config["in_channels"],
