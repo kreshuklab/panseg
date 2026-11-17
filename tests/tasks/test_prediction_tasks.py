@@ -32,6 +32,7 @@ from panseg.core.image import (
 from panseg.functionals.model_geometry import ModelGeometry
 from panseg.functionals.training.biio import make_model_description
 from panseg.functionals.training.model import UNet3D
+from panseg.io.h5 import load_h5, read_h5_voxel_size
 from panseg.io.voxelsize import VoxelSize
 from panseg.tasks.prediction_tasks import biio_prediction_task, unet_prediction_task
 
@@ -69,6 +70,61 @@ def test_unet_prediction_task(shape, layout, model_name):
     assert result.image_layout == property.image_layout
     assert result.voxel_size == property.voxel_size
     assert result.shape == mock_data.shape
+
+
+# Tolerance on the per-voxel difference between predicted z slices of a raw
+# volume that is one slice repeated along z: the slices are identical going in,
+# so a 3D model must predict identical slices going out (float32 noise only).
+Z_SLICE_ATOL = 1e-4
+
+
+@pytest.mark.slow
+def test_unet_prediction_task_z_slice_invariance(h5_file):
+    """A raw volume of one z slice repeated must predict identical z slices.
+
+    `generic_confocal_3D_unet` is a 3D model: in a direction along which the
+    raw data does not change, its prediction must not change either. The first
+    z slice of the sample ovule is repeated along z, so every predicted z slice
+    is expected to match. Deviations mean that patch/halo border handling leaks
+    into the prediction (the first and last slices get the least context).
+    """
+    n_z = 64
+    raw = load_h5(h5_file, key="raw")
+    voxel_size = read_h5_voxel_size(h5_file, key="raw")
+    data = np.repeat(raw[:1].astype("float32"), n_z, axis=0)
+
+    image = PanSegImage(
+        data=data,
+        properties=ImageProperties(
+            name="z_stack",
+            voxel_size=voxel_size,
+            semantic_type=SemanticType.RAW,
+            image_layout=ImageLayout.ZYX,
+            original_voxel_size=voxel_size,
+        ),
+    )
+
+    result = unet_prediction_task(
+        image=image,
+        model_name="generic_confocal_3D_unet",
+        model_id=None,
+        device="cpu",
+        disable_tqdm=True,
+    )
+
+    assert len(result) == 1
+    pmap = result[0].get_data()
+    assert pmap.shape == data.shape
+
+    reference_z = n_z // 2
+    deviation = np.abs(pmap - pmap[reference_z]).reshape(n_z, -1).max(axis=1)
+    deviating = np.flatnonzero(deviation > Z_SLICE_ATOL)
+    assert deviating.size == 0, (
+        f"{deviating.size} of {n_z} predicted z slices differ from slice "
+        f"{reference_z} by more than {Z_SLICE_ATOL}.\n"
+        f"Deviating z slices: {deviating.tolist()}\n"
+        f"Max abs deviation per z slice: {np.round(deviation, 5).tolist()}"
+    )
 
 
 @pytest.mark.slow
