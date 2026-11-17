@@ -56,6 +56,10 @@ _CONV_3D = (nn.Conv3d,)
 _AXES_2D = (1, 2)
 _AXES_3D = (0, 1, 2)
 
+# Captured at import so a patched `torch.nn.DataParallel` (tests, plugins) does
+# not break the unwrapping below.
+_DATA_PARALLEL = nn.DataParallel
+
 # Upper bound on the replay size multiplier. `_reach_table` doubles it until the
 # sampled positions are safely in the interior, so a few doublings suffice for
 # every realistic architecture; the cap only protects against a malformed model.
@@ -167,17 +171,19 @@ def _module_ops(module: nn.Module) -> list[_Op]:
                 strides=_full_axes(stride, axes, 1),
             )
         ]
-    return [
-        _Conv(
-            radii=tuple(
-                radius // 2 for radius in _full_axes(module.kernel_size, axes, 1)
-            )
-        )
-    ]
+    radii = _full_axes(module.kernel_size, axes, 1)
+    return [_Conv(radii=(radii[0] // 2, radii[1] // 2, radii[2] // 2))]
 
 
 def _ordered_ops(model: nn.Module) -> list[_Op]:
     """Ordered operations of `model`, with encoder skips marked for the decoder."""
+    # DataParallel and torch.compile wrap the architecture transparently; the
+    # spatial layers, and with them the encoder/decoder structure, are inside.
+    while isinstance(model, _DATA_PARALLEL):
+        model = model.module
+    if hasattr(model, "_orig_mod"):  # torch.compile's OptimizedModule
+        model = model._orig_mod
+
     if not isinstance(model, AbstractUNet):
         return _module_ops(model)
 

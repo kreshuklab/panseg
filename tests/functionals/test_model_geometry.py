@@ -102,6 +102,17 @@ class TestModelGeometryTraversal:
         assert geometry.increment == (2, 2, 2)
         assert geometry.halo == (6, 6, 6)
 
+    def test_anisotropic_pooling_sets_the_per_axis_period(self):
+        model = nn.Sequential(
+            nn.MaxPool3d(kernel_size=(2, 4, 4)),
+            nn.Conv3d(1, 1, 3),
+        )
+
+        geometry = model_geometry(model)
+
+        assert geometry.min_input == (2, 4, 4)
+        assert geometry.increment == (2, 4, 4)
+
     def test_pool_kernel_and_stride_can_differ(self):
         """A kernel-3, stride-2 pool runs on 3 cells but steps the phase by 2."""
         model = nn.Sequential(

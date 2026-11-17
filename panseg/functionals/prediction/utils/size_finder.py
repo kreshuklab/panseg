@@ -259,8 +259,8 @@ def derive_patch_and_halo_shapes(
     # halo: the halo is needed even when the volume is not tiled.
     if int(np.prod(shape_volume + 2 * halo_shape)) <= budget:
         return (
-            tuple(int(size) for size in shape_volume),
-            tuple(int(h) for h in halo_shape),
+            _int_tuple3(shape_volume),
+            _int_tuple3(halo_shape),
         )
 
     max_patch = _round_down(np.minimum(shape_volume, shape_patch_max), shape_increment)
@@ -269,8 +269,8 @@ def derive_patch_and_halo_shapes(
 
     if int(np.prod(max_model_input)) <= budget:
         return (
-            tuple(int(size) for size in max_patch),
-            tuple(int(h) for h in halo_shape),
+            _int_tuple3(max_patch),
+            _int_tuple3(halo_shape),
         )
 
     # Binary-search the largest fraction of the per-axis maximum that fits the
@@ -307,7 +307,11 @@ def derive_patch_and_halo_shapes(
             break
 
     patch = best - 2 * halo_shape
-    return tuple(int(size) for size in patch), tuple(int(h) for h in halo_shape)
+    return _int_tuple3(patch), _int_tuple3(halo_shape)
+
+
+def _int_tuple3(shape) -> tuple[int, int, int]:
+    return (int(shape[0]), int(shape[1]), int(shape[2]))
 
 
 def _round_up(shape, increment):
