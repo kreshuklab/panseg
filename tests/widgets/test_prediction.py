@@ -153,14 +153,14 @@ def test_update_halo(segmentation_tab):
     segmentation_tab.prediction_widgets.update_halo()
     assert w_unet.patch_size.value == (128, 128, 128)
     assert w_unet.patch_size[0].enabled
-    assert w_unet.patch_halo.value == (44, 44, 44)
+    assert w_unet.patch_halo.value == (48, 48, 48)
     assert w_unet.patch_halo[0].enabled
 
     w_unet.model_name.value = "confocal_2D_unet_ovules_ds2x"
     segmentation_tab.prediction_widgets.update_halo()
     assert w_unet.patch_size.value == (1, 128, 128)
     assert not w_unet.patch_size[0].enabled
-    assert w_unet.patch_halo.value == (0, 44, 44)
+    assert w_unet.patch_halo.value == (0, 48, 48)
     assert not w_unet.patch_halo[0].enabled
 
 

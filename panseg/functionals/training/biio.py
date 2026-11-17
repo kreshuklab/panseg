@@ -234,10 +234,12 @@ def pad_to_effective_minimum(
     return torch.nn.functional.pad(test_in, pads)
 
 
-def _input_axis(axis_id: str, minimum: int, scale: float, unit: str) -> SpaceInputAxis:
+def _input_axis(
+    axis_id: str, minimum: int, step: int, scale: float, unit: str
+) -> SpaceInputAxis:
     return SpaceInputAxis(
         id=AxisId(axis_id),
-        size=ParameterizedSize(min=minimum, step=1),
+        size=ParameterizedSize(min=minimum, step=step),
         scale=scale,
         unit=unit,
     )
@@ -286,16 +288,18 @@ def make_model_description(
     """Build the BioImage.IO description of a trained model.
 
     `geometry` supplies every architecture-dependent shape fact, including
-    whether the axes are 2D or 3D. Output axes with a halo get a
-    `SpaceOutputAxisWithHalo` declaring the true `geometry.halo`; that is what
-    lets external consumers tile with enough overlap. `bioimageio.spec` requires
-    at least one pixel of interior after cropping the halo
-    (`input_minimum - 2 * halo >= 1`), so the input axes declare
-    `geometry.effective_min_input`, the smallest tile that both runs and leaves
-    a non-empty artifact-free interior. Zero-halo axes declare
-    `geometry.min_input` and stay plain output axes. Callers package test
-    tensors that satisfy these minima; `train.py` pads the training patch up to
-    them with `pad_to_effective_minimum` when needed.
+    whether the axes are 2D or 3D. Input axes declare the effective minimum as
+    their `min` and the phase period as their `step`: tiles that are not a
+    multiple of the period compute the same voxel at a different phase and can
+    carry artefacts. Output axes with a halo get a `SpaceOutputAxisWithHalo`
+    declaring the true `geometry.halo`; that is what lets external consumers
+    tile with enough overlap. `bioimageio.spec` requires at least one pixel of
+    interior after cropping the halo (`input_minimum - 2 * halo >= 1`), so the
+    input axes declare `geometry.effective_min_input`, the smallest tile that
+    both runs, leaves a non-empty artifact-free interior and is step-valid.
+    Zero-halo axes declare their effective minimum and stay plain output axes.
+    Callers package test tensors that satisfy these minima; `train.py` pads the
+    training patch up to them with `pad_to_effective_minimum` when needed.
     """
     # input and output axes share the same scale/unit pair: the output axis sizes
     # are declared as SizeReferences to the input axes
@@ -306,10 +310,12 @@ def make_model_description(
     if geometry.is_2d:
         axis_ids = ("y", "x")
         halos = geometry.halo[1:]
+        increments = geometry.increment[1:]
         scales = ((y_scale, y_unit), (x_scale, x_unit))
     else:
         axis_ids = ("z", "y", "x")
         halos = geometry.halo
+        increments = geometry.increment
         scales = ((z_scale, z_unit), (y_scale, y_unit), (x_scale, x_unit))
 
     minima = geometry.tensor_effective_min_input()
@@ -320,8 +326,10 @@ def make_model_description(
             channel_names=[Identifier(f"in_ch_{i}") for i in range(in_channels)]
         ),
         *(
-            _input_axis(axis_id, minimum, scale, unit)
-            for axis_id, minimum, (scale, unit) in zip(axis_ids, minima, scales)
+            _input_axis(axis_id, minimum, step, scale, unit)
+            for axis_id, minimum, step, (scale, unit) in zip(
+                axis_ids, minima, increments, scales
+            )
         ),
     ]
 
