@@ -95,6 +95,7 @@ def export_image_task(
     data_type: str = "uint16",
     export_mesh: Optional[str] = None,
     close_mesh: bool = False,
+    overwrite: bool = False,
 ) -> None:
     """
     Task wrapper for saving an PanSegImage object to disk.
@@ -108,6 +109,8 @@ def export_image_task(
         scale_to_origin (bool): scale the voxel size to the original one
         export_format (str): file format (tiff, h5, zarr)
         data_type (str): data type to save the image.
+        overwrite (bool): replace an OME-Zarr image or label already present
+            at the target key (zarr only).
     """
     save_image(
         image=image,
@@ -119,6 +122,7 @@ def export_image_task(
         data_type=data_type,
         export_mesh=export_mesh,
         close_mesh=close_mesh,
+        overwrite=overwrite,
     )
     return None
 

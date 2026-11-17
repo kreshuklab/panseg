@@ -49,6 +49,20 @@ def tensor_to_spy(monkeypatch):
     return calls
 
 
+try:
+    import clearscale  # noqa: F401
+
+    HAS_CLEARSCALE = True
+except ImportError:
+    # clearscale is not yet a declared PanSeg dependency (pending its first
+    # PyPI release, #622): OME-Zarr tests skip without it.
+    HAS_CLEARSCALE = False
+
+requires_clearscale = pytest.mark.skipif(
+    not HAS_CLEARSCALE, reason="clearscale not installed (OME-Zarr support, #622)"
+)
+
+
 @pytest.fixture
 def napari_raw():
     data = np.random.rand(10, 10, 10)

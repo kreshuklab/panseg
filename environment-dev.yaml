@@ -46,4 +46,5 @@ dependencies:
   - torchvision==0.28.0
   - pip:
       - markdown-exec
+      - clearscale==0.9.0rc1
       - -e .

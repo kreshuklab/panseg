@@ -6,11 +6,13 @@ from magicgui import magic_factory
 from magicgui.widgets import ComboBox, Container, Label
 from napari.layers import Image, Labels, Layer
 from psygnal import Signal
+from qtpy.QtWidgets import QMessageBox
 
 from panseg import logger
-from panseg.core.image import PanSegImage
+from panseg.core.image import PanSegImage, zarr_export_target
+from panseg.io.ome_zarr import ome_zarr_slot_occupied
 from panseg.tasks.io_tasks import export_image_task, merge_channels_task
-from panseg.tasks.workflow_handler import workflow_handler
+from panseg.tasks.workflow_handler import Task_message, workflow_handler
 from panseg.viewer_napari import log
 from panseg.viewer_napari.widgets.utils import div, get_layers
 from panseg.workflow_gui.editor import Workflow_gui
@@ -161,7 +163,9 @@ class Output_Tab:
         },
         key={
             "label": "Key",
-            "tooltip": "Key to be used in the h5 or zarr file.",
+            "tooltip": "Name of the image group the export is written to "
+            "or the key for h5. In ome.zarr's Images are exported to <key>, segmentations "
+            "to <key>/labels/segmentation.",
         },
         export_mesh={
             "label": "Export Mesh",
@@ -223,11 +227,35 @@ class Output_Tab:
                     )
                     return
                 images.append(PanSegImage.from_napari_layer(selection.value))
-            ps_image = merge_channels_task(
+            merged = merge_channels_task(
                 **{f"image_{i}": image for i, image in enumerate(images)}
             )
+            if isinstance(merged, Task_message):
+                log(merged.message, thread=merged.name, level=merged.level)
+                return
+            if not isinstance(merged, PanSegImage):
+                log(
+                    "Choose all channels or adjust the number of channels!",
+                    thread="Output",
+                    level="WARNING",
+                )
+                return
+            ps_image = merged
         if export_mesh == "No":
             export_mesh = None
+
+        overwrite = False
+        if export_format == "zarr":
+            target, label_name = zarr_export_target(ps_image, directory, name_pattern)
+            if ome_zarr_slot_occupied(target, key, label_name):
+                if not self._confirm_overwrite(target):
+                    log(
+                        f"Export to {target.name} cancelled.",
+                        thread="Output",
+                        level="info",
+                    )
+                    return
+                overwrite = True
 
         timer = time.time()
         log("export_image_task started", thread="Output", level="info")
@@ -241,6 +269,7 @@ class Output_Tab:
             data_type=data_type,
             export_mesh=export_mesh,
             close_mesh=close_mesh,
+            overwrite=overwrite,
         )
         timer = time.time() - timer
         log(
@@ -265,6 +294,18 @@ class Output_Tab:
             return
         self.widget_export_image.key.show()
 
+    def _confirm_overwrite(self, target: Path) -> bool:
+        """Ask before exporting into an occupied zarr slot. True = overwrite."""
+        answer = QMessageBox.question(
+            None,
+            "Overwrite existing data?",
+            f"'{target.name}' already holds an image or label at the selected key.\n"
+            "Overwrite it?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
+
     def _on_images_changed(self, image: Image | Labels | None):
         if image is None:
             self._toggle_export_details_widgets(False)
@@ -286,9 +327,7 @@ class Output_Tab:
         if isinstance(image, Labels) or isinstance(image, Image):
             self._toggle_export_details_widgets(True)
             self._toggle_key(True)
-            self.widget_export_image.key.value = (
-                "raw" if isinstance(image, Image) else "segmentation"
-            )
+            self.widget_export_image.key.value = "image"
 
             if (
                 isinstance(image, Labels)
