@@ -1,11 +1,11 @@
 """Tests for the shared model-geometry helpers.
 
 `model_geometry` is the single place that derives architecture-dependent input
-geometry from a model: the smallest input each axis accepts (`min_input`) and
-the context each side needs for an exact output (`halo`). Both come from one
-per-axis traversal so they cannot diverge, and `effective_min_input` combines
-them into the smallest tile that both runs and can be cropped. Every consumer
-(prediction, training, the viewer, the model zoo) asks the same module.
+geometry from a model: the smallest input each axis accepts (`min_input`), the
+phase period it steps by (`increment`) and the context each side needs for an
+exact output (`halo`). The halo is replayed from the architecture's ordered
+layers, never assumed from a closed form, so the reach table is checked against
+a real autograd support here.
 """
 
 import pytest
@@ -14,11 +14,17 @@ from torch import nn
 
 from panseg.functionals.model_geometry import (
     ModelGeometry,
+    _exact_halo,
+    _ordered_ops,
+    _reach_table,
     is_2d_model,
     model_geometry,
     model_input_shape,
 )
 from panseg.functionals.training.model import UNet2D, UNet3D
+
+STANDARD_HALO = (48, 48, 48)
+STANDARD_EFFECTIVE_MINIMUM = (104, 104, 104)
 
 
 class TestModelGeometryTraversal:
@@ -30,23 +36,25 @@ class TestModelGeometryTraversal:
         assert is_2d_model(nn.Sequential(model))
         assert not is_2d_model(UNet3D(1, 1, f_maps=[4, 4]))
 
-    def test_unet3d_halo_and_min_input(self):
+    def test_unet3d_halo_increment_and_min_input(self):
         model = UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4, 4, 4])
 
         geometry = model_geometry(model)
 
-        # three 2x pools on every axis, and the classic 44 px U-Net halo
+        # three 2x pools on every axis; the exact halo is 48, not the classic 44
         assert geometry.min_input == (8, 8, 8)
-        assert geometry.halo == (44, 44, 44)
+        assert geometry.increment == (8, 8, 8)
+        assert geometry.halo == STANDARD_HALO
         assert not geometry.is_2d
 
-    def test_unet2d_has_no_z_halo_and_stays_one_slice_deep(self):
+    def test_unet2d_has_no_z_geometry_and_stays_one_slice_deep(self):
         model = UNet2D(in_channels=1, out_channels=1, f_maps=[4, 4, 4, 4])
 
         geometry = model_geometry(model)
 
         assert geometry.min_input == (1, 8, 8)
-        assert geometry.halo == (0, 44, 44)
+        assert geometry.increment == (1, 8, 8)
+        assert geometry.halo == (0, 48, 48)
         assert geometry.is_2d
 
     @pytest.mark.parametrize(
@@ -67,16 +75,19 @@ class TestModelGeometryTraversal:
         ],
         ids=["efficient-chipmunk", "pioneering-rhino"],
     )
-    def test_rdf_architectures_keep_the_44_px_halo(self, model):
-        assert model_geometry(model).halo in {(44, 44, 44), (0, 44, 44)}
+    def test_rdf_architectures_use_the_exact_halo(self, model):
+        assert model_geometry(model).halo in {STANDARD_HALO, (0, 48, 48)}
 
     def test_anisotropic_conv_kernels_contribute_per_axis(self):
-        model = nn.Sequential(nn.Conv3d(1, 1, kernel_size=(1, 3, 5)))
+        model = nn.Sequential(
+            nn.Conv3d(1, 1, kernel_size=(1, 3, 5), padding=(0, 1, 2))
+        )
 
         geometry = model_geometry(model)
 
-        # kernel // 2: 0 on Z, 1 on Y, 2 on X
-        assert geometry.halo == (0, 1, 2)
+        # a conv-only axis has a single phase; its halo is the per-axis radius + 1
+        assert geometry.increment == (1, 1, 1)
+        assert geometry.halo == (0, 2, 3)
 
     def test_average_pooling_counts_like_max_pooling(self):
         model = nn.Sequential(
@@ -87,16 +98,28 @@ class TestModelGeometryTraversal:
 
         geometry = model_geometry(model)
 
-        # both convs sit one level down: 2 * (1 + 1)
-        assert geometry.halo == (4, 4, 4)
+        # pooling cell 2q feeds 2q, 2q+1; two convs at that level add radius 2
+        # per side, so each output needs [2q-4, 2q+5] -> halo 6
         assert geometry.min_input == (2, 2, 2)
+        assert geometry.increment == (2, 2, 2)
+        assert geometry.halo == (6, 6, 6)
 
-    def test_pooling_kernel_multiplies_min_input_per_axis(self):
-        model = nn.Sequential(nn.MaxPool3d(kernel_size=(2, 4, 4)))
+    def test_pool_kernel_and_stride_can_differ(self):
+        """A kernel-3, stride-2 pool runs on 3 cells but steps the phase by 2."""
+        model = nn.Sequential(
+            nn.MaxPool3d(kernel_size=3, stride=2),
+            nn.Conv3d(1, 1, 3),
+            nn.Conv3d(1, 1, 3),
+        )
 
-        assert model_geometry(model).min_input == (2, 4, 4)
+        geometry = model_geometry(model)
 
-    def test_one_by_one_convs_need_no_halo_but_still_need_the_pooled_input(self):
+        assert geometry.min_input == (3, 3, 3)
+        assert geometry.increment == (2, 2, 2)
+        assert geometry.min_input != geometry.increment
+        assert geometry.halo == (6, 6, 6)
+
+    def test_one_by_one_convs_get_their_reach_from_pooling(self):
         model = nn.Sequential(
             nn.MaxPool3d(2),
             nn.MaxPool3d(2),
@@ -107,8 +130,17 @@ class TestModelGeometryTraversal:
 
         geometry = model_geometry(model)
 
-        assert geometry.halo == (0, 0, 0)
+        # the 1x1 convs add no radius; a pooled output still reads a whole
+        # 8-voxel cell, so the halo is one full phase period
         assert geometry.min_input == (8, 8, 8)
+        assert geometry.increment == (8, 8, 8)
+        assert geometry.halo == (8, 8, 8)
+
+    def test_transposed_convolutions_are_rejected(self):
+        model = nn.Sequential(nn.ConvTranspose3d(1, 1, 2, stride=2))
+
+        with pytest.raises(NotImplementedError, match="transposed convolution"):
+            model_geometry(model)
 
     @pytest.mark.parametrize(
         "config",
@@ -116,17 +148,13 @@ class TestModelGeometryTraversal:
             {"f_maps": [4, 4]},
             {"f_maps": [4, 4, 4, 4]},
             {"f_maps": 8, "num_levels": 5},
-            {"f_maps": [4, 4, 4, 4], "conv_kernel_size": 5, "pool_kernel_size": 2},
-            {"f_maps": [4, 4, 4, 4], "conv_kernel_size": 7, "pool_kernel_size": 4},
         ],
     )
     @pytest.mark.parametrize("model_class", [UNet3D, UNet2D])
-    def test_theoretical_halo_always_reaches_the_architectural_minimum(
-        self, model_class, config
-    ):
+    def test_halo_always_reaches_the_architectural_minimum(self, model_class, config):
         """`halo + 1 >= min_input` on every axis a model pools.
 
-        The automatic path derives patches with the theoretical halo, so this
+        The automatic path derives patches with the exact halo, so this
         invariant is what keeps every auto-derived shape valid.
         """
         geometry = model_geometry(model_class(1, 1, **config))
@@ -137,41 +165,145 @@ class TestModelGeometryTraversal:
             assert halo + 1 >= minimum
 
 
+def _avg_pool_oracle(model: nn.Module, model_input: int, axis: int, positions):
+    """Per-position `(left, right)` reach from autograd, on float64 tensors.
+
+    Avg pooling replaces max pooling so the gradient follows every input voxel
+    of a pooling cell; max pooling would follow only the argmax and
+    under-report the structural support. Returns `{p: (left, right)}`.
+    """
+    model = model.double()
+    for name, module in list(model.named_modules()):
+        if isinstance(module, (nn.MaxPool2d, nn.MaxPool3d)):
+            parent = model
+            parts = name.split(".")
+            for part in parts[:-1]:
+                parent = getattr(parent, part)
+            pooling = nn.AvgPool2d if isinstance(module, nn.MaxPool2d) else nn.AvgPool3d
+            setattr(
+                parent,
+                parts[-1],
+                pooling(module.kernel_size, module.stride or module.kernel_size),
+            )
+
+    is_2d = isinstance(model, UNet2D)
+    spatial = [model_input] * (2 if is_2d else 3)
+    x = torch.zeros([1, 1, *spatial], dtype=torch.float64)
+    result = {}
+    for p in positions:
+        x.grad = None
+        x.requires_grad_(True)
+        out = model(x)
+        index = [0, 0] + [model_input // 2] * len(spatial)
+        index[axis + 2 - (1 if is_2d else 0)] = p
+        out[tuple(index)].backward()
+        nonzero = torch.nonzero(x.grad[0, 0])
+        axis_index = axis - 1 if is_2d else axis
+        low = int(nonzero[:, axis_index].min())
+        high = int(nonzero[:, axis_index].max())
+        result[p] = (p - low, high - p)
+    return result
+
+
+class TestReachReplay:
+    """The production reach table against a real autograd support."""
+
+    @pytest.mark.parametrize("seed", [0, 1, 2])
+    @pytest.mark.parametrize("model_class", [UNet3D, UNet2D], ids=["3d", "2d"])
+    def test_the_reach_table_matches_the_autograd_support(self, seed, model_class):
+        torch.manual_seed(seed)
+        model = model_class(
+            in_channels=1,
+            out_channels=1,
+            f_maps=[2, 2, 2, 2],
+            layer_order="c",
+            final_sigmoid=True,
+        )
+        ops = _ordered_ops(model)
+        axis = 0 if model_class is UNet3D else 1
+        table, _ = _reach_table(ops, axis, increment=8)
+
+        # M=128, positions 64..71: far enough from both edges for a 51 px reach
+        oracle = _avg_pool_oracle(model, model_input=128, axis=axis, positions=range(64, 72))
+        for p, reach in oracle.items():
+            assert table[p % 8] == reach, (p, table[p % 8], reach)
+
+    def test_the_reach_table_matches_an_anisotropic_conv_stack(self):
+        model = nn.Sequential(
+            nn.Conv3d(1, 1, kernel_size=(1, 3, 5), padding=(0, 1, 2)),
+            nn.Conv3d(1, 1, kernel_size=(3, 1, 5), padding=(1, 0, 2)),
+        )
+        ops = _ordered_ops(model)
+
+        for axis in range(3):
+            table, _ = _reach_table(ops, axis, increment=1)
+            oracle = _avg_pool_oracle(model, model_input=16, axis=axis, positions=[8])
+            assert table[0] == oracle[8], axis
+
+    def test_the_derived_halo_is_minimal(self):
+        model = UNet3D(1, 1, f_maps=[4, 4, 4, 4])
+        table, _ = _reach_table(_ordered_ops(model), 0, increment=8)
+
+        assert _exact_halo(table, 8) == 48
+        # one phase period less leaves at least one crop position unclean
+        h, q = 40, 8
+        m = q + 2 * h
+        assert any(
+            h + t - table[t][0] <= 0 or h + t + table[t][1] >= m - 1
+            for t in range(8)
+        )
+
+
 class TestEffectiveMinInput:
-    """`effective_min_input` = smallest input that runs *and* can be cropped."""
+    """`effective_min_input` = smallest input that runs, crops and stays aligned."""
 
-    def test_applies_the_halo_floor(self):
-        geometry = ModelGeometry(min_input=(8, 8, 8), halo=(44, 44, 44), is_2d=False)
+    def test_applies_the_halo_floor_and_rounds_to_the_increment(self):
+        geometry = ModelGeometry(
+            min_input=(8, 8, 8),
+            increment=(8, 8, 8),
+            halo=STANDARD_HALO,
+            is_2d=False,
+        )
 
-        assert geometry.effective_min_input == (89, 89, 89)
+        assert geometry.effective_min_input == STANDARD_EFFECTIVE_MINIMUM
 
     def test_keeps_min_input_where_it_already_exceeds_the_floor(self):
-        geometry = ModelGeometry(min_input=(16, 32, 64), halo=(4, 8, 12), is_2d=False)
+        geometry = ModelGeometry(
+            min_input=(16, 32, 64), increment=(8, 8, 8), halo=(4, 8, 12), is_2d=False
+        )
 
         assert geometry.effective_min_input == (16, 32, 64)
 
     def test_a_zero_halo_axis_keeps_its_min_input(self):
-        geometry = ModelGeometry(min_input=(8, 16, 16), halo=(0, 4, 4), is_2d=False)
+        geometry = ModelGeometry(
+            min_input=(8, 16, 16), increment=(8, 8, 8), halo=(0, 4, 4), is_2d=False
+        )
 
         assert geometry.effective_min_input == (8, 16, 16)
 
     def test_tensor_variant_uses_yx_for_2d(self):
-        geometry = ModelGeometry(min_input=(1, 4, 4), halo=(0, 20, 20), is_2d=True)
+        geometry = ModelGeometry(
+            min_input=(1, 4, 4), increment=(1, 8, 8), halo=(0, 20, 20), is_2d=True
+        )
 
-        assert geometry.effective_min_input == (1, 41, 41)
-        assert geometry.tensor_effective_min_input() == (41, 41)
+        assert geometry.effective_min_input == (1, 48, 48)
+        assert geometry.tensor_effective_min_input() == (48, 48)
 
     def test_tensor_variant_keeps_z_for_3d(self):
-        geometry = ModelGeometry(min_input=(8, 8, 8), halo=(44, 44, 44), is_2d=False)
+        geometry = ModelGeometry(
+            min_input=(8, 8, 8),
+            increment=(8, 8, 8),
+            halo=STANDARD_HALO,
+            is_2d=False,
+        )
 
-        assert geometry.tensor_effective_min_input() == (89, 89, 89)
+        assert geometry.tensor_effective_min_input() == STANDARD_EFFECTIVE_MINIMUM
 
     @pytest.mark.parametrize(
         "config",
         [
             {"f_maps": [4, 4, 4, 4]},
             {"f_maps": 8, "num_levels": 5},
-            {"f_maps": [4, 4, 4, 4], "conv_kernel_size": 5, "pool_kernel_size": 2},
         ],
     )
     @pytest.mark.parametrize("model_class", [UNet3D, UNet2D])
@@ -189,16 +321,21 @@ class TestEffectiveMinInput:
         )
 
         assert all(pixels >= 1 for pixels in patch)
-        # and that cropped tile is still a valid model input
+        # and that cropped tile is still a valid model input, aligned to the phase
         geometry.check_patch(patch)
+        assert (
+            tuple(
+                size % increment
+                for size, increment in zip(
+                    geometry.model_input_shape(patch), geometry.increment
+                )
+            )
+            == (0, 0, 0)
+        )
 
     @pytest.mark.parametrize("model_class", [UNet3D, UNet2D], ids=["3d", "2d"])
     def test_the_effective_minimum_runs_through_a_real_unet(self, model_class):
-        """`2 * halo + 1` is odd, so the decoder must cope with odd sizes.
-
-        The decoder resizes to the encoder feature maps instead of assuming a
-        factor-2 relationship, which is why an odd artifact-free tile runs.
-        """
+        """The effective minimum is aligned, so the decoder sees exact halvings."""
         model = model_class(in_channels=1, out_channels=1, f_maps=[4, 4, 4, 4])
         geometry = model_geometry(model)
         shape = geometry.tensor_effective_min_input()
@@ -207,6 +344,20 @@ class TestEffectiveMinInput:
             out = model(torch.zeros(1, 1, *shape))
 
         assert tuple(out.shape[2:]) == shape
+
+
+class TestAlignedShape:
+    def test_rounds_each_axis_up_to_its_increment(self):
+        geometry = ModelGeometry(
+            min_input=(1, 8, 8), increment=(1, 8, 8), halo=(0, 48, 48), is_2d=True
+        )
+
+        assert geometry.aligned_shape((7, 101, 128)) == (7, 104, 128)
+
+    def test_leaves_an_aligned_shape_unchanged(self):
+        geometry = model_geometry(UNet3D(1, 1, f_maps=[4, 4, 4, 4]))
+
+        assert geometry.aligned_shape((16, 104, 8)) == (16, 104, 8)
 
 
 class TestModelInputShape:
@@ -221,10 +372,10 @@ class TestModelInputShape:
     def test_tensor_shape_keeps_z_for_3d_models(self):
         geometry = model_geometry(UNet3D(1, 1, f_maps=[4, 4, 4, 4]))
 
-        assert geometry.tensor_input_shape((8, 16, 16), (4, 44, 44)) == (
-            16,
-            104,
-            104,
+        assert geometry.tensor_input_shape((8, 16, 16), (8, 48, 48)) == (
+            24,
+            112,
+            112,
         )
 
 
@@ -250,8 +401,13 @@ class TestCheckPatch:
         geometry.check_patch((4, 4, 4), (2, 2, 2))
 
     def test_uses_the_theoretical_halo_when_none_is_given(self, geometry):
-        # a tiny patch is fine with the 44 px halo
+        # a tiny patch is fine with the 48 px halo
         geometry.check_patch((1, 1, 1))
+
+    def test_does_not_gate_on_alignment_or_manual_halo(self, geometry):
+        """Manual halos are used verbatim; only runnability is enforced."""
+        # unaligned patch and halo, but the model input is large enough
+        geometry.check_patch((8, 8, 8), (3, 0, 0))
 
     def test_2d_model_rejects_a_z_halo_larger_than_the_minimum(self):
         geometry = model_geometry(UNet2D(1, 1, f_maps=[4, 4, 4, 4]))
