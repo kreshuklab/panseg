@@ -153,7 +153,7 @@ def test_add_crop_shapes_layer_2d(preprocessing_tab, napari_raw_2d, mocker):
     preprocessing_tab._add_crop_shapes_layer(viewer)
 
     viewer.add_shapes.assert_called_once_with(
-        ndim=2, scale=(0.25, 0.125), units=("um", "um")
+        ndim=2, scale=(0.25, 0.125), units=(None, None)
     )
 
 
@@ -225,13 +225,14 @@ def test_add_crop_shapes_layer_keeps_shared_units(
 def test_add_crop_shapes_layer_no_selection(preprocessing_tab, mocker):
     viewer = mocker.Mock()
     viewer.layers.extent.step = (1.0, 1.0, 1.0)
+    viewer.layers.units = None
     preprocessing_tab.widget_layer_select.layer.choices = (None,)
     preprocessing_tab.widget_layer_select.layer.value = None
 
     preprocessing_tab._add_crop_shapes_layer(viewer)
 
     viewer.add_shapes.assert_called_once_with(
-        ndim=3, scale=(1.0, 1.0, 1.0), units=("um", "um", "um")
+        ndim=3, scale=(1.0, 1.0, 1.0), units=(None, None, None)
     )
 
 

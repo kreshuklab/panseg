@@ -323,11 +323,15 @@ class Preprocessing_Tab:
         """
         layer = self.widget_layer_select.layer.value
         if not isinstance(layer, (Image, Labels)):
-            # No image to align with: the shape layer spans the whole viewer,
-            # whose spatial axes are micrometers.
-            viewer.add_shapes(
-                ndim=3, scale=viewer.layers.extent.step, units=("um", "um", "um")
-            )
+            # No image to align with: the shape layer spans the whole viewer.
+            # Take the viewer's units (napari zips units from the last axis);
+            # without consistent viewer units, stay unitless, i.e. in pixels.
+            units = viewer.layers.units
+            if units is None:
+                units = (None, None, None)
+            else:
+                units = (None,) * max(0, 3 - len(units)) + tuple(units[-3:])
+            viewer.add_shapes(ndim=3, scale=viewer.layers.extent.step, units=units)
             return
         ps_image = PanSegImage.from_napari_layer(layer)
         axis_indices = ps_image.image_layout.spatial_axis_indices
