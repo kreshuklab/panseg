@@ -74,8 +74,9 @@ def test_unet_prediction_task(shape, layout, model_name):
 
 # Tolerance on the per-voxel difference between predicted z slices of a raw
 # volume that is one slice repeated along z: the slices are identical going in,
-# so a 3D model must predict identical slices going out (float32 noise only).
-Z_SLICE_ATOL = 1e-4
+# so a 3D model must predict identical slices going out (float32 noise only;
+# the pre-fix deviation was 2e-4).
+Z_SLICE_ATOL = 1e-7
 
 
 @pytest.mark.slow
@@ -123,7 +124,7 @@ def test_unet_prediction_task_z_slice_invariance(h5_file):
         f"{deviating.size} of {n_z} predicted z slices differ from slice "
         f"{reference_z} by more than {Z_SLICE_ATOL}.\n"
         f"Deviating z slices: {deviating.tolist()}\n"
-        f"Max abs deviation per z slice: {np.round(deviation, 5).tolist()}"
+        f"Max abs deviation per z slice: {np.round(deviation, 8).tolist()}"
     )
 
 
@@ -298,7 +299,10 @@ def test_biio_prediction_task_mock_model_parameterized(tmp_path):
             feature_maps=[8, 16],
             final_sigmoid=MOCK_UNET_KWARGS["final_sigmoid"],
             geometry=ModelGeometry(
-                min_input=(16, 32, 64), halo=(4, 8, 12), is_2d=False
+                min_input=(16, 32, 64),
+                increment=(8, 8, 8),
+                halo=(4, 8, 12),
+                is_2d=False,
             ),
             layer_order="bcr",
             modality="confocal",

@@ -168,9 +168,9 @@ def test_unet_prediction_auto_patch_below_64_px_warns_once(
     warnings = _prediction_warnings(caplog)
     assert len(warnings) == 1
     message = warnings[0].getMessage()
-    assert "(16, 40, 40)" in message  # derived patch
+    assert "(14, 44, 42)" in message  # derived patch
     assert "(0, 4, 4)" in message  # halo
-    assert "(16, 48, 48)" in message  # resulting model input shape
+    assert "(14, 52, 50)" in message  # resulting model input shape
     assert "(2, 2, 2)" in message  # architectural minimum
     assert "64" in message  # legacy heuristic
     assert "Most of the model input is halo" in message
@@ -240,10 +240,22 @@ def test_unet_prediction_manual_patch_below_64_px_does_not_warn(dummy_model, cap
     assert _prediction_warnings(caplog) == []
 
 
+def test_unet_prediction_manual_unaligned_halo_is_used_as_is(dummy_model):
+    """Manual halos override the automatic derivation: no rounding, no clamping."""
+    raw = np.random.rand(16, 96, 96).astype("float32")
+
+    pmap = _predict(
+        dummy_model, raw, "ZYX", patch=(16, 40, 40), patch_halo=(1, 3, 3)
+    )
+
+    assert pmap.shape[-3:] == raw.shape
+    assert np.all(np.isfinite(pmap))
+
+
 def test_unet_prediction_rejects_manual_patch_bigger_than_sample(dummy_model):
     raw = np.random.rand(8, 64, 64).astype("float32")
 
-    with pytest.raises(ValueError, match="bigger than the sample shape"):
+    with pytest.raises(ValueError, match="bigger than the aligned domain shape"):
         unet_prediction(
             raw=raw,
             input_layout="ZYX",

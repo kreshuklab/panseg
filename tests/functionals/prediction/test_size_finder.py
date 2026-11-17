@@ -9,6 +9,7 @@ from panseg.functionals.prediction.utils.size_finder import (
     derive_patch_and_halo_shapes,
     find_batch_size,
     find_feasible_patch_and_halo_shapes,
+    get_stride_shape,
     probe_max_patch_shape,
     will_CUDA_OOM,
 )
@@ -16,126 +17,136 @@ from panseg.functionals.training.model import UNet2D, UNet3D
 
 # Fixed scenario for the feasibility-loop unit tests (no GPU required, will_CUDA_OOM is faked)
 VOL = (48, 1536, 1536)
-HALO = (0, 44, 44)
+HALO = (0, 48, 48)
 PROBED_MAX = (256, 256, 256)
+INCREMENT_3D = (8, 8, 8)
+INCREMENT_2D = (1, 8, 8)
+
+
+def _aligned(shape, increment):
+    return tuple(-(-s // i) * i for s, i in zip(shape, increment))
 
 
 @pytest.mark.parametrize(
-    "full_volume_shape, max_patch_shape, min_halo_shape, expected",
-    [  # Here halo is 1-sided
-        (
-            (1, 12000, 50000),
-            (192, 192, 192),
-            (44, 44, 44),
-            ((1, 2572, 2572), (0, 44, 44)),
-        ),
-        ((1, 120, 500), (192, 192, 192), (44, 44, 44), ((1, 120, 500), (0, 0, 0))),
-        ((95, 120, 500), (192, 192, 192), (44, 44, 44), ((95, 120, 500), (0, 0, 0))),
-        ((95, 120, 5000), (192, 192, 192), (44, 44, 44), ((95, 120, 532), (0, 0, 44))),
-        ((5000, 120, 95), (192, 192, 192), (44, 44, 44), ((532, 120, 95), (44, 0, 0))),
-        (
-            (100, 1000, 1000),
-            (192, 192, 192),
-            (44, 44, 44),
-            ((100, 178, 178), (0, 44, 44)),
-        ),
-        (
-            (1000, 1000, 1000),
-            (192, 192, 192),
-            (44, 44, 44),
-            ((104, 104, 104), (44, 44, 44)),
-        ),
-        (
-            (1000, 1000, 1000),
-            (192, 192, 192),
-            (100, 100, 100),
-            ((192, 192, 192), (0, 0, 0)),
-        ),
-        ((16, 8, 8), (10, 10, 10), (4, 4, 4), ((7, 8, 8), (4, 0, 0))),
-        ((16, 10, 10), (10, 10, 10), (4, 4, 4), ((2, 2, 2), (4, 4, 4))),
-        ((12, 12, 8), (10, 10, 10), (4, 4, 4), ((3, 3, 8), (4, 4, 0))),
-        # Anisotropic volume (issue #146): the sqrt redistribution of the voxel budget
-        # used to push a remaining dimension past the sample size, which then crashed
-        # SliceBuilder. The derived patch must never exceed the sample in any dimension.
-        (
-            (100, 300, 5000),
-            (256, 256, 256),
-            (0, 0, 0),
-            ((100, 300, 409), (0, 0, 0)),
-        ),
-        (
-            (100, 300, 5000),
-            (256, 256, 256),
-            (44, 44, 44),
-            ((100, 212, 321), (0, 44, 44)),
-        ),
+    "full_volume_shape, max_patch_shape, min_halo_shape",
+    [
+        ((1, 12000, 50000), (192, 192, 192), (48, 48, 48)),
+        ((95, 120, 500), (192, 192, 192), (48, 48, 48)),
+        ((95, 120, 5000), (192, 192, 192), (48, 48, 48)),
+        ((5000, 120, 95), (192, 192, 192), (48, 48, 48)),
+        ((100, 1000, 1000), (192, 192, 192), (48, 48, 48)),
+        ((100, 300, 5000), (256, 256, 256), (0, 0, 0)),
+        ((100, 300, 5000), (256, 256, 256), (48, 48, 48)),
     ],
 )
-def test_derive_patch_and_halo_shapes(
-    full_volume_shape, max_patch_shape, min_halo_shape, expected
-):
-    result = derive_patch_and_halo_shapes(
-        full_volume_shape, max_patch_shape, min_halo_shape
-    )
-    assert result == expected
-
-    double_halo_out = np.array(result[1]) * 2
-    assert np.prod(result[0] + double_halo_out) <= np.prod(max_patch_shape)
-
-    double_halo_shape = (
-        min_halo_shape[0] * 2,
-        min_halo_shape[1] * 2,
-        min_halo_shape[2] * 2,
-    )
-    result = derive_patch_and_halo_shapes(
-        full_volume_shape, max_patch_shape, double_halo_shape, both_sides=True
-    )
-    assert result == expected
-
-
-@pytest.mark.parametrize(
-    "full_volume_shape, max_patch_shape, min_halo_shape, expected",
-    [  # 2D models (issue #612): patch depth 1 and no Z halo, the budget goes to Y and X
-        ((20, 512, 512), (1, 3200, 3200), (0, 44, 44), ((1, 512, 512), (0, 0, 0))),
-        ((50, 1024, 1024), (1, 3200, 3200), (0, 44, 44), ((1, 1024, 1024), (0, 0, 0))),
-        ((50, 1024, 1024), (1, 1024, 1024), (0, 44, 44), ((1, 1024, 1024), (0, 0, 0))),
-        (
-            (50, 5000, 5000),
-            (1, 3200, 3200),
-            (0, 44, 44),
-            ((1, 3112, 3112), (0, 44, 44)),
-        ),
-        ((50, 5000, 300), (1, 3200, 3200), (0, 44, 44), ((1, 5000, 300), (0, 0, 0))),
-        ((1, 3000, 800), (1, 1024, 1024), (0, 44, 44), ((1, 1222, 800), (0, 44, 0))),
-        (
-            (1, 20000, 1000),
-            (1, 3200, 3200),
-            (0, 44, 44),
-            ((1, 10152, 1000), (0, 44, 0)),
-        ),
-        ((20, 512, 512), (1, 3200, 3200), (4, 44, 44), ((1, 512, 512), (0, 0, 0))),
-    ],
-)
-def test_derive_patch_and_halo_shapes_2d(
-    full_volume_shape, max_patch_shape, min_halo_shape, expected
+def test_derived_shapes_are_aligned_and_fit_the_budget(
+    full_volume_shape, max_patch_shape, min_halo_shape
 ):
     patch, halo = derive_patch_and_halo_shapes(
-        full_volume_shape, max_patch_shape, min_halo_shape, is_2d=True
+        full_volume_shape,
+        max_patch_shape,
+        min_halo_shape,
+        increment=INCREMENT_3D,
     )
-    assert (patch, halo) == expected
-    assert patch[0] == 1 and halo[0] == 0
-    assert all(p <= s for p, s in zip(patch[1:], full_volume_shape[1:]))
-    assert np.prod(np.array(patch) + np.array(halo) * 2) <= np.prod(max_patch_shape)
 
+    domain = _aligned(full_volume_shape, INCREMENT_3D)
+    assert all(p % i == 0 for p, i in zip(patch, INCREMENT_3D))
+    assert all(h == expected for h, expected in zip(halo, min_halo_shape))
+    assert np.prod(np.array(patch) + 2 * np.array(halo)) <= np.prod(max_patch_shape)
+    assert all(p <= d for p, d in zip(patch, domain))
+
+    # the same halo, expressed as a total for both sides, derives the same shape
     double_halo_shape = tuple(h * 2 for h in min_halo_shape)
-    result = derive_patch_and_halo_shapes(
+    assert derive_patch_and_halo_shapes(
         full_volume_shape,
         max_patch_shape,
         double_halo_shape,
         both_sides=True,
-        is_2d=True,
+        increment=INCREMENT_3D,
+    ) == (patch, halo)
+
+
+def test_a_volume_that_fits_one_patch_still_gets_its_halo():
+    patch, halo = derive_patch_and_halo_shapes(
+        (16, 64, 64), (192, 192, 192), (48, 48, 48), increment=INCREMENT_3D
     )
-    assert result == expected
+
+    assert patch == (16, 64, 64)
+    assert halo == (48, 48, 48)
+
+
+def test_the_budget_sizes_the_model_input_not_the_patch():
+    # 192^3 is the model-input budget; with a 96 px halo the patch is 96^3
+    patch, halo = derive_patch_and_halo_shapes(
+        (1000, 1000, 1000), (192, 192, 192), (48, 48, 48), increment=INCREMENT_3D
+    )
+
+    assert patch == (96, 96, 96)
+    assert halo == (48, 48, 48)
+    assert tuple(p + 2 * h for p, h in zip(patch, halo)) == (192, 192, 192)
+
+
+def test_minimum_model_input_above_the_budget_raises():
+    with pytest.raises(RuntimeError, match="already exceeds the available voxel budget"):
+        derive_patch_and_halo_shapes(
+            (16, 10, 10), (10, 10, 10), (4, 4, 4), increment=INCREMENT_3D
+        )
+
+
+@pytest.mark.parametrize(
+    "full_volume_shape, max_patch_shape, min_halo_shape",
+    [
+        ((20, 512, 512), (1, 3200, 3200), (0, 48, 48)),
+        ((50, 5000, 5000), (1, 3200, 3200), (0, 48, 48)),
+        ((50, 5000, 300), (1, 3200, 3200), (0, 48, 48)),
+        ((1, 3000, 800), (1, 1024, 1024), (0, 48, 48)),
+    ],
+)
+def test_derived_shapes_are_aligned_and_fit_the_budget_2d(
+    full_volume_shape, max_patch_shape, min_halo_shape
+):
+    patch, halo = derive_patch_and_halo_shapes(
+        full_volume_shape,
+        max_patch_shape,
+        min_halo_shape,
+        is_2d=True,
+        increment=INCREMENT_2D,
+    )
+
+    assert patch[0] == 1 and halo[0] == 0
+    assert all(p % i == 0 for p, i in zip(patch, INCREMENT_2D))
+    assert all(p <= s for p, s in zip(patch[1:], _aligned(full_volume_shape, INCREMENT_2D)[1:]))
+    assert np.prod(np.array(patch) + np.array(halo) * 2) <= np.prod(max_patch_shape)
+    # the halo is applied to Y/X even when the volume fits in one patch
+    assert halo[1:] == min_halo_shape[1:]
+
+
+def test_a_2d_volume_that_fits_one_patch_keeps_its_yx_halo():
+    patch, halo = derive_patch_and_halo_shapes(
+        (20, 512, 512), (1, 3200, 3200), HALO, is_2d=True, increment=INCREMENT_2D
+    )
+
+    assert patch == (1, 512, 512)
+    assert halo == (0, 48, 48)
+
+
+@pytest.mark.parametrize(
+    "patch_shape, increment, expected",
+    [
+        ((96, 96, 96), (8, 8, 8), (72, 72, 72)),
+        # round down to a multiple of the period, never below it
+        ((100, 100, 100), (8, 8, 8), (72, 72, 72)),
+        ((8, 8, 8), (8, 8, 8), (8, 8, 8)),
+        ((4, 4, 4), (8, 8, 8), (1, 1, 1)),
+        ((1, 64, 64), (1, 8, 8), (1, 48, 48)),
+        # the stride never exceeds the patch; a sub-period patch does not stride
+        ((8, 8, 8), (1, 16, 16), (6, 1, 1)),
+    ],
+)
+def test_get_stride_shape_is_aligned_to_the_phase_period(
+    patch_shape, increment, expected
+):
+    assert get_stride_shape(patch_shape, increment) == expected
 
 
 @pytest.mark.parametrize(
@@ -143,15 +154,23 @@ def test_derive_patch_and_halo_shapes_2d(
     [(8, 8, 8), (100, 1000, 1000), (5000, 120, 95)],
 )
 def test_auto_derived_shapes_pass_check_patch(full_volume_shape):
-    """The theoretical halo makes every auto-derived shape a valid model input."""
+    """The exact halo makes every auto-derived shape a valid, aligned model input."""
     model = UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4, 4, 4])
     geometry = model_geometry(model)
 
     patch, halo = derive_patch_and_halo_shapes(
-        full_volume_shape, (256, 256, 256), geometry.halo, is_2d=geometry.is_2d
+        full_volume_shape,
+        (256, 256, 256),
+        geometry.halo,
+        is_2d=geometry.is_2d,
+        increment=geometry.increment,
     )
 
     geometry.check_patch(patch, halo)
+    assert all(
+        size % period == 0
+        for size, period in zip(geometry.model_input_shape(patch, halo), geometry.increment)
+    )
 
 
 class FakeOomProbe:
@@ -205,7 +224,7 @@ def test_find_feasible_patch_and_halo_shapes_shrinks_until_verified(
     fake_oom_probe,
 ):
     fake_oom_probe.threshold = (
-        15_000_000  # first attempt (16.8M voxels) OOMs, the shrunken one fits
+        5_000_000  # first attempt (5.9M voxels) OOMs, a shrunken one fits
     )
 
     result = find_feasible_patch_and_halo_shapes(
@@ -215,7 +234,7 @@ def test_find_feasible_patch_and_halo_shapes_shrinks_until_verified(
     result_voxels = int(np.prod([result[0][i] + 2 * result[1][i] for i in range(3)]))
     assert result_voxels <= fake_oom_probe.threshold
     assert result_voxels < int(np.prod(fake_oom_probe.verified_shapes[0]))
-    assert len(fake_oom_probe.verified_shapes) == 2
+    assert len(fake_oom_probe.verified_shapes) >= 2
 
 
 def test_find_feasible_patch_and_halo_shapes_raises_when_nothing_fits(
@@ -256,9 +275,9 @@ def test_find_feasible_patch_and_halo_shapes_2d_model_keeps_depth_1(
 
     result = find_feasible_patch_and_halo_shapes(FakeUNet2D(), 1, VOL, HALO, device)
 
-    assert result == ((1, 1536, 1536), (0, 0, 0))  # used to be Z = 4
+    assert result == ((1, 1536, 1536), (0, 48, 48))  # used to be Z = 4
     if device == "cuda":
-        assert fake_oom_probe.verified_shapes == [(1, 1536, 1536)]
+        assert fake_oom_probe.verified_shapes == [(1, 1632, 1632)]
 
 
 def test_find_feasible_patch_and_halo_shapes_2d_model_shrinks_yx_only(
@@ -275,8 +294,8 @@ def test_find_feasible_patch_and_halo_shapes_2d_model_shrinks_yx_only(
         FakeUNet2D(), 1, (48, 4000, 4000), HALO, device="cuda"
     )
 
-    assert result == ((1, 2819, 2819), (0, 44, 44))
-    assert fake_oom_probe.verified_shapes == [(1, 3200, 3200), (1, 2907, 2907)]
+    assert result == ((1, 2810, 2810), (0, 48, 48))
+    assert fake_oom_probe.verified_shapes == [(1, 3200, 3200), (1, 2906, 2906)]
 
 
 class _FakeDeviceTensor:

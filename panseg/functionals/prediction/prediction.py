@@ -332,12 +332,16 @@ def unet_prediction(
     assert len(raw_shape) == 3
     _check_patch_axes(geometry, raw_shape, patch, patch_halo)
 
+    # Predict on an aligned domain: SliceBuilder flushes the last patch start
+    # to `i - k`, which stays on the phase grid only when the domain is a
+    # multiple of the increment. Reflect-pad the domain, crop the prediction back.
+    domain_shape = geometry.aligned_shape(raw_shape)
     auto_patch = patch is None
     if auto_patch:
         patch, patch_halo = find_feasible_patch_and_halo_shapes(
             model,
             model_config["in_channels"],
-            raw_shape,
+            domain_shape,
             patch_halo,
             device,
             both_sides=False,
@@ -351,14 +355,14 @@ def unet_prediction(
         _warn_inefficient_auto_patch(geometry, patch, patch_halo)
 
     oversized_dims = [
-        f"{dim}: patch {p} > sample {s}"
-        for dim, p, s in zip(("Z", "Y", "X"), patch, raw_shape)
+        f"{dim}: patch {p} > domain {s}"
+        for dim, p, s in zip(("Z", "Y", "X"), patch, domain_shape)
         if p > s
     ]
     if oversized_dims:
         raise ValueError(
-            f"Patch shape {tuple(patch)} is bigger than the sample shape "
-            f"{tuple(raw_shape)} in: {', '.join(oversized_dims)}. "
+            f"Patch shape {tuple(patch)} is bigger than the aligned domain shape "
+            f"{tuple(domain_shape)} in: {', '.join(oversized_dims)}. "
             "Reduce the patch size, or leave it unset to derive a feasible one."
         )
 
@@ -391,8 +395,9 @@ def unet_prediction(
     raw = raw.astype("float32")
     augs = get_test_augmentations(
         raw
-    )  # using full raw to compute global normalization mean and std
-    stride = get_stride_shape(patch, (1, 1, 1))
+    )  # normalization stats of the original raw, before the domain pad
+    raw = _pad_to_aligned_domain(raw, domain_shape, multichannel_input)
+    stride = get_stride_shape(patch, geometry.increment)
     slice_builder = SliceBuilder(
         raw, label_dataset=None, patch_shape=patch, stride_shape=stride
     )
@@ -406,4 +411,18 @@ def unet_prediction(
     )
 
     pmaps = predictor(test_dataset)  # pmaps either (C, Z, Y, X) or (C, Y, X)
-    return pmaps
+    # crop the aligned domain back to the requested sample
+    return pmaps[..., : raw_shape[0], : raw_shape[1], : raw_shape[2]]
+
+
+def _pad_to_aligned_domain(
+    raw: np.ndarray, domain_shape: tuple[int, int, int], multichannel: bool
+) -> np.ndarray:
+    """Reflect-pad `raw` at the high end up to `domain_shape` (Z, Y, X)."""
+    pads = [domain - size for domain, size in zip(domain_shape, raw.shape[-3:])]
+    if not any(pads):
+        return raw
+    widths = [(0, pad) for pad in pads]
+    if multichannel:
+        widths = [(0, 0)] + widths
+    return np.pad(raw, widths, mode="reflect")
