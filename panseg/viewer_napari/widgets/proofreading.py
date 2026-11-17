@@ -1,6 +1,7 @@
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 import h5py
 import napari
@@ -25,6 +26,8 @@ DEFAULT_KEY_BINDING_CLEAN = "j"
 SCRIBBLES_LAYER_NAME = "Scribbles"
 CORRECTED_CELLS_LAYER_NAME = "Correct Labels"
 MAX_UNDO_ACTIONS = 10
+
+_T = TypeVar("_T")
 
 correct_cells_cmap = CyclicLabelColormap(
     colors=[
@@ -69,6 +72,7 @@ class ProofreadingHandler:
         """Initializes the ProofreadingHandler with an inactive state."""
         self._state = ProofreadingState()
         self._scale = None
+        self._units = None
 
     # Proofreading state properties
     @property
@@ -118,9 +122,7 @@ class ProofreadingHandler:
         The helper layers carry no time dimension: their scale is the
         segmentation scale without the time entry.
         """
-        if self.is_timeseries:
-            return self.scale[1:]
-        return self.scale
+        return self._without_time(self.scale)
 
     @property
     def scale(self) -> tuple[float, ...]:
@@ -128,6 +130,29 @@ class ProofreadingHandler:
         if self._scale is None:
             raise ValueError("Scale not found")
         return self._scale
+
+    @property
+    def helper_units(self) -> tuple[str | None, ...]:
+        """Returns the units of the slice-sized helper layers.
+
+        The helper layers carry no time dimension: their units are the
+        segmentation units without the time entry. The T axis is dropped and
+        a channel axis, if present, stays unitless.
+        """
+        return self._without_time(self.units)
+
+    def _without_time(self, values: tuple[_T, ...]) -> tuple[_T, ...]:
+        """Drops the leading time entry of a segmentation per-axis property."""
+        if self.is_timeseries:
+            return values[1:]
+        return values
+
+    @property
+    def units(self) -> tuple[str | None, ...]:
+        """Returns the units of the segmentation axes."""
+        if self._units is None:
+            raise ValueError("Units not found")
+        return self._units
 
     @property
     def seg_layer_name(self) -> str:
@@ -192,6 +217,7 @@ class ProofreadingHandler:
             np.zeros_like(self.segmentation),
             self.scribbles_layer_name,
             scale=self.helper_scale,
+            units=self.helper_units,
         )
 
     @property
@@ -218,6 +244,7 @@ class ProofreadingHandler:
             np.zeros_like(self.segmentation),
             self.corrected_layer_name,
             scale=self.helper_scale,
+            units=self.helper_units,
             colormap=correct_cells_cmap,
             opacity=1,
         )
@@ -274,6 +301,7 @@ class ProofreadingHandler:
             )
         self.reset()
         self._scale = segmentation.scale
+        self._units = segmentation.units
         self._state = ProofreadingState(
             active=True,
             current_seg_layer_name=segmentation.name,
@@ -377,6 +405,7 @@ class ProofreadingHandler:
             data=state.corrected_cells_mask,
             layer_name=self.corrected_layer_name,
             scale=self.helper_scale,
+            units=self.helper_units,
         )
 
         self.reset_scribbles()
@@ -533,6 +562,7 @@ class ProofreadingHandler:
             mask,
             self.corrected_layer_name,
             scale=self.helper_scale,
+            units=self.helper_units,
             colormap=correct_cells_cmap,
             opacity=1,
         )
@@ -562,7 +592,10 @@ class ProofreadingHandler:
         corrected_mask[id_mask] += 1
         corrected_mask[id_mask] %= 2
         self.update_layer(
-            corrected_mask, self.corrected_layer_name, scale=self.helper_scale
+            corrected_mask,
+            self.corrected_layer_name,
+            scale=self.helper_scale,
+            units=self.helper_units,
         )
 
     def toggle_corrected_cell(self, cell_id: int):
@@ -575,7 +608,12 @@ class ProofreadingHandler:
         self._update_masks(cell_id)
 
     def update_layer(
-        self, data: np.ndarray, layer_name: str, scale: tuple[float, ...], **kwargs
+        self,
+        data: np.ndarray,
+        layer_name: str,
+        scale: tuple[float, ...],
+        units: tuple[str | None, ...],
+        **kwargs,
     ) -> None:
         """Updates a layer in the viewer with new data.
 
@@ -583,6 +621,9 @@ class ProofreadingHandler:
             data: The new data to update the layer with.
             layer_name: The name of the layer to update.
             scale: scale of this layer
+            units: units of this layer, used when the layer is created.
+                Required: a layer without the segmentation units would
+                collapse the viewer's shared units.
             kwargs: will be passed to `viewer.add_labels`.
                 E.g. colormap, opacity, ..
         """
@@ -595,7 +636,7 @@ class ProofreadingHandler:
             viewer.layers[layer_name].refresh()
 
         else:
-            viewer.add_labels(data, name=layer_name, scale=scale, **kwargs)
+            viewer.add_labels(data, name=layer_name, scale=scale, units=units, **kwargs)
 
     def update_after_proofreading(
         self,

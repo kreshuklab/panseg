@@ -1,6 +1,9 @@
+import napari
 import pytest
+from napari.components import ViewerModel
 from napari.layers import Shapes
 
+from panseg.core.image import PanSegImage
 from panseg.tasks.dataprocessing_tasks import (
     image_rescale_to_shape_task,
     image_rescale_to_voxel_size_task,
@@ -10,6 +13,8 @@ from panseg.viewer_napari.widgets.preprocessing import (
     Preprocessing_Tab,
     RescaleModes,
 )
+from panseg.viewer_napari.widgets.utils import add_ps_image_to_viewer
+from tests.conftest import layer_unit_names
 
 
 @pytest.fixture
@@ -147,7 +152,9 @@ def test_add_crop_shapes_layer_2d(preprocessing_tab, napari_raw_2d, mocker):
 
     preprocessing_tab._add_crop_shapes_layer(viewer)
 
-    viewer.add_shapes.assert_called_once_with(ndim=2, scale=(0.25, 0.125))
+    viewer.add_shapes.assert_called_once_with(
+        ndim=2, scale=(0.25, 0.125), units=("um", "um")
+    )
 
 
 def test_add_crop_shapes_layer_3d(preprocessing_tab, napari_raw, mocker):
@@ -158,7 +165,9 @@ def test_add_crop_shapes_layer_3d(preprocessing_tab, napari_raw, mocker):
 
     preprocessing_tab._add_crop_shapes_layer(viewer)
 
-    viewer.add_shapes.assert_called_once_with(ndim=3, scale=(2.0, 0.25, 0.125))
+    viewer.add_shapes.assert_called_once_with(
+        ndim=3, scale=(2.0, 0.25, 0.125), units=("um", "um", "um")
+    )
 
 
 def test_add_crop_shapes_layer_timeseries_follows_spatial_dimensionality(
@@ -170,14 +179,47 @@ def test_add_crop_shapes_layer_timeseries_follows_spatial_dimensionality(
     preprocessing_tab.widget_layer_select.layer.choices = (napari_timeseries,)
     preprocessing_tab.widget_layer_select.layer.value = napari_timeseries
     preprocessing_tab._add_crop_shapes_layer(viewer)
-    viewer.add_shapes.assert_called_with(ndim=3, scale=(2.0, 0.25, 0.125))
+    viewer.add_shapes.assert_called_with(
+        ndim=3, scale=(2.0, 0.25, 0.125), units=("um", "um", "um")
+    )
 
     viewer.reset_mock()
     napari_raw_tyx.scale = (0.5, 0.25, 0.125)
     preprocessing_tab.widget_layer_select.layer.choices = (napari_raw_tyx,)
     preprocessing_tab.widget_layer_select.layer.value = napari_raw_tyx
     preprocessing_tab._add_crop_shapes_layer(viewer)
-    viewer.add_shapes.assert_called_with(ndim=2, scale=(0.25, 0.125))
+    viewer.add_shapes.assert_called_with(
+        ndim=2, scale=(0.25, 0.125), units=("um", "um")
+    )
+
+
+def test_add_crop_shapes_layer_keeps_shared_units(
+    monkeypatch, preprocessing_tab, napari_timeseries
+):
+    """Adding the crop layer must not collapse the viewer's shared units.
+
+    The shapes layer has no time axis, so its units align with the spatial
+    axes of the TZYX image: napari zips units from the last axis.
+    """
+    viewer = ViewerModel()
+    monkeypatch.setattr(napari, "current_viewer", lambda: viewer)
+    add_ps_image_to_viewer(PanSegImage.from_napari_layer(napari_timeseries))
+
+    preprocessing_tab.widget_layer_select.layer.choices = (viewer.layers[0],)
+    preprocessing_tab.widget_layer_select.layer.value = viewer.layers[0]
+    preprocessing_tab._add_crop_shapes_layer(viewer)
+
+    shapes = viewer.layers[-1]
+    assert isinstance(shapes, Shapes)
+    assert layer_unit_names(shapes) == ["micrometer"] * 3
+    units = viewer.layers.units
+    assert units is not None
+    assert [str(u) for u in units] == [
+        "pixel",
+        "micrometer",
+        "micrometer",
+        "micrometer",
+    ]
 
 
 def test_add_crop_shapes_layer_no_selection(preprocessing_tab, mocker):
@@ -188,7 +230,9 @@ def test_add_crop_shapes_layer_no_selection(preprocessing_tab, mocker):
 
     preprocessing_tab._add_crop_shapes_layer(viewer)
 
-    viewer.add_shapes.assert_called_once_with(ndim=3, scale=(1.0, 1.0, 1.0))
+    viewer.add_shapes.assert_called_once_with(
+        ndim=3, scale=(1.0, 1.0, 1.0), units=("um", "um", "um")
+    )
 
 
 def test_on_cropping_image_changed_timeseries_3d(

@@ -30,6 +30,11 @@ requires_cuda = pytest.mark.skipif(
 )
 
 
+def layer_unit_names(layer) -> list[str]:
+    """Returns the units of a napari layer as they render, e.g. "micrometer"."""
+    return [str(unit) for unit in layer.units]
+
+
 @pytest.fixture
 def tensor_to_spy(monkeypatch):
     """Record ``(shape, args, kwargs)`` of every ``torch.Tensor.to`` call.

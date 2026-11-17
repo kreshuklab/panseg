@@ -5,6 +5,7 @@ from collections import deque
 from pathlib import Path
 
 import h5py
+import napari
 import numpy as np
 import pytest
 from magicgui.widgets import Container
@@ -19,6 +20,8 @@ from panseg.viewer_napari.widgets.proofreading import (
     ProofreadingHandler,
     correct_cells_cmap,
 )
+from panseg.viewer_napari.widgets.utils import add_ps_image_to_viewer
+from tests.conftest import layer_unit_names
 
 
 @pytest.fixture
@@ -74,13 +77,17 @@ class TestProofreadingHandler:
                 napari_segmentation.data,
                 layer_name="test",
                 scale=napari_segmentation.scale,
+                units=("um", "um", "um"),
             )
 
         viewer = make_napari_viewer_proxy()
         viewer.add_labels(np.zeros((5, 5, 5), dtype=int), name="test", scale=[1, 1, 1])
 
         proof.update_layer(
-            napari_segmentation.data, layer_name="test", scale=napari_segmentation.scale
+            napari_segmentation.data,
+            layer_name="test",
+            scale=napari_segmentation.scale,
+            units=("um", "um", "um"),
         )
         np.testing.assert_array_equal(viewer.layers[0].data, napari_segmentation.data)
         np.testing.assert_array_equal(viewer.layers[0].scale, napari_segmentation.scale)
@@ -90,11 +97,13 @@ class TestProofreadingHandler:
             napari_segmentation.data,
             layer_name="new_layer",
             scale=napari_segmentation.scale,
+            units=("um", "um", "um"),
         )
 
         np.testing.assert_array_equal(viewer.layers[1].data, napari_segmentation.data)
         np.testing.assert_array_equal(viewer.layers[1].scale, napari_segmentation.scale)
         assert viewer.layers[1].name == "new_layer"
+        assert layer_unit_names(viewer.layers[1]) == ["micrometer"] * 3
 
     def test_reset_scribbles(self, mocker, proof):
         mock = mocker.patch.object(proof, "update_layer")
@@ -106,6 +115,7 @@ class TestProofreadingHandler:
             "panseg.viewer_napari.widgets.proofreading.ProofreadingHandler",
             segmentation=mocker.DEFAULT,
             scale=mocker.DEFAULT,
+            units=mocker.DEFAULT,
         )
         proof.reset_scribbles()
         mock.assert_called_once()
@@ -120,6 +130,7 @@ class TestProofreadingHandler:
             "panseg.viewer_napari.widgets.proofreading.ProofreadingHandler",
             segmentation=mocker.DEFAULT,
             scale=mocker.DEFAULT,
+            units=mocker.DEFAULT,
         )
         proof.reset_corrected()
         mock.assert_called_once()
@@ -158,6 +169,10 @@ class TestProofreadingHandler:
         mock_reset_corrected.assert_called_once()
         mock_reset_scribbles.assert_called_once()
 
+        # The helper canvases are spatial-only, hence all axes in micrometers.
+        assert proof.units == ("um", "um", "um")
+        assert proof.helper_units == ("um", "um", "um")
+
     def test_capture_state(self, proof, mocker):
         mocker.patch.multiple(
             "panseg.viewer_napari.widgets.proofreading.ProofreadingHandler",
@@ -180,6 +195,7 @@ class TestProofreadingHandler:
             reset_scribbles=mocker.DEFAULT,
             seg_layer_name=mocker.DEFAULT,
             scale=mocker.DEFAULT,
+            units=mocker.DEFAULT,
             update_layer=mocker.DEFAULT,
             _write_segmentation=mocker.DEFAULT,
         )
@@ -240,6 +256,7 @@ class TestProofreadingHandler:
             corrected_cells_mask=[4],
             corrected_cells={1, 2, 3},
             scale=mocker.DEFAULT,
+            units=mocker.DEFAULT,
         )
         mock_update_layer = mocker.patch.object(proof, "update_layer")
 
@@ -256,6 +273,7 @@ class TestProofreadingHandler:
             [4],
             CORRECTED_CELLS_LAYER_NAME,
             scale=mocks["scale"],
+            units=mocks["units"],
             colormap=correct_cells_cmap,
             opacity=1,
         )
@@ -278,6 +296,7 @@ class TestProofreadingHandler:
         mocks = mocker.patch.multiple(
             "panseg.viewer_napari.widgets.proofreading.ProofreadingHandler",
             scale=mocker.DEFAULT,
+            units=mocker.DEFAULT,
             segmentation=mocker.DEFAULT,
             get_layer_data=mocker.DEFAULT,
             update_layer=mocker.DEFAULT,
@@ -363,6 +382,8 @@ class TestProofreadingHandlerTimeSeries:
         assert proof.is_timeseries
         assert proof.timepoint == 1
         assert proof.n_timepoints == 3
+        assert proof.units == (None, "um", "um", "um")
+        assert proof.helper_units == ("um", "um", "um")
         assert "Scribbles (t=1)" in viewer.layers
         assert "Correct Labels (t=1)" in viewer.layers
         assert "Scribbles" not in viewer.layers
@@ -372,6 +393,35 @@ class TestProofreadingHandlerTimeSeries:
             assert canvas.data.shape == layer.data.shape[1:]
             np.testing.assert_array_equal(canvas.scale, (1.0, 1.0, 1.0))
             np.testing.assert_array_equal(canvas.data, 0)
+            # The canvases carry the spatial units only: no time entry.
+            assert layer_unit_names(canvas) == ["micrometer"] * 3
+
+    def test_helper_canvases_keep_shared_units(
+        self, monkeypatch, proof, napari_timeseries_segmentation
+    ):
+        """Adding the helper canvases must not collapse the shared units.
+
+        One layer without units makes napari drop the unit suffixes of the
+        coordinate grid and the scale bar for the whole viewer.
+        """
+        from napari.components import ViewerModel
+
+        # A ViewerModel keeps this test free of a GL context.
+        viewer = ViewerModel()
+        monkeypatch.setattr(napari, "current_viewer", lambda: viewer)
+        seg = PanSegImage.from_napari_layer(napari_timeseries_segmentation)
+        add_ps_image_to_viewer(seg)
+
+        proof.setup(seg, timepoint=1)
+
+        units = viewer.layers.units
+        assert units is not None
+        assert [str(u) for u in units] == [
+            "pixel",
+            "micrometer",
+            "micrometer",
+            "micrometer",
+        ]
 
     def test_scribbles_and_corrected_mask_read_dynamic_layers(self, bound_handler):
         proof, viewer, _ = bound_handler
