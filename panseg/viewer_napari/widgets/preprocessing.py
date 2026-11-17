@@ -323,12 +323,21 @@ class Preprocessing_Tab:
         """
         layer = self.widget_layer_select.layer.value
         if not isinstance(layer, (Image, Labels)):
-            viewer.add_shapes(ndim=3, scale=viewer.layers.extent.step)
+            # No image to align with: the shape layer spans the whole viewer.
+            # Take the viewer's units (napari zips units from the last axis);
+            # without consistent viewer units, stay unitless, i.e. in pixels.
+            units = viewer.layers.units
+            if units is None:
+                units = (None, None, None)
+            else:
+                units = (None,) * max(0, 3 - len(units)) + tuple(units[-3:])
+            viewer.add_shapes(ndim=3, scale=viewer.layers.extent.step, units=units)
             return
         ps_image = PanSegImage.from_napari_layer(layer)
         axis_indices = ps_image.image_layout.spatial_axis_indices
         scale = tuple(layer.scale[i] for i in axis_indices)
-        viewer.add_shapes(ndim=len(axis_indices), scale=scale)
+        units = tuple(ps_image.units[i] for i in axis_indices)
+        viewer.add_shapes(ndim=len(axis_indices), scale=scale, units=units)
 
     def update_layer_selection(self, event):
         """To be called when the layer list changes."""
