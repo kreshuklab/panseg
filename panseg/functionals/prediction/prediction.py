@@ -25,9 +25,9 @@ from panseg.functionals.prediction.utils.array_dataset import ArrayDataset
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
 from panseg.functionals.prediction.utils.size_finder import (
     find_feasible_patch_and_halo_shapes,
+    get_stride_shape,
 )
 from panseg.functionals.prediction.utils.slice_builder import SliceBuilder
-from panseg.functionals.prediction.utils.utils import get_stride_shape
 from panseg.functionals.training.augs import get_test_augmentations
 
 logger = logging.getLogger(__name__)
@@ -392,7 +392,7 @@ def unet_prediction(
     augs = get_test_augmentations(
         raw
     )  # using full raw to compute global normalization mean and std
-    stride = get_stride_shape(patch)
+    stride = get_stride_shape(patch, (1, 1, 1))
     slice_builder = SliceBuilder(
         raw, label_dataset=None, patch_shape=patch, stride_shape=stride
     )

@@ -14,8 +14,6 @@ PATH_PANSEG_GLOBAL = Path(__file__).parent.resolve()
 # Files in code repository
 DIR_RESOURCES = "resources"
 FILE_MODEL_ZOO = "models_zoo.yaml"
-FILE_CONFIG_GUI_TEMPLATE = "config_gui_template.yaml"
-FILE_CONFIG_PRED_TEMPLATE = "config_predict_template.yaml"
 FILE_CONFIG_TRAIN_TEMPLATE = "config_train_template.yaml"
 FILE_CONFIG_TRAIN_YAML = "config_train.yml"
 FILE_BEST_MODEL_PYTORCH = "best_checkpoint.pytorch"
@@ -24,8 +22,6 @@ FILE_LAST_MODEL_PYTORCH = "last_checkpoint.pytorch"
 PATH_RESOURCES = PATH_PANSEG_GLOBAL / DIR_RESOURCES
 
 PATH_MODEL_ZOO = PATH_RESOURCES / FILE_MODEL_ZOO
-PATH_STANDARD_TEMPLATE = PATH_RESOURCES / FILE_CONFIG_GUI_TEMPLATE
-PATH_PREDICT_TEMPLATE = PATH_RESOURCES / FILE_CONFIG_PRED_TEMPLATE
 PATH_TRAIN_TEMPLATE = PATH_RESOURCES / FILE_CONFIG_TRAIN_TEMPLATE
 
 # Files in user home

@@ -584,12 +584,6 @@ class ModelZoo:
         model, _, _ = self.get_model_by_name(model_name)
         return model_geometry(model).halo
 
-    def compute_3D_halo_for_bioimageio_models(
-        self, model_id: str
-    ) -> tuple[int, int, int]:
-        model, _, _ = self.get_model_by_id(model_id)
-        return model_geometry(model).halo
-
     def is_2D(self, module: AbstractUNet) -> bool:
         return isinstance(module, UNet2D)
 
