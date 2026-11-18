@@ -133,11 +133,11 @@ class _SaveSkip:
 
 
 @dataclass(frozen=True)
-class _JoinSkip:
+class _JoinEncoderSkip:
     """Nearest-neighbour upsample to the next saved encoder size, plus its union."""
 
 
-_Op = _Conv | _Pool | _SaveSkip | _JoinSkip
+_Op = _Conv | _Pool | _SaveSkip | _JoinEncoderSkip
 
 
 def _module_ops(module: nn.Module) -> list[_Op]:
@@ -151,9 +151,9 @@ def _module_ops(module: nn.Module) -> list[_Op]:
         ops: list[_Op] = [] if module.pooling is None else _module_ops(module.pooling)
         return ops + _module_ops(module.basic_module)
     if isinstance(module, Decoder):
-        return [_JoinSkip()] + _module_ops(module.basic_module)
+        return [_JoinEncoderSkip()] + _module_ops(module.basic_module)
     if isinstance(module, InterpolateUpsampling):
-        return [_JoinSkip()]
+        return [_JoinEncoderSkip()]
     if isinstance(module, (nn.Sequential, nn.ModuleList)):
         ops = []
         for child in module:
@@ -257,7 +257,7 @@ def _replay(
             )
         elif isinstance(op, _SaveSkip):
             saves.append((support, size))
-        else:  # _JoinSkip
+        else:  # _JoinEncoderSkip
             encoder_support, encoder_size = saves.pop()
             source_size = size
             support = {
@@ -281,9 +281,9 @@ def _reach_table(
     one entry per occurring phase. Returns the table and the classic radius sum
     `S` of that axis.
     """
-    multiplier = 8
+    replay_multiplier = 8
     while True:
-        model_input = increment * multiplier
+        model_input = increment * replay_multiplier
         support, final_size, radius_sum = _replay(
             ops, axis, model_input, track_radius_sum=True
         )
@@ -309,8 +309,8 @@ def _reach_table(
             table.setdefault(phase, (anchor - min(voxels), max(voxels) - anchor))
         if interior and table:
             return table, radius_sum
-        multiplier *= 2
-        if multiplier > _MAX_REPLAY_MULTIPLIER:
+        replay_multiplier *= 2
+        if replay_multiplier > _MAX_REPLAY_MULTIPLIER:
             raise RuntimeError(
                 "Could not find an interior model input for the reach replay "
                 f"along axis {axis} (increment {increment}); the architecture "
@@ -362,23 +362,15 @@ class ModelGeometry:
         interior still has one pixel and a valid phase. An axis without halo
         keeps its `min_input`.
         """
-        return _as_3d(
-            tuple(
-                _round_up(max(minimum, 2 * halo + 1), increment)
-                for minimum, increment, halo in zip(
-                    self.min_input, self.increment, self.halo
-                )
-            )
+        floor = tuple(
+            max(minimum, 2 * halo + 1)
+            for minimum, halo in zip(self.min_input, self.halo)
         )
+        return aligned_shape(floor, self.increment)
 
     def aligned_shape(self, shape: tuple[int, ...]) -> tuple[int, int, int]:
         """Round `shape` (Z, Y, X) up to the per-axis phase period."""
-        return _as_3d(
-            tuple(
-                _round_up(size, increment)
-                for size, increment in zip(_as_3d(shape), self.increment)
-            )
-        )
+        return aligned_shape(shape, self.increment)
 
     def model_input_shape(
         self,
@@ -530,8 +522,28 @@ def tensor_input_shape(
     return _without_z(model_input_shape(patch, halo), is_2d_model(model))
 
 
-def _round_up(size: int, increment: int) -> int:
-    return ((int(size) + int(increment) - 1) // int(increment)) * int(increment)
+def aligned_shape(shape, increment) -> tuple[int, int, int]:
+    """Round `shape` (Z, Y, X) up to the per-axis phase period `increment`.
+
+    Accepts any sequence of three sizes, including numpy arrays, so callers do
+    not need a second rounding implementation.
+    """
+    return _aligned(shape, increment, up=True)
+
+
+def aligned_down(shape, increment) -> tuple[int, int, int]:
+    """Round `shape` (Z, Y, X) down to the per-axis phase period `increment`."""
+    return _aligned(shape, increment, up=False)
+
+
+def _aligned(shape, increment, up: bool) -> tuple[int, int, int]:
+    values = [
+        -(-int(size) // int(period)) * int(period)
+        if up
+        else (int(size) // int(period)) * int(period)
+        for size, period in zip(_as_3d(tuple(shape)), increment)
+    ]
+    return (values[0], values[1], values[2])
 
 
 def _without_z(

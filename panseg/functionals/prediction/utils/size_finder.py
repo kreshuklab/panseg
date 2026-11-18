@@ -8,6 +8,8 @@ from torch.optim.adam import Adam
 
 from panseg.functionals.model_geometry import (
     ModelGeometry,
+    aligned_down,
+    aligned_shape,
     is_2d_model,
     model_geometry,
     tensor_input_shape,
@@ -190,6 +192,9 @@ def derive_patch_and_halo_shapes(
     is_2d: bool = False,
     increment: tuple[int, int, int] = (1, 1, 1),
 ) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    # `increment` deliberately has a default: `(1, 1, 1)` means "no phase
+    # period", which is a correct (if pessimistic) derivation for callers that
+    # do not know the architecture. Prediction always passes the real period.
     """
     Recommend an optimal patch shape and halo size for a given 3D sample. Since convolving
     kernels are often isotropic, adjusting and fitting an initially isotropic maximum patch
@@ -243,7 +248,9 @@ def derive_patch_and_halo_shapes(
 
     # The caller pads the raw volume up to the aligned domain; derive on that
     # same domain so patch sizes and origins stay on the phase grid.
-    shape_volume = _round_up(shape_volume, shape_increment)
+    shape_volume = np.array(
+        aligned_shape(shape_volume, shape_increment), dtype=np.int64
+    )
 
     budget = int(np.prod(shape_patch_max))
     min_model_input = shape_increment + 2 * halo_shape
@@ -263,7 +270,10 @@ def derive_patch_and_halo_shapes(
             _int_tuple3(halo_shape),
         )
 
-    max_patch = _round_down(np.minimum(shape_volume, shape_patch_max), shape_increment)
+    max_patch = np.array(
+        aligned_down(np.minimum(shape_volume, shape_patch_max), shape_increment),
+        dtype=np.int64,
+    )
     max_patch = np.maximum(max_patch, shape_increment)
     max_model_input = max_patch + 2 * halo_shape
 
@@ -279,9 +289,12 @@ def derive_patch_and_halo_shapes(
     best = min_model_input.copy()
     for _ in range(64):
         fraction = (low + high) / 2
-        candidate = _round_down(
-            min_model_input + fraction * (max_model_input - min_model_input),
-            shape_increment,
+        candidate = np.array(
+            aligned_down(
+                min_model_input + fraction * (max_model_input - min_model_input),
+                shape_increment,
+            ),
+            dtype=np.int64,
         )
         if int(np.prod(candidate)) <= budget:
             best = candidate
@@ -312,14 +325,6 @@ def derive_patch_and_halo_shapes(
 
 def _int_tuple3(shape) -> tuple[int, int, int]:
     return (int(shape[0]), int(shape[1]), int(shape[2]))
-
-
-def _round_up(shape, increment):
-    return ((shape + increment - 1) // increment) * increment
-
-
-def _round_down(shape, increment):
-    return np.array(shape, dtype=np.int64) // increment * increment
 
 
 def probe_max_patch_shape(
