@@ -293,7 +293,8 @@ def unet_prediction(
 
     # Predict on an aligned domain: SliceBuilder flushes the last patch start
     # to `i - k`, which stays on the phase grid only when the domain is a
-    # multiple of the increment. Reflect-pad the domain, crop the prediction back.
+    # multiple of the increment. Reflect-pad the domain up to it; the predictor
+    # crops the result back to `raw_shape` (see `ArrayDataset.original_shape`).
     domain_shape = geometry.aligned_shape(raw_shape)
     auto_patch = patch is None
     if auto_patch:
@@ -372,8 +373,8 @@ def unet_prediction(
         halo_shape=patch_halo,
         multichannel=multichannel_input,
         verbose_logging=False,
+        original_shape=raw_shape,
     )
 
-    pmaps = predictor(test_dataset)  # pmaps either (C, Z, Y, X) or (C, Y, X)
-    # crop the aligned domain back to the requested sample
-    return pmaps[..., : raw_shape[0], : raw_shape[1], : raw_shape[2]]
+    # the predictor returns the original extent of the padded domain
+    return predictor(test_dataset)

@@ -116,17 +116,26 @@ class ArrayDataset(Dataset):
         halo_shape: Optional[tuple[int, int, int]] = None,
         multichannel: bool = False,
         verbose_logging: bool = True,
+        original_shape: tuple[int, int, int] | None = None,
     ):
         """
         Args:
-            raw (np.ndarray): raw data
+            raw (np.ndarray): raw data. May be a padded domain (see `original_shape`).
             slice_builder (SliceBuilder): slice builder
             augs (Callable): data augmentation pipeline
             verbose_logging (bool): if True, log info messages
+            original_shape (tuple[int, int, int] | None): spatial extent to crop
+                the prediction back to. Use it when `raw` is a domain padded up
+                to the phase grid; defaults to the spatial shape of `raw`.
         """
         self.raw = raw
         self.augs = augs
         self.raw_slices = slice_builder.raw_slices
+        self.original_shape = (
+            tuple(original_shape)
+            if original_shape is not None
+            else tuple(raw.shape[-3:])
+        )
 
         if halo_shape is None:
             halo_shape = (0, 0, 0)
