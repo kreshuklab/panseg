@@ -120,9 +120,6 @@ nav:
   - Batch Workflow:
       - chapters/workflow_gui/index.md
 
-  - Time Series:
-      - chapters/timeseries/index.md
-
   - Dataset and Training:
       - chapters/panseg_models/index.md
       - Custom Datasets: chapters/panseg_models/custom_datasets.md
@@ -130,6 +127,7 @@ nav:
 
   - Advanced:
       - Receptive field and halo: chapters/advanced/halo.md
+      - Time Series: chapters/advanced/timeseries.md
 
   - API:
       - chapters/python_api/index.md
