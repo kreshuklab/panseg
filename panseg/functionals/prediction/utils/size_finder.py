@@ -19,42 +19,6 @@ from panseg.functionals.training.losses import DiceLoss
 
 logger = logging.getLogger(__name__)
 
-# Fraction of the patch size the sliding window advances by default. The stride
-# is rounded down to a multiple of the phase period so that overlapping patches
-# compute the same voxel at the same phase (see `get_stride_shape`).
-DEFAULT_STRIDE_RATIO = 0.75
-
-
-def get_stride_shape(
-    patch_shape: tuple[int, int, int],
-    increment: tuple[int, int, int],
-    stride_ratio: float = DEFAULT_STRIDE_RATIO,
-) -> tuple[int, int, int]:
-    """Stride for sliding-window prediction, aligned to the phase period.
-
-    The stride must be a multiple of the per-axis phase period (`increment`):
-    otherwise overlapping patches compute the same voxel at different phases,
-    and a voxel that is exact in one patch can carry an artefact in the next.
-    It must never exceed the patch size, and never be below one voxel.
-
-    Args:
-        patch_shape: patch shape (Z, Y, X).
-        increment: per-axis phase period (Z, Y, X).
-        stride_ratio: fraction of the patch to advance by. Defaults to 0.75.
-
-    Returns:
-        stride shape (Z, Y, X).
-    """
-    stride = []
-    for patch, period in zip(patch_shape, increment):
-        if patch < period:
-            stride.append(1)
-            continue
-        stepped = (int(patch * stride_ratio) // period) * period
-        stride.append(min(patch, max(period, stepped)))
-    return (stride[0], stride[1], stride[2])
-
-
 # Voxel-budget multiplier applied to the probed maximum patch shape whenever a derived
 # patch shape fails the batch-size-1 OOM check (see `find_feasible_patch_and_halo_shapes`).
 FEASIBILITY_SHRINK = 0.75

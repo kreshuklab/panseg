@@ -21,11 +21,10 @@ from panseg.functionals.dataprocessing.dataprocessing import (
 )
 from panseg.functionals.model_geometry import ModelGeometry, model_geometry
 from panseg.functionals.precision import AmpSetting, validate_amp
-from panseg.functionals.prediction.utils.array_dataset import ArrayDataset
+from panseg.functionals.prediction.utils.array_dataset import ArrayDataset, pad_to_shape
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
 from panseg.functionals.prediction.utils.size_finder import (
     find_feasible_patch_and_halo_shapes,
-    get_stride_shape,
 )
 from panseg.functionals.prediction.utils.slice_builder import SliceBuilder
 from panseg.functionals.training.augs import get_test_augmentations
@@ -402,8 +401,8 @@ def unet_prediction(
     augs = get_test_augmentations(
         raw
     )  # normalization stats of the original raw, before the domain pad
-    raw = _pad_to_aligned_domain(raw, domain_shape, multichannel_input)
-    stride = get_stride_shape(patch, geometry.increment)
+    raw = pad_to_shape(raw, domain_shape)
+    stride = geometry.stride_shape(patch)
     slice_builder = SliceBuilder(
         raw, label_dataset=None, patch_shape=patch, stride_shape=stride
     )
@@ -419,16 +418,3 @@ def unet_prediction(
     pmaps = predictor(test_dataset)  # pmaps either (C, Z, Y, X) or (C, Y, X)
     # crop the aligned domain back to the requested sample
     return pmaps[..., : raw_shape[0], : raw_shape[1], : raw_shape[2]]
-
-
-def _pad_to_aligned_domain(
-    raw: np.ndarray, domain_shape: tuple[int, int, int], multichannel: bool
-) -> np.ndarray:
-    """Reflect-pad `raw` at the high end up to `domain_shape` (Z, Y, X)."""
-    pads = [domain - size for domain, size in zip(domain_shape, raw.shape[-3:])]
-    if not any(pads):
-        return raw
-    widths = [(0, pad) for pad in pads]
-    if multichannel:
-        widths = [(0, 0)] + widths
-    return np.pad(raw, widths, mode="reflect")

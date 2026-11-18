@@ -11,6 +11,19 @@ from panseg.functionals.prediction.utils.slice_builder import SliceBuilder
 logger = logging.getLogger(__name__)
 
 
+def pad_to_shape(image: np.ndarray, target_shape: tuple[int, int, int]) -> np.ndarray:
+    """Reflect-pad the high end of the spatial (last three) axes up to target_shape."""
+    pads = [target - size for target, size in zip(target_shape, image.shape[-3:])]
+    if not any(pads):
+        return image
+    if any(pad < 0 for pad in pads):
+        raise ValueError(
+            f"target_shape {target_shape} is smaller than {image.shape[-3:]}"
+        )
+    widths = [(0, 0)] * (image.ndim - 3) + [(0, pad) for pad in pads]
+    return np.pad(image, widths, mode="reflect")
+
+
 def mirror_pad(
     image: np.ndarray, padding_shape: tuple[int, int, int], multichannel: bool
 ) -> np.ndarray:

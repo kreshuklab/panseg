@@ -9,7 +9,6 @@ from panseg.functionals.prediction.utils.size_finder import (
     derive_patch_and_halo_shapes,
     find_batch_size,
     find_feasible_patch_and_halo_shapes,
-    get_stride_shape,
     probe_max_patch_shape,
     will_CUDA_OOM,
 )
@@ -132,25 +131,6 @@ def test_a_2d_volume_that_fits_one_patch_keeps_its_yx_halo():
 
     assert patch == (1, 512, 512)
     assert halo == (0, 48, 48)
-
-
-@pytest.mark.parametrize(
-    "patch_shape, increment, expected",
-    [
-        ((96, 96, 96), (8, 8, 8), (72, 72, 72)),
-        # round down to a multiple of the period, never below it
-        ((100, 100, 100), (8, 8, 8), (72, 72, 72)),
-        ((8, 8, 8), (8, 8, 8), (8, 8, 8)),
-        ((4, 4, 4), (8, 8, 8), (1, 1, 1)),
-        ((1, 64, 64), (1, 8, 8), (1, 48, 48)),
-        # the stride never exceeds the patch; a sub-period patch does not stride
-        ((8, 8, 8), (1, 16, 16), (6, 1, 1)),
-    ],
-)
-def test_get_stride_shape_is_aligned_to_the_phase_period(
-    patch_shape, increment, expected
-):
-    assert get_stride_shape(patch_shape, increment) == expected
 
 
 @pytest.mark.parametrize(

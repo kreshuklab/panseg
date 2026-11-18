@@ -17,6 +17,7 @@ from panseg.functionals.model_geometry import (
     is_2d_model,
     model_geometry,
     model_input_shape,
+    stride_shape,
 )
 from panseg.functionals.model_geometry.layers import ordered_ops
 from panseg.functionals.model_geometry.replay import (
@@ -49,10 +50,9 @@ class TestPackageLayout:
             "model_input_shape",
             "tensor_input_shape",
             "is_2d_model",
+            "stride_shape",
         ):
             assert hasattr(geometry, name), name
-        # `stride_shape` arrives with the stride derivation, not the split
-        assert not hasattr(geometry, "stride_shape")
 
     def test_the_replay_and_layers_helpers_live_in_their_own_modules(self):
         model = nn.Sequential(nn.Conv3d(1, 1, 3, padding=1))
@@ -553,6 +553,32 @@ class TestAlignedShape:
         geometry = model_geometry(UNet3D(1, 1, f_maps=[4, 4, 4, 4]))
 
         assert geometry.aligned_shape((16, 104, 8)) == (16, 104, 8)
+
+
+class TestStrideShape:
+    @pytest.mark.parametrize(
+        "patch_shape, increment, expected",
+        [
+            ((96, 96, 96), (8, 8, 8), (72, 72, 72)),
+            # round down to a multiple of the period, never below it
+            ((100, 100, 100), (8, 8, 8), (72, 72, 72)),
+            ((8, 8, 8), (8, 8, 8), (8, 8, 8)),
+            ((4, 4, 4), (8, 8, 8), (1, 1, 1)),
+            ((1, 64, 64), (1, 8, 8), (1, 48, 48)),
+            # the stride never exceeds the patch; a sub-period patch does not stride
+            ((8, 8, 8), (1, 16, 16), (6, 1, 1)),
+        ],
+    )
+    def test_stride_shape_is_aligned_to_the_phase_period(
+        self, patch_shape, increment, expected
+    ):
+        assert stride_shape(patch_shape, increment) == expected
+
+    def test_model_geometry_stride_shape_uses_its_own_increment(self):
+        geometry = model_geometry(UNet3D(1, 1, f_maps=[4, 4, 4, 4]))
+
+        assert geometry.increment == (8, 8, 8)
+        assert geometry.stride_shape((96, 96, 96)) == (72, 72, 72)
 
 
 class TestModelInputShape:

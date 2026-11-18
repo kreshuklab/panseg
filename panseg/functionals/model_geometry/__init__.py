@@ -51,6 +51,11 @@ from panseg.functionals.model_geometry.replay import exact_halo, reach_table
 
 logger = logging.getLogger(__name__)
 
+# Fraction of the patch size the sliding window advances by default. The stride
+# is rounded down to a multiple of the phase period so that overlapping patches
+# compute the same voxel at the same phase (see `stride_shape`).
+DEFAULT_STRIDE_RATIO = 0.75
+
 __all__ = [
     "ModelGeometry",
     "model_geometry",
@@ -59,6 +64,8 @@ __all__ = [
     "model_input_shape",
     "tensor_input_shape",
     "is_2d_model",
+    "stride_shape",
+    "DEFAULT_STRIDE_RATIO",
 ]
 
 
@@ -119,6 +126,14 @@ class ModelGeometry:
     def tensor_effective_min_input(self) -> tuple[int, ...]:
         """The tensor's smallest spatial shape: `effective_min_input` sans Z for 2D."""
         return _without_z(self.effective_min_input, self.is_2d)
+
+    def stride_shape(
+        self,
+        patch: tuple[int, int, int],
+        stride_ratio: float = DEFAULT_STRIDE_RATIO,
+    ) -> tuple[int, int, int]:
+        """Sliding-window stride for `patch`, aligned to this geometry's increment."""
+        return stride_shape(patch, self.increment, stride_ratio)
 
     def check_patch(
         self,
@@ -240,6 +255,37 @@ def tensor_input_shape(
     For callers that probe a model without resolving its full geometry.
     """
     return _without_z(model_input_shape(patch, halo), is_2d_model(model))
+
+
+def stride_shape(
+    patch_shape: tuple[int, int, int],
+    increment: tuple[int, int, int],
+    stride_ratio: float = DEFAULT_STRIDE_RATIO,
+) -> tuple[int, int, int]:
+    """Stride for sliding-window prediction, aligned to the phase period.
+
+    The stride must be a multiple of the per-axis phase period (`increment`):
+    otherwise overlapping patches compute the same voxel at different phases,
+    and a voxel that is exact in one patch can carry an artefact in the next.
+    It must never exceed the patch size, and never be below one voxel. A patch
+    below one phase period cannot stride on the grid and returns 1.
+
+    Args:
+        patch_shape: patch shape (Z, Y, X).
+        increment: per-axis phase period (Z, Y, X).
+        stride_ratio: fraction of the patch to advance by. Defaults to 0.75.
+
+    Returns:
+        stride shape (Z, Y, X).
+    """
+    stride = []
+    for patch, period in zip(patch_shape, increment):
+        if patch < period:
+            stride.append(1)
+            continue
+        stepped = (int(patch * stride_ratio) // period) * period
+        stride.append(min(patch, max(period, stepped)))
+    return (stride[0], stride[1], stride[2])
 
 
 def aligned_shape(shape, increment) -> tuple[int, int, int]:
