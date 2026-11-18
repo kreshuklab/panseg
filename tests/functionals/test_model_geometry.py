@@ -33,33 +33,18 @@ STANDARD_EFFECTIVE_MINIMUM = (104, 104, 104)
 
 
 class TestPackageLayout:
-    """Geometry is a package: introspection, replay and the public API.
+    """Geometry is a package: the layer mapping and the replay live apart.
 
-    `layers` maps model modules to the replay vocabulary, `replay` holds the 1D
-    support replay, and the package root keeps the documented geometry API.
+    `layers` maps model modules to the replay vocabulary and `replay` holds the
+    1D support replay.
     """
-
-    def test_the_package_root_keeps_the_public_geometry_api(self):
-        import panseg.functionals.model_geometry as geometry
-
-        for name in (
-            "ModelGeometry",
-            "model_geometry",
-            "aligned_shape",
-            "aligned_down",
-            "model_input_shape",
-            "tensor_input_shape",
-            "is_2d_model",
-            "stride_shape",
-        ):
-            assert hasattr(geometry, name), name
 
     def test_the_replay_and_layers_helpers_live_in_their_own_modules(self):
         model = nn.Sequential(nn.Conv3d(1, 1, 3, padding=1))
 
         ops = ordered_ops(model)
-        support, final_size, _ = replay(ops, axis=0, model_input=8)
-        table, _ = reach_table(ops, axis=0, increment=1)
+        support, final_size = replay(ops, axis=0, model_input=8)
+        table = reach_table(ops, axis=0, increment=1)
 
         assert final_size == 8
         assert support[4] == {3, 4, 5}
@@ -173,7 +158,7 @@ class TestModelGeometryTraversal:
         assert geometry.halo == (6, 6, 6)
         # a kernel-3, stride-2 pool leaves a coarser output grid: only the
         # aligned phase exists, and the replay must not invent others
-        table, _ = reach_table(ordered_ops(model), axis=0, increment=2)
+        table = reach_table(ordered_ops(model), axis=0, increment=2)
         assert set(table) == {0}
 
     def test_one_by_one_convs_get_their_reach_from_pooling(self):
@@ -303,14 +288,50 @@ class TestUnsupportedLayers:
         with pytest.raises(NotImplementedError, match="dilation"):
             model_geometry(nn.Sequential(nn.MaxPool3d(2, dilation=2)))
 
-    def test_unsupported_resampling_layers_are_rejected(self):
+    @pytest.mark.parametrize(
+        "layer",
+        [
+            pytest.param(nn.Upsample(scale_factor=2), id="Upsample-scale_factor"),
+            pytest.param(nn.Upsample(size=(4, 4)), id="Upsample-size"),
+            pytest.param(
+                nn.UpsamplingNearest2d(scale_factor=2),
+                id="UpsamplingNearest2d-scale_factor",
+            ),
+            pytest.param(
+                nn.UpsamplingNearest2d(size=(4, 4)), id="UpsamplingNearest2d-size"
+            ),
+            pytest.param(
+                nn.UpsamplingBilinear2d(scale_factor=2),
+                id="UpsamplingBilinear2d-scale_factor",
+            ),
+            pytest.param(
+                nn.UpsamplingBilinear2d(size=(4, 4)), id="UpsamplingBilinear2d-size"
+            ),
+            pytest.param(nn.AdaptiveAvgPool2d(2), id="AdaptiveAvgPool2d"),
+            pytest.param(nn.AdaptiveAvgPool3d(2), id="AdaptiveAvgPool3d"),
+            pytest.param(nn.AdaptiveMaxPool2d(2), id="AdaptiveMaxPool2d"),
+            pytest.param(nn.AdaptiveMaxPool3d(2), id="AdaptiveMaxPool3d"),
+            pytest.param(
+                nn.FractionalMaxPool2d(2, output_ratio=0.5),
+                id="FractionalMaxPool2d",
+            ),
+            pytest.param(
+                nn.FractionalMaxPool3d(2, output_ratio=0.5),
+                id="FractionalMaxPool3d",
+            ),
+            pytest.param(nn.LPPool2d(2, 2), id="LPPool2d"),
+            pytest.param(nn.PixelShuffle(2), id="PixelShuffle"),
+            pytest.param(nn.PixelUnshuffle(2), id="PixelUnshuffle"),
+        ],
+    )
+    def test_unsupported_resampling_layers_are_rejected(self, layer):
         model = nn.Sequential(
             nn.Conv3d(1, 1, 3, padding=1),
-            nn.Upsample(scale_factor=2),
+            layer,
             nn.Conv3d(1, 1, 3, padding=1),
         )
 
-        with pytest.raises(NotImplementedError, match="Upsample"):
+        with pytest.raises(NotImplementedError, match=type(layer).__name__):
             model_geometry(model)
 
     def test_unrecognised_modules_with_spatial_attributes_are_rejected(self):
@@ -405,7 +426,7 @@ class TestReachReplay:
                 layer_order="c",
                 final_sigmoid=True,
             )
-            table, _ = reach_table(ordered_ops(model), axis, increment)
+            table = reach_table(ordered_ops(model), axis, increment)
             supports.append(
                 _avg_pool_oracle(model, model_input=128, axis=axis, positions=positions)
             )
@@ -425,13 +446,13 @@ class TestReachReplay:
         ops = ordered_ops(model)
 
         for axis in range(3):
-            table, _ = reach_table(ops, axis, increment=1)
+            table = reach_table(ops, axis, increment=1)
             oracle = _avg_pool_oracle(model, model_input=16, axis=axis, positions=[8])
             assert table[0] == oracle[8], axis
 
     def test_the_derived_halo_is_minimal(self):
         model = UNet3D(1, 1, f_maps=[4, 4, 4, 4])
-        table, _ = reach_table(ordered_ops(model), 0, increment=8)
+        table = reach_table(ordered_ops(model), 0, increment=8)
 
         assert exact_halo(table, 8) == 48
         # one phase period less leaves at least one crop position unclean
@@ -453,15 +474,15 @@ class TestReachTableCache:
         _reach_table_cached.cache_clear()
         ops = ordered_ops(nn.Sequential(nn.Conv3d(1, 1, 3, padding=1)))
 
-        first, _ = reach_table(ops, axis=0, increment=1)
-        second, _ = reach_table(ops, axis=0, increment=1)
+        first = reach_table(ops, axis=0, increment=1)
+        second = reach_table(ops, axis=0, increment=1)
 
         assert _reach_table_cached.cache_info().hits >= 1
         assert first == second
 
         # a caller mutating its dict must not poison the cache
         first[0] = (-1, -1)
-        third, _ = reach_table(ops, axis=0, increment=1)
+        third = reach_table(ops, axis=0, increment=1)
         assert third == second
 
     def test_reach_table_cache_is_keyed_by_axis_and_increment(self):

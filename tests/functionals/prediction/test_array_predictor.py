@@ -69,36 +69,6 @@ def _predictor(model: nn.Module) -> ArrayPredictor:
     )
 
 
-def test_predictor_crops_to_the_dataset_original_shape():
-    """The raw array may be a padded domain; the output is the original extent."""
-    raw = np.zeros((8, 32, 32), dtype="float32")
-    patch = (1, 32, 32)
-    slice_builder = SliceBuilder(raw, None, patch, stride_shape=patch)
-    dataset = ArrayDataset(
-        raw,
-        slice_builder,
-        augs=lambda patch: torch.from_numpy(patch)[None].float(),
-        halo_shape=(0, 0, 0),
-        original_shape=(3, 20, 24),
-    )
-    predictor = ArrayPredictor(
-        model=FailingForwardUNet2D(oom_calls=set()),
-        in_channels=1,
-        out_channels=1,
-        device="cpu",
-        patch=patch,
-        patch_halo=(0, 0, 0),
-        single_batch_mode=False,
-        headless=False,
-        disable_tqdm=True,
-    )
-
-    prediction = predictor(dataset)
-
-    assert prediction.shape == (1, 3, 20, 24)
-    assert np.all(np.isfinite(prediction))
-
-
 def test_array_predictor_falls_back_to_smaller_batch_on_oom(monkeypatch):
     # The probe accepted batch 16, the first batch succeeds, the second OOMs.
     # The partially accumulated first batch must not survive the restart.

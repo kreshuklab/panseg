@@ -29,32 +29,18 @@ _CONV_3D = (nn.Conv3d,)
 _AXES_2D = (1, 2)
 _AXES_3D = (0, 1, 2)
 
-# Layers that resample the spatial grid in a way the replay has no rule for.
-# The tuple is not exhaustive by construction; `_check_unknown` also fails
-# closed on any other module that exposes a spatial attribute.
-_UNSUPPORTED_SPATIAL = (
-    nn.Upsample,
-    nn.UpsamplingNearest2d,
-    nn.UpsamplingBilinear2d,
-    nn.AdaptiveAvgPool2d,
-    nn.AdaptiveAvgPool3d,
-    nn.AdaptiveMaxPool2d,
-    nn.AdaptiveMaxPool3d,
-    nn.FractionalMaxPool2d,
-    nn.FractionalMaxPool3d,
-    nn.LPPool2d,
-)
-
 # Attributes through which an unrecognised module can change the spatial
-# layout. A module that has one of them is not an activation, norm or
-# container, and silently treating it as identity would under-approximate the
-# reach.
+# layout. A module that has one is neither an activation, norm nor container,
+# and treating it as identity would under-approximate the reach.
 _SPATIAL_ATTRIBUTES = (
     "kernel_size",
     "stride",
     "padding",
     "output_size",
     "scale_factor",
+    "size",
+    "upscale_factor",
+    "downscale_factor",
 )
 
 # Captured at import so a patched `torch.nn.DataParallel` (tests, plugins) does
@@ -124,12 +110,6 @@ def _check_unknown(module: nn.Module) -> None:
     under-approximate the reach without a signal.
     """
     name = type(module).__name__
-    if isinstance(module, _UNSUPPORTED_SPATIAL):
-        raise NotImplementedError(
-            f"Model geometry for {name} is not implemented; the reach replay "
-            "does not model its resampling. PanSeg architectures upsample "
-            "through `InterpolateUpsampling`."
-        )
     spatial = [
         attribute
         for attribute in _SPATIAL_ATTRIBUTES

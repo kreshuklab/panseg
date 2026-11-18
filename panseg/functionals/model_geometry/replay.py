@@ -48,24 +48,18 @@ def _pool_support(
 
 
 def replay(
-    ops: Sequence[Op], axis: int, model_input: int, track_radius_sum: bool = False
-) -> tuple[dict[int, set[int]], int, int]:
+    ops: Sequence[Op], axis: int, model_input: int
+) -> tuple[dict[int, set[int]], int]:
     """Replay the per-axis supports over a model input of `model_input` voxels.
 
-    Returns the support of every final output position, the final size, and the
-    classic symmetric radius sum `S` (only when requested).
+    Returns the support of every final output position and the final size.
     """
     support: dict[int, set[int]] = {i: {i} for i in range(model_input)}
     size = model_input
     saves: list[tuple[dict[int, set[int]], int]] = []
-    radius_sum = 0
 
     for op in ops:
         if isinstance(op, Conv):
-            if track_radius_sum:
-                # `size` is the current level's size; the classic reach scales
-                # each radius by the level stride, i.e. `model_input // size`
-                radius_sum += int(op.radii[axis]) * (model_input // size)
             support = _conv_support(support, size, int(op.radii[axis]))
         elif isinstance(op, Pool):
             support, size = _pool_support(
@@ -83,26 +77,23 @@ def replay(
             }
             size = encoder_size
 
-    return support, size, radius_sum
+    return support, size
 
 
 def _reach_table(
     ops: Sequence[Op], axis: int, increment: int
-) -> tuple[dict[int, tuple[int, int]], int]:
+) -> dict[int, tuple[int, int]]:
     """Uncached exact per-phase `(left, right)` reach of the interior.
 
     The replay runs on an aligned model input of growing size until the sampled
     positions no longer touch either tensor edge. For an aligned input the
     reach depends only on `p mod increment` in the interior, so the table holds
-    one entry per occurring phase. Returns the table and the classic radius sum
-    `S` of that axis.
+    one entry per occurring phase.
     """
     replay_multiplier = 8
     while True:
         model_input = increment * replay_multiplier
-        support, final_size, radius_sum = replay(
-            ops, axis, model_input, track_radius_sum=True
-        )
+        support, final_size = replay(ops, axis, model_input)
         lo = final_size // 4
         hi = final_size - lo
         positions = range(lo, max(lo + 1, hi))
@@ -124,7 +115,7 @@ def _reach_table(
             phase = anchor % increment
             table.setdefault(phase, (anchor - min(voxels), max(voxels) - anchor))
         if interior and table:
-            return table, radius_sum
+            return table
         replay_multiplier *= 2
         if replay_multiplier > _MAX_REPLAY_MULTIPLIER:
             raise RuntimeError(
@@ -140,17 +131,17 @@ def _reach_table(
 @lru_cache(maxsize=None)
 def _reach_table_cached(
     ops: tuple[Op, ...], axis: int, increment: int
-) -> tuple[tuple[tuple[int, tuple[int, int]], ...], int]:
-    table, radius_sum = _reach_table(ops, axis, increment)
-    return tuple(sorted(table.items())), radius_sum
+) -> tuple[tuple[int, tuple[int, int]], ...]:
+    table = _reach_table(ops, axis, increment)
+    return tuple(sorted(table.items()))
 
 
 def reach_table(
     ops: Sequence[Op], axis: int, increment: int
-) -> tuple[dict[int, tuple[int, int]], int]:
+) -> dict[int, tuple[int, int]]:
     """Cached per (op sequence, axis, period); returns a fresh dict per call."""
-    items, radius_sum = _reach_table_cached(tuple(ops), axis, increment)
-    return dict(items), radius_sum
+    items = _reach_table_cached(tuple(ops), axis, increment)
+    return dict(items)
 
 
 def exact_halo(table: dict[int, tuple[int, int]], increment: int) -> int:

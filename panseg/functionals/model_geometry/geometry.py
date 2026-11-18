@@ -75,14 +75,13 @@ class ModelGeometry:
                     increment[axis] *= int(op.strides[axis])
 
         halo = [0, 0, 0]
-        radius_sums = [0, 0, 0]
         for axis in range(3):
             if increment[axis] == 1 and all(
                 not (isinstance(op, (Conv, Pool)) and touches_axis(op, axis))
                 for op in ops
             ):
                 continue
-            table, radius_sums[axis] = reach_table(ops, axis, increment[axis])
+            table = reach_table(ops, axis, increment[axis])
             halo[axis] = exact_halo(table, increment[axis])
 
         geometry = cls(
@@ -94,9 +93,7 @@ class ModelGeometry:
             is_2d=is_2d_model(model),
         )
         logger.info(
-            "Derived model geometry: conv radius sum S=%s -> exact halo %s "
-            "(increment %s, minimum input %s).",
-            tuple(radius_sums),
+            "Derived model geometry: exact halo %s (increment %s, minimum input %s).",
             geometry.halo,
             geometry.increment,
             geometry.min_input,

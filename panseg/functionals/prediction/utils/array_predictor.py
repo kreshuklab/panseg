@@ -301,12 +301,7 @@ class ArrayPredictor:
                 batch_size = smaller_batch_size
                 self.batch_size = batch_size
             else:
-                # the raw array may be a domain padded up to the phase grid; the
-                # accumulated map is the padded domain, so crop it back to the
-                # requested extent. Always three spatial slices: the map is
-                # (C, Z, Y, X) even for 2D models (singleton z).
-                z, y, x = test_dataset.original_shape
-                return prediction[(slice(None), slice(0, z), slice(0, y), slice(0, x))]
+                return prediction
 
     def _predict_with_batch_size(
         self,

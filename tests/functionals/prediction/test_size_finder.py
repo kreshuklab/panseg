@@ -331,7 +331,7 @@ def test_find_feasible_patch_and_halo_shapes_2d_model_keeps_depth_1(
 
     result = find_feasible_patch_and_halo_shapes(FakeUNet2D(), 1, VOL, HALO, device)
 
-    assert result == ((1, 1536, 1536), (0, 48, 48))  # used to be Z = 4
+    assert result == ((1, 1536, 1536), (0, 48, 48))
     if device == "cuda":
         assert fake_oom_probe.verified_shapes == [(1, 1632, 1632)]
 

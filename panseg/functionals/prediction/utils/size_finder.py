@@ -156,9 +156,6 @@ def derive_patch_and_halo_shapes(
     is_2d: bool = False,
     increment: tuple[int, int, int] = (1, 1, 1),
 ) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
-    # `increment` deliberately has a default: `(1, 1, 1)` means "no phase
-    # period", which is a correct (if pessimistic) derivation for callers that
-    # do not know the architecture. Prediction always passes the real period.
     """
     Recommend an optimal patch shape and halo size for a given 3D sample. Since convolving
     kernels are often isotropic, adjusting and fitting an initially isotropic maximum patch
@@ -187,7 +184,9 @@ def derive_patch_and_halo_shapes(
             Z halo 0, and the voxel budget goes to Y and X only. Defaults to False.
         increment (tuple[int, int, int], optional):
             Per-axis phase period the patch and model input are aligned to.
-            Defaults to (1, 1, 1).
+            Defaults to (1, 1, 1), i.e. "no phase period": a correct but
+            pessimistic derivation for callers that do not know the
+            architecture. Prediction always passes the real period.
 
     Returns:
         tuple[tuple[int, int, int], tuple[int, int, int]]:
