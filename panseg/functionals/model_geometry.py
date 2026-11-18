@@ -56,6 +56,34 @@ _CONV_3D = (nn.Conv3d,)
 _AXES_2D = (1, 2)
 _AXES_3D = (0, 1, 2)
 
+# Layers that resample the spatial grid in a way the replay has no rule for.
+# The tuple is not exhaustive by construction; `_check_unknown` also fails
+# closed on any other module that exposes a spatial attribute.
+_UNSUPPORTED_SPATIAL = (
+    nn.Upsample,
+    nn.UpsamplingNearest2d,
+    nn.UpsamplingBilinear2d,
+    nn.AdaptiveAvgPool2d,
+    nn.AdaptiveAvgPool3d,
+    nn.AdaptiveMaxPool2d,
+    nn.AdaptiveMaxPool3d,
+    nn.FractionalMaxPool2d,
+    nn.FractionalMaxPool3d,
+    nn.LPPool2d,
+)
+
+# Attributes through which an unrecognised module can change the spatial
+# layout. A module that has one of them is not an activation, norm or
+# container, and silently treating it as identity would under-approximate the
+# reach.
+_SPATIAL_ATTRIBUTES = (
+    "kernel_size",
+    "stride",
+    "padding",
+    "output_size",
+    "scale_factor",
+)
+
 # Captured at import so a patched `torch.nn.DataParallel` (tests, plugins) does
 # not break the unwrapping below.
 _DATA_PARALLEL = nn.DataParallel
@@ -114,6 +142,124 @@ def _full_axes(value, axes: tuple[int, ...], fill: int) -> tuple[int, int, int]:
     return (full[0], full[1], full[2])
 
 
+def _axis_name(axis: int) -> str:
+    return "ZYX"[axis]
+
+
+def _check_unknown(module: nn.Module) -> None:
+    """Refuse a module that may change the spatial layout but has no replay rule.
+
+    Activations, normalisations and containers expose none of
+    `_SPATIAL_ATTRIBUTES` and stay transparent. Anything else is refused rather
+    than treated as identity, which would under-approximate the reach without a
+    signal.
+    """
+    name = type(module).__name__
+    if isinstance(module, _UNSUPPORTED_SPATIAL):
+        raise NotImplementedError(
+            f"Model geometry for {name} is not implemented; the reach replay "
+            "does not model its resampling. PanSeg architectures upsample "
+            "through `InterpolateUpsampling`."
+        )
+    spatial = [
+        attribute
+        for attribute in _SPATIAL_ATTRIBUTES
+        if getattr(module, attribute, None) is not None
+    ]
+    if spatial:
+        raise NotImplementedError(
+            f"Model geometry for {name} is not implemented; it exposes the "
+            f"spatial attributes {spatial}, so the reach replay cannot assume "
+            "it is transparent. Register the layer type with `model_geometry` "
+            "or use a supported layer."
+        )
+
+
+def _check_conv(
+    module: nn.Conv2d | nn.Conv3d,
+    axes: tuple[int, ...],
+    radii: tuple[int, int, int],
+) -> None:
+    """Refuse a convolution whose size effect the replay does not model.
+
+    The replay assumes a size-preserving, phase-consistent convolution: an odd
+    kernel with `padding = kernel_size // 2`, unit stride, unit dilation and
+    zero padding. Anything else moves the grid under the replay.
+    """
+    name = type(module).__name__
+    if isinstance(module.padding, str):
+        raise NotImplementedError(
+            f"Model geometry does not model {name} with padding="
+            f"{module.padding!r}; only an explicit padding of "
+            "kernel_size // 2 preserves the size."
+        )
+    if module.padding_mode != "zeros":
+        raise NotImplementedError(
+            f"Model geometry does not model {name} with padding_mode="
+            f"{module.padding_mode!r}; only zero padding is supported."
+        )
+    kernels = _per_axis(module.kernel_size, axes)
+    paddings = _per_axis(module.padding, axes)
+    strides = _per_axis(module.stride, axes)
+    dilations = _per_axis(module.dilation, axes)
+    for axis, kernel, padding, stride, dilation in zip(
+        axes, kernels, paddings, strides, dilations
+    ):
+        where = f"{name} on the {_axis_name(axis)} axis"
+        if kernel != 2 * radii[axis] + 1:
+            raise NotImplementedError(
+                f"Model geometry does not model {where} with "
+                f"kernel_size={kernel}; only odd kernels preserve the size."
+            )
+        if padding != radii[axis]:
+            raise NotImplementedError(
+                f"Model geometry does not model {where} with padding={padding}; "
+                f"only padding=kernel_size // 2 (here {radii[axis]}) preserves "
+                "the size."
+            )
+        if stride != 1:
+            raise NotImplementedError(
+                f"Model geometry does not model {where} with stride={stride}; "
+                "only a unit stride preserves the size."
+            )
+        if dilation != 1:
+            raise NotImplementedError(
+                f"Model geometry does not model {where} with dilation={dilation}; "
+                "only a unit dilation is supported."
+            )
+
+
+def _check_pool(
+    module: nn.MaxPool2d | nn.MaxPool3d | nn.AvgPool2d | nn.AvgPool3d,
+    axes: tuple[int, ...],
+) -> None:
+    """Refuse a pooling layer whose size effect the replay does not model.
+
+    Pooling may only downsample by its kernel/stride grid: no padding, no
+    dilation and no `ceil_mode` (which would add a partial cell at the far edge).
+    """
+    name = type(module).__name__
+    if module.ceil_mode:
+        raise NotImplementedError(
+            f"Model geometry does not model {name} with ceil_mode=True; only "
+            "floor-mode pooling is supported."
+        )
+    paddings = _per_axis(module.padding, axes)
+    dilations = _per_axis(getattr(module, "dilation", 1), axes)
+    for axis, padding, dilation in zip(axes, paddings, dilations):
+        where = f"{name} on the {_axis_name(axis)} axis"
+        if padding != 0:
+            raise NotImplementedError(
+                f"Model geometry does not model {where} with padding={padding}; "
+                "only padding=0 is supported."
+            )
+        if dilation != 1:
+            raise NotImplementedError(
+                f"Model geometry does not model {where} with dilation={dilation}; "
+                "only a unit dilation is supported."
+            )
+
+
 @dataclass(frozen=True)
 class _Conv:
     """A convolution; `radii` is the per-axis reach in level-local cells."""
@@ -161,9 +307,11 @@ def _module_ops(module: nn.Module) -> list[_Op]:
         return ops
     spatial = _spatial_layer(module)
     if spatial is None:
+        _check_unknown(module)
         return []
     axes, is_pooling = spatial
     if is_pooling:
+        _check_pool(module, axes)
         stride = module.stride if module.stride is not None else module.kernel_size
         return [
             _Pool(
@@ -171,8 +319,10 @@ def _module_ops(module: nn.Module) -> list[_Op]:
                 strides=_full_axes(stride, axes, 1),
             )
         ]
-    radii = _full_axes(module.kernel_size, axes, 1)
-    return [_Conv(radii=(radii[0] // 2, radii[1] // 2, radii[2] // 2))]
+    kernel = _full_axes(module.kernel_size, axes, 1)
+    radii = (kernel[0] // 2, kernel[1] // 2, kernel[2] // 2)
+    _check_conv(module, axes, radii)
+    return [_Conv(radii=radii)]
 
 
 def _ordered_ops(model: nn.Module) -> list[_Op]:
@@ -443,8 +593,12 @@ def model_geometry(model: nn.Module) -> ModelGeometry:
     context.
 
     Raises:
-        NotImplementedError: for spatial layers the replay does not model
-            (transposed convolutions).
+        NotImplementedError: for spatial layers the replay does not model:
+            transposed convolutions, convolutions that are not size-preserving
+            (even kernel, ``padding != kernel_size // 2``, stride or dilation
+            other than 1, non-zero padding mode), pooling with padding, dilation
+            or ``ceil_mode``, and unrecognised modules that expose spatial
+            attributes.
 
     References:
         - For further details on halos in the context of neural networks, see:

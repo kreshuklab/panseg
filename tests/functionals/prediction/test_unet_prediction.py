@@ -361,6 +361,23 @@ def test_unet_prediction_2d_model_manual_patch(dummy_model_2d):
     assert np.all(np.isfinite(pmap))
 
 
+def test_unet_prediction_2d_multichannel_preserves_channels(tmp_path):
+    """The spatial crop must not slice the channel axis of a 2D prediction."""
+    model = UNet2D(in_channels=2, out_channels=2, final_sigmoid=True, f_maps=[8, 16])
+    config = MODEL_CONFIG_2D.replace("in_channels: 1", "in_channels: 2")
+    model_files = _save_model(tmp_path, model, config)
+    cyx = np.random.rand(2, 64, 64).astype("float32")
+    czyx = np.random.rand(2, 3, 64, 64).astype("float32")
+
+    cyx_map = _predict(model_files, cyx, "CYX")
+    czyx_map = _predict(model_files, czyx, "CZYX")
+
+    assert cyx_map.shape == (2, 1, 64, 64)
+    assert czyx_map.shape == (2, 3, 64, 64)
+    assert np.all(np.isfinite(cyx_map))
+    assert np.all(np.isfinite(czyx_map))
+
+
 @pytest.mark.parametrize(
     ("patch", "patch_halo", "match"),
     [

@@ -17,6 +17,7 @@ from panseg.functionals.model_geometry import (
     _exact_halo,
     _ordered_ops,
     _reach_table,
+    _replay,
     is_2d_model,
     model_geometry,
     model_input_shape,
@@ -90,8 +91,8 @@ class TestModelGeometryTraversal:
     def test_average_pooling_counts_like_max_pooling(self):
         model = nn.Sequential(
             nn.AvgPool3d(2),
-            nn.Conv3d(1, 1, 3),
-            nn.Conv3d(1, 1, 3),
+            nn.Conv3d(1, 1, 3, padding=1),
+            nn.Conv3d(1, 1, 3, padding=1),
         )
 
         geometry = model_geometry(model)
@@ -105,7 +106,7 @@ class TestModelGeometryTraversal:
     def test_anisotropic_pooling_sets_the_per_axis_period(self):
         model = nn.Sequential(
             nn.MaxPool3d(kernel_size=(2, 4, 4)),
-            nn.Conv3d(1, 1, 3),
+            nn.Conv3d(1, 1, 3, padding=1),
         )
 
         geometry = model_geometry(model)
@@ -117,8 +118,8 @@ class TestModelGeometryTraversal:
         """A kernel-3, stride-2 pool runs on 3 cells but steps the phase by 2."""
         model = nn.Sequential(
             nn.MaxPool3d(kernel_size=3, stride=2),
-            nn.Conv3d(1, 1, 3),
-            nn.Conv3d(1, 1, 3),
+            nn.Conv3d(1, 1, 3, padding=1),
+            nn.Conv3d(1, 1, 3, padding=1),
         )
 
         geometry = model_geometry(model)
@@ -176,6 +177,97 @@ class TestModelGeometryTraversal:
             if geometry.is_2d and axis == 0:
                 continue
             assert halo + 1 >= minimum
+
+
+class TestReplaySizeInvariant:
+    """The replay's size must equal the size a real forward pass produces."""
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"f_maps": [4, 4]},
+            {"f_maps": [4, 4, 4, 4]},
+            {"f_maps": 8, "num_levels": 5},
+        ],
+    )
+    # `(axis, dim)` pairs are explicit: a 2D model has no Z tensor axis, so its
+    # Y/X replay axes are 1/2 and its output dims 2/3.
+    @pytest.mark.parametrize(
+        ("model_class", "axis", "dim"),
+        [
+            (UNet3D, 0, 2),
+            (UNet3D, 1, 3),
+            (UNet3D, 2, 4),
+            (UNet2D, 1, 2),
+            (UNet2D, 2, 3),
+        ],
+        ids=["3d-z", "3d-y", "3d-x", "2d-y", "2d-x"],
+    )
+    def test_the_replay_matches_the_real_forward_size(
+        self, model_class, axis, dim, config
+    ):
+        model = model_class(1, 1, layer_order="c", **config).eval()
+        spatial = [64] * (2 if model_class is UNet2D else 3)
+
+        with torch.no_grad():
+            out = model(torch.zeros(1, 1, *spatial))
+
+        assert _replay(_ordered_ops(model), axis, 64)[1] == out.shape[dim]
+
+
+class _UnknownSpatialLayer(nn.Module):
+    """A layer type the replay has no rule for, but that changes the grid."""
+
+    def __init__(self):
+        super().__init__()
+        self.kernel_size = 2
+        self.stride = 2
+
+    def forward(self, x):  # pragma: no cover - never called
+        raise AssertionError("the geometry must be refused before a forward pass")
+
+
+class TestUnsupportedLayers:
+    """The replay refuses layers whose size effect it does not model."""
+
+    def test_conv_padding_other_than_the_radius_is_rejected(self):
+        with pytest.raises(NotImplementedError, match="padding"):
+            model_geometry(UNet3D(1, 1, f_maps=[4, 4, 4, 4], conv_padding=2))
+
+        with pytest.raises(NotImplementedError, match="padding"):
+            model_geometry(nn.Sequential(nn.Conv3d(1, 1, 3, padding=2)))
+
+    def test_even_conv_kernels_are_rejected(self):
+        with pytest.raises(NotImplementedError, match="kernel_size"):
+            model_geometry(nn.Sequential(nn.Conv3d(1, 1, 2, padding=1)))
+
+    def test_pooling_with_padding_is_rejected(self):
+        with pytest.raises(NotImplementedError, match="padding"):
+            model_geometry(nn.Sequential(nn.MaxPool3d(2, padding=1)))
+
+    def test_pooling_with_dilation_is_rejected(self):
+        with pytest.raises(NotImplementedError, match="dilation"):
+            model_geometry(nn.Sequential(nn.MaxPool3d(2, dilation=2)))
+
+    def test_unsupported_resampling_layers_are_rejected(self):
+        model = nn.Sequential(
+            nn.Conv3d(1, 1, 3, padding=1),
+            nn.Upsample(scale_factor=2),
+            nn.Conv3d(1, 1, 3, padding=1),
+        )
+
+        with pytest.raises(NotImplementedError, match="Upsample"):
+            model_geometry(model)
+
+    def test_unrecognised_modules_with_spatial_attributes_are_rejected(self):
+        model = nn.Sequential(
+            nn.Conv3d(1, 1, 3, padding=1),
+            _UnknownSpatialLayer(),
+            nn.Conv3d(1, 1, 3, padding=1),
+        )
+
+        with pytest.raises(NotImplementedError, match="_UnknownSpatialLayer"):
+            model_geometry(model)
 
 
 def _avg_pool_oracle(model: nn.Module, model_input: int, axis: int, positions):

@@ -102,7 +102,11 @@ the support of `q` is the union over everything that feeds it.
 
 The rules are exact: they do not assume that the network is shift-invariant, so
 they also capture the fact that pooling and nearest-neighbour upsampling are
-not. The following function applies them along one axis:
+not. They cover size-preserving convolutions only — an odd kernel `k`,
+`padding = k // 2`, stride and dilation 1 and zero padding — plus pooling with no
+padding, unit dilation and floor mode; any other layer geometry raises
+`NotImplementedError` instead of being approximated. The following function
+applies them along one axis:
 
 ```python
 def reach_profile(model_input, n_levels=4):
