@@ -6,9 +6,12 @@ replayed per axis and per phase. This replay is the authoritative source; see
 ``docs/chapters/advanced/halo.md``.
 """
 
+from collections.abc import Sequence
+from functools import lru_cache
+
 from panseg.functionals.model_geometry.layers import Conv, Op, Pool, SaveSkip
 
-# Upper bound on the replay size multiplier. `reach_table` doubles it until the
+# Upper bound on the replay size multiplier. `_reach_table` doubles it until the
 # sampled positions are safely in the interior, so a few doublings suffice for
 # every realistic architecture; the cap only protects against a malformed model.
 _MAX_REPLAY_MULTIPLIER = 512
@@ -45,7 +48,7 @@ def _pool_support(
 
 
 def replay(
-    ops: list[Op], axis: int, model_input: int, track_radius_sum: bool = False
+    ops: Sequence[Op], axis: int, model_input: int, track_radius_sum: bool = False
 ) -> tuple[dict[int, set[int]], int, int]:
     """Replay the per-axis supports over a model input of `model_input` voxels.
 
@@ -83,10 +86,10 @@ def replay(
     return support, size, radius_sum
 
 
-def reach_table(
-    ops: list[Op], axis: int, increment: int
+def _reach_table(
+    ops: Sequence[Op], axis: int, increment: int
 ) -> tuple[dict[int, tuple[int, int]], int]:
-    """Exact per-phase `(left, right)` reach of the interior.
+    """Uncached exact per-phase `(left, right)` reach of the interior.
 
     The replay runs on an aligned model input of growing size until the sampled
     positions no longer touch either tensor edge. For an aligned input the
@@ -129,6 +132,25 @@ def reach_table(
                 f"along axis {axis} (increment {increment}); the architecture "
                 "is too deep or too strongly downsampling."
             )
+
+
+# `maxsize=None` is safe: the key space is (number of distinct architectures) ×
+# 3 axes. The op dataclasses are frozen, so the op tuple is hashable and a model
+# keeps the same key across predictions.
+@lru_cache(maxsize=None)
+def _reach_table_cached(
+    ops: tuple[Op, ...], axis: int, increment: int
+) -> tuple[tuple[tuple[int, tuple[int, int]], ...], int]:
+    table, radius_sum = _reach_table(ops, axis, increment)
+    return tuple(sorted(table.items())), radius_sum
+
+
+def reach_table(
+    ops: Sequence[Op], axis: int, increment: int
+) -> tuple[dict[int, tuple[int, int]], int]:
+    """Cached per (op sequence, axis, period); returns a fresh dict per call."""
+    items, radius_sum = _reach_table_cached(tuple(ops), axis, increment)
+    return dict(items), radius_sum
 
 
 def exact_halo(table: dict[int, tuple[int, int]], increment: int) -> int:

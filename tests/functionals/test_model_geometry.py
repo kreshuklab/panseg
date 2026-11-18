@@ -19,7 +19,12 @@ from panseg.functionals.model_geometry import (
     model_input_shape,
 )
 from panseg.functionals.model_geometry.layers import ordered_ops
-from panseg.functionals.model_geometry.replay import exact_halo, reach_table, replay
+from panseg.functionals.model_geometry.replay import (
+    _reach_table_cached,
+    exact_halo,
+    reach_table,
+    replay,
+)
 from panseg.functionals.training.model import UNet2D, UNet3D
 
 STANDARD_HALO = (48, 48, 48)
@@ -401,6 +406,50 @@ class TestReachReplay:
         assert any(
             h + t - table[t][0] <= 0 or h + t + table[t][1] >= m - 1 for t in range(8)
         )
+
+
+class TestReachTableCache:
+    """The replay is pure, so its reach table is cached per op sequence.
+
+    `model_geometry` runs per prediction and on every model change in the
+    viewer; the op dataclasses are frozen, so the op tuple is a valid key.
+    """
+
+    def test_reach_table_is_cached(self):
+        _reach_table_cached.cache_clear()
+        ops = ordered_ops(nn.Sequential(nn.Conv3d(1, 1, 3, padding=1)))
+
+        first, _ = reach_table(ops, axis=0, increment=1)
+        second, _ = reach_table(ops, axis=0, increment=1)
+
+        assert _reach_table_cached.cache_info().hits >= 1
+        assert first == second
+
+        # a caller mutating its dict must not poison the cache
+        first[0] = (-1, -1)
+        third, _ = reach_table(ops, axis=0, increment=1)
+        assert third == second
+
+    def test_reach_table_cache_is_keyed_by_axis_and_increment(self):
+        _reach_table_cached.cache_clear()
+        ops = ordered_ops(
+            nn.Sequential(
+                nn.Conv3d(1, 1, kernel_size=(1, 3, 5), padding=(0, 1, 2)),
+                nn.Conv3d(1, 1, kernel_size=(3, 1, 5), padding=(1, 0, 2)),
+            )
+        )
+
+        reach_table(ops, axis=0, increment=1)
+        assert _reach_table_cached.cache_info().misses == 1
+
+        reach_table(ops, axis=1, increment=1)
+        reach_table(ops, axis=0, increment=2)
+        assert _reach_table_cached.cache_info().misses == 3
+
+        reach_table(ops, axis=0, increment=1)
+        info = _reach_table_cached.cache_info()
+        assert info.hits == 1
+        assert info.misses == 3
 
 
 class TestEffectiveMinInput:
