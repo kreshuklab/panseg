@@ -75,6 +75,11 @@ class TestModelGeometryTraversal:
         assert is_2d_model(nn.Sequential(model))
         assert not is_2d_model(UNet3D(1, 1, f_maps=[4, 4]))
 
+    def test_from_model_matches_the_function(self):
+        model = UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4, 4, 4])
+
+        assert ModelGeometry.from_model(model) == model_geometry(model)
+
     def test_unet3d_halo_increment_and_min_input(self):
         model = UNet3D(in_channels=1, out_channels=1, f_maps=[4, 4, 4, 4])
 
