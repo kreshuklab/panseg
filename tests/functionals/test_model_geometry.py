@@ -265,6 +265,17 @@ class _UnknownSpatialLayer(nn.Module):
         raise AssertionError("the geometry must be refused before a forward pass")
 
 
+class _UnknownContainer(nn.Module):
+    """A wrapper the replay has no rule for, holding a spatial child."""
+
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Conv3d(1, 1, 2)
+
+    def forward(self, x):  # pragma: no cover - never called
+        raise AssertionError("the geometry must be refused before a forward pass")
+
+
 class TestUnsupportedLayers:
     """The replay refuses layers whose size effect it does not model."""
 
@@ -306,6 +317,24 @@ class TestUnsupportedLayers:
 
         with pytest.raises(NotImplementedError, match="_UnknownSpatialLayer"):
             model_geometry(model)
+
+    def test_unrecognised_containers_are_rejected_not_traversed_as_identity(self):
+        model = nn.Sequential(
+            nn.Conv3d(1, 1, 3, padding=1),
+            _UnknownContainer(),
+            nn.Conv3d(1, 1, 3, padding=1),
+        )
+
+        with pytest.raises(NotImplementedError, match="_UnknownContainer"):
+            model_geometry(model)
+
+    def test_childless_modules_without_spatial_attributes_stay_transparent(self):
+        model = nn.Sequential(nn.Conv3d(1, 1, 3, padding=1), nn.Identity(), nn.ReLU())
+
+        geometry = model_geometry(model)
+
+        assert geometry.halo == (2, 2, 2)
+        assert len(ordered_ops(model)) == 1
 
 
 def _avg_pool_oracle(model: nn.Module, model_input: int, axis: int, positions):

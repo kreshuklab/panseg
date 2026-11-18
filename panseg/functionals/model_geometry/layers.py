@@ -1,11 +1,13 @@
 """Model modules mapped to the vocabulary the reach replay understands.
 
 This is the single place that maps model modules to the replay vocabulary. It
-special-cases `Encoder`, `Decoder` and `InterpolateUpsampling`, and it refuses
-layer types whose size effect the replay does not model. Any new block type in
+special-cases `Encoder`, `Decoder`, `InterpolateUpsampling` and the container
+types `nn.Sequential`/`nn.ModuleList`, and it refuses every other module that
+is not provably transparent: an unrecognised module that exposes a spatial
+attribute, or an unrecognised container with children, may change the spatial
+layout in a way the replay has no rule for. Any new block type in
 `panseg.functionals.training.model` must be registered here, or the geometry
-will under-approximate the reach: an unrecognised downsampler would yield a
-too-small halo without a signal.
+will fail closed rather than under-approximate the reach.
 """
 
 from dataclasses import dataclass
@@ -115,10 +117,11 @@ def _axis_name(axis: int) -> str:
 def _check_unknown(module: nn.Module) -> None:
     """Refuse a module that may change the spatial layout but has no replay rule.
 
-    Activations, normalisations and containers expose none of
-    `_SPATIAL_ATTRIBUTES` and stay transparent. Anything else is refused rather
-    than treated as identity, which would under-approximate the reach without a
-    signal.
+    Childless modules without a spatial attribute (activations, normalisations,
+    dropout, ``nn.Identity``) stay transparent. Anything else is refused rather
+    than treated as identity: an unregistered spatial module, or an unregistered
+    container whose children would otherwise never be traversed, would
+    under-approximate the reach without a signal.
     """
     name = type(module).__name__
     if isinstance(module, _UNSUPPORTED_SPATIAL):
@@ -139,10 +142,17 @@ def _check_unknown(module: nn.Module) -> None:
             "it is transparent. Register the layer type with `model_geometry` "
             "or use a supported layer."
         )
+    if next(module.children(), None) is not None:
+        raise NotImplementedError(
+            f"Model geometry for {name} is not implemented; it is an "
+            "unregistered container, so the reach replay would skip its "
+            "children. Register the container type with `model_geometry` or "
+            "build it from `nn.Sequential`/`nn.ModuleList`."
+        )
 
 
 def _check_conv(
-    module: nn.Conv2d | nn.Conv3d,
+    module: nn.Module,
     axes: tuple[int, ...],
     radii: tuple[int, int, int],
 ) -> None:
@@ -150,8 +160,10 @@ def _check_conv(
 
     The replay assumes a size-preserving, phase-consistent convolution: an odd
     kernel with `padding = kernel_size // 2`, unit stride, unit dilation and
-    zero padding. Anything else moves the grid under the replay.
+    zero padding. The caller only routes `nn.Conv2d`/`nn.Conv3d` here, so the
+    assertion narrows the type without a runtime change.
     """
+    assert isinstance(module, (nn.Conv2d, nn.Conv3d))
     name = type(module).__name__
     if isinstance(module.padding, str):
         raise NotImplementedError(
@@ -196,14 +208,17 @@ def _check_conv(
 
 
 def _check_pool(
-    module: nn.MaxPool2d | nn.MaxPool3d | nn.AvgPool2d | nn.AvgPool3d,
+    module: nn.Module,
     axes: tuple[int, ...],
 ) -> None:
     """Refuse a pooling layer whose size effect the replay does not model.
 
     Pooling may only downsample by its kernel/stride grid: no padding, no
-    dilation and no `ceil_mode` (which would add a partial cell at the far edge).
+    dilation and no `ceil_mode` (which would add a partial cell at the far
+    edge). The caller only routes the four supported pooling types here, so the
+    assertion narrows the type without a runtime change.
     """
+    assert isinstance(module, (nn.MaxPool2d, nn.MaxPool3d, nn.AvgPool2d, nn.AvgPool3d))
     name = type(module).__name__
     if module.ceil_mode:
         raise NotImplementedError(
