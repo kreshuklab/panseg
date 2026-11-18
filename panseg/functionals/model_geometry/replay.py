@@ -1,0 +1,151 @@
+"""Exact per-axis reach of an architecture, replayed over a 1D support.
+
+The halo is never computed from a closed form: pooling and nearest-neighbour
+upsampling are not shift-invariant, so the reach of every output cell is
+replayed per axis and per phase. This replay is the authoritative source; see
+``docs/chapters/advanced/halo.md``.
+"""
+
+from panseg.functionals.model_geometry.layers import Conv, Op, Pool, SaveSkip
+
+# Upper bound on the replay size multiplier. `reach_table` doubles it until the
+# sampled positions are safely in the interior, so a few doublings suffice for
+# every realistic architecture; the cap only protects against a malformed model.
+_MAX_REPLAY_MULTIPLIER = 512
+
+
+def _conv_support(
+    support: dict[int, set[int]], size: int, radius: int
+) -> dict[int, set[int]]:
+    if radius == 0:
+        return support
+    return {
+        p: set().union(
+            *(support.get(p + offset, set()) for offset in range(-radius, radius + 1))
+        )
+        for p in range(size)
+    }
+
+
+def _pool_support(
+    support: dict[int, set[int]], size: int, kernel: int, stride: int
+) -> tuple[dict[int, set[int]], int]:
+    out_size = (size - kernel) // stride + 1
+    if out_size < 1:
+        out_size = 1
+    return (
+        {
+            q: set().union(
+                *(support.get(stride * q + offset, set()) for offset in range(kernel))
+            )
+            for q in range(out_size)
+        },
+        out_size,
+    )
+
+
+def replay(
+    ops: list[Op], axis: int, model_input: int, track_radius_sum: bool = False
+) -> tuple[dict[int, set[int]], int, int]:
+    """Replay the per-axis supports over a model input of `model_input` voxels.
+
+    Returns the support of every final output position, the final size, and the
+    classic symmetric radius sum `S` (only when requested).
+    """
+    support: dict[int, set[int]] = {i: {i} for i in range(model_input)}
+    size = model_input
+    saves: list[tuple[dict[int, set[int]], int]] = []
+    radius_sum = 0
+
+    for op in ops:
+        if isinstance(op, Conv):
+            if track_radius_sum:
+                # `size` is the current level's size; the classic reach scales
+                # each radius by the level stride, i.e. `model_input // size`
+                radius_sum += int(op.radii[axis]) * (model_input // size)
+            support = _conv_support(support, size, int(op.radii[axis]))
+        elif isinstance(op, Pool):
+            support, size = _pool_support(
+                support, size, int(op.kernels[axis]), int(op.strides[axis])
+            )
+        elif isinstance(op, SaveSkip):
+            saves.append((support, size))
+        else:  # JoinEncoderSkip
+            encoder_support, encoder_size = saves.pop()
+            source_size = size
+            support = {
+                q: support.get((q * source_size) // encoder_size, set())
+                | encoder_support.get(q, set())
+                for q in range(encoder_size)
+            }
+            size = encoder_size
+
+    return support, size, radius_sum
+
+
+def reach_table(
+    ops: list[Op], axis: int, increment: int
+) -> tuple[dict[int, tuple[int, int]], int]:
+    """Exact per-phase `(left, right)` reach of the interior.
+
+    The replay runs on an aligned model input of growing size until the sampled
+    positions no longer touch either tensor edge. For an aligned input the
+    reach depends only on `p mod increment` in the interior, so the table holds
+    one entry per occurring phase. Returns the table and the classic radius sum
+    `S` of that axis.
+    """
+    replay_multiplier = 8
+    while True:
+        model_input = increment * replay_multiplier
+        support, final_size, radius_sum = replay(
+            ops, axis, model_input, track_radius_sum=True
+        )
+        lo = final_size // 4
+        hi = final_size - lo
+        positions = range(lo, max(lo + 1, hi))
+        table: dict[int, tuple[int, int]] = {}
+        interior = True
+        for q in positions:
+            voxels = support[q]
+            if not voxels:
+                continue
+            if min(voxels) <= 0 or max(voxels) >= model_input - 1:
+                interior = False
+                break
+            # A U-Net output sits at full resolution and its index is the input
+            # position. A model without upsampling has a coarser output grid,
+            # where output `q` represents input cell `increment * q` (the
+            # per-axis product of the pooling strides); other phases do not
+            # occur and must not be invented.
+            anchor = q if final_size == model_input else q * increment
+            phase = anchor % increment
+            table.setdefault(phase, (anchor - min(voxels), max(voxels) - anchor))
+        if interior and table:
+            return table, radius_sum
+        replay_multiplier *= 2
+        if replay_multiplier > _MAX_REPLAY_MULTIPLIER:
+            raise RuntimeError(
+                "Could not find an interior model input for the reach replay "
+                f"along axis {axis} (increment {increment}); the architecture "
+                "is too deep or too strongly downsampling."
+            )
+
+
+def exact_halo(table: dict[int, tuple[int, int]], increment: int) -> int:
+    """Smallest multiple of `increment` whose aligned crop is clean.
+
+    The crop contains every phase of the period, at positions `h + t` for
+    `t = 0 … increment - 1` (a patch of exactly one period). A position is
+    clean when `p - L(p) > 0` and `p + R(p) < M - 1`; substituting `M = Q + 2h`
+    with `Q = increment` and `p = h + t` gives the two bounds below. Requiring
+    both for every phase makes the result independent of the patch size, as
+    long as the patch is a multiple of the period.
+    """
+    needed = 1
+    for phase, (left, right) in table.items():
+        needed = max(
+            needed,
+            left - phase + 1,
+            phase + right - increment + 2,
+        )
+    return ((needed + increment - 1) // increment) * increment

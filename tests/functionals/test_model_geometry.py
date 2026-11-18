@@ -14,18 +14,51 @@ from torch import nn
 
 from panseg.functionals.model_geometry import (
     ModelGeometry,
-    _exact_halo,
-    _ordered_ops,
-    _reach_table,
-    _replay,
     is_2d_model,
     model_geometry,
     model_input_shape,
 )
+from panseg.functionals.model_geometry.layers import ordered_ops
+from panseg.functionals.model_geometry.replay import exact_halo, reach_table, replay
 from panseg.functionals.training.model import UNet2D, UNet3D
 
 STANDARD_HALO = (48, 48, 48)
 STANDARD_EFFECTIVE_MINIMUM = (104, 104, 104)
+
+
+class TestPackageLayout:
+    """Geometry is a package: introspection, replay and the public API.
+
+    `layers` maps model modules to the replay vocabulary, `replay` holds the 1D
+    support replay, and the package root keeps the documented geometry API.
+    """
+
+    def test_the_package_root_keeps_the_public_geometry_api(self):
+        import panseg.functionals.model_geometry as geometry
+
+        for name in (
+            "ModelGeometry",
+            "model_geometry",
+            "aligned_shape",
+            "aligned_down",
+            "model_input_shape",
+            "tensor_input_shape",
+            "is_2d_model",
+        ):
+            assert hasattr(geometry, name), name
+        # `stride_shape` arrives with the stride derivation, not the split
+        assert not hasattr(geometry, "stride_shape")
+
+    def test_the_replay_and_layers_helpers_live_in_their_own_modules(self):
+        model = nn.Sequential(nn.Conv3d(1, 1, 3, padding=1))
+
+        ops = ordered_ops(model)
+        support, final_size, _ = replay(ops, axis=0, model_input=8)
+        table, _ = reach_table(ops, axis=0, increment=1)
+
+        assert final_size == 8
+        assert support[4] == {3, 4, 5}
+        assert exact_halo(table, 1) == 2
 
 
 class TestModelGeometryTraversal:
@@ -130,7 +163,7 @@ class TestModelGeometryTraversal:
         assert geometry.halo == (6, 6, 6)
         # a kernel-3, stride-2 pool leaves a coarser output grid: only the
         # aligned phase exists, and the replay must not invent others
-        table, _ = _reach_table(_ordered_ops(model), axis=0, increment=2)
+        table, _ = reach_table(ordered_ops(model), axis=0, increment=2)
         assert set(table) == {0}
 
     def test_one_by_one_convs_get_their_reach_from_pooling(self):
@@ -212,7 +245,7 @@ class TestReplaySizeInvariant:
         with torch.no_grad():
             out = model(torch.zeros(1, 1, *spatial))
 
-        assert _replay(_ordered_ops(model), axis, 64)[1] == out.shape[dim]
+        assert replay(ordered_ops(model), axis, 64)[1] == out.shape[dim]
 
 
 class _UnknownSpatialLayer(nn.Module):
@@ -333,7 +366,7 @@ class TestReachReplay:
                 layer_order="c",
                 final_sigmoid=True,
             )
-            table, _ = _reach_table(_ordered_ops(model), axis, increment)
+            table, _ = reach_table(ordered_ops(model), axis, increment)
             supports.append(
                 _avg_pool_oracle(model, model_input=128, axis=axis, positions=positions)
             )
@@ -350,18 +383,18 @@ class TestReachReplay:
             nn.Conv3d(1, 1, kernel_size=(1, 3, 5), padding=(0, 1, 2)),
             nn.Conv3d(1, 1, kernel_size=(3, 1, 5), padding=(1, 0, 2)),
         )
-        ops = _ordered_ops(model)
+        ops = ordered_ops(model)
 
         for axis in range(3):
-            table, _ = _reach_table(ops, axis, increment=1)
+            table, _ = reach_table(ops, axis, increment=1)
             oracle = _avg_pool_oracle(model, model_input=16, axis=axis, positions=[8])
             assert table[0] == oracle[8], axis
 
     def test_the_derived_halo_is_minimal(self):
         model = UNet3D(1, 1, f_maps=[4, 4, 4, 4])
-        table, _ = _reach_table(_ordered_ops(model), 0, increment=8)
+        table, _ = reach_table(ordered_ops(model), 0, increment=8)
 
-        assert _exact_halo(table, 8) == 48
+        assert exact_halo(table, 8) == 48
         # one phase period less leaves at least one crop position unclean
         h, q = 40, 8
         m = q + 2 * h

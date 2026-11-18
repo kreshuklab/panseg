@@ -215,6 +215,9 @@ class Encoder(nn.Module):
     (make sure to use complementary scale_factor in the decoder path) followed by
     a basic module (DoubleConv or ResNetBlock).
 
+    Geometry: `panseg.functionals.model_geometry.layers` maps this block to the
+    replay vocabulary; new block types must be registered there.
+
     Args:
         in_channels (int): number of input channels
         out_channels (int): number of output channels
@@ -281,6 +284,9 @@ class Decoder(nn.Module):
     A single module for decoder path consisting of the upsampling layer
     (either learned ConvTranspose3d or nearest neighbor interpolation)
     followed by a basic module (DoubleConv or ResNetBlock).
+
+    Geometry: `panseg.functionals.model_geometry.layers` maps this block to the
+    replay vocabulary; new block types must be registered there.
 
     Args:
         in_channels (int): number of input channels
