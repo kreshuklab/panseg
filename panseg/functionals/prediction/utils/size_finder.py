@@ -247,19 +247,48 @@ def derive_patch_and_halo_shapes(
             _int_tuple3(halo_shape),
         )
 
-    # Binary-search the largest fraction of the per-axis maximum that fits the
-    # model-input budget, then align each axis down to the phase period.
+    best = _fit_model_input_to_budget(
+        min_model_input,
+        max_model_input,
+        shape_volume + 2 * halo_shape,
+        budget,
+        shape_increment,
+    )
+    patch = best - 2 * halo_shape
+    return _int_tuple3(patch), _int_tuple3(halo_shape)
+
+
+def _fit_model_input_to_budget(
+    min_model_input: np.ndarray,
+    max_model_input: np.ndarray,
+    cap_model_input: np.ndarray,
+    budget: int,
+    increment: np.ndarray,
+) -> np.ndarray:
+    """Largest increment-aligned model-input shape in [min, cap] that fits budget.
+
+    Binary-searches the per-axis fraction between `min` and `max`, aligns each
+    axis down to the phase period, then spends leftover budget by growing the
+    smallest axes up to `cap_model_input` so the model input stays balanced.
+    """
+    # A caller that already knows the domain passes it as the cap; the search
+    # must not exceed it even when `max_model_input` is larger.
+    max_model_input = np.maximum(
+        np.minimum(max_model_input, cap_model_input), min_model_input
+    )
+
     low, high = 0.0, 1.0
-    best = min_model_input.copy()
+    best = np.array(min_model_input, dtype=np.int64)
     for _ in range(64):
         fraction = (low + high) / 2
         candidate = np.array(
             aligned_down(
                 min_model_input + fraction * (max_model_input - min_model_input),
-                shape_increment,
+                increment,
             ),
             dtype=np.int64,
         )
+        candidate = np.maximum(candidate, min_model_input)
         if int(np.prod(candidate)) <= budget:
             best = candidate
             low = fraction
@@ -273,8 +302,8 @@ def derive_patch_and_halo_shapes(
         grown = False
         for axis in np.argsort(best):
             candidate = best.copy()
-            candidate[axis] += shape_increment[axis]
-            if candidate[axis] - 2 * halo_shape[axis] > shape_volume[axis]:
+            candidate[axis] += increment[axis]
+            if candidate[axis] > cap_model_input[axis]:
                 continue
             if int(np.prod(candidate)) <= budget:
                 best = candidate
@@ -283,8 +312,7 @@ def derive_patch_and_halo_shapes(
         if not grown:
             break
 
-    patch = best - 2 * halo_shape
-    return _int_tuple3(patch), _int_tuple3(halo_shape)
+    return np.maximum(best, min_model_input)
 
 
 def _int_tuple3(shape) -> tuple[int, int, int]:

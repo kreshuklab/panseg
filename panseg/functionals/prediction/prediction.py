@@ -209,6 +209,8 @@ def unet_prediction(
 
     This function handles both single and multi-channel outputs from the model,
     returning appropriately shaped arrays based on the output channel configuration.
+    The raw volume is reflect-padded up to the aligned domain and the prediction
+    is cropped back, so the returned shape always equals the input shape.
 
     For Bioimage.IO Model Zoo models, weights are downloaded and loaded into `UNet3D` or `UNet2D`
     in `panseg.functionals.training.model`, i.e. `bioimageio.core` is not used. `biio_prediction()` uses
@@ -219,8 +221,13 @@ def unet_prediction(
         Input_layout (ImageLayout): The layout of the input data.
         model_name (str | None): The name of the model to use.
         model_id (str | None): The ID of the model from the BioImage.IO model zoo.
-        patch (tuple[int, int, int], optional): Patch size for prediction. Defaults to (80, 160, 160).
-        patch_halo (tuple[int, int, int] | None, optional): Halo size around patches. Defaults to None.
+        patch (tuple[int, int, int] | None, optional): Patch size for prediction.
+            `None` derives a patch aligned to `geometry.increment` and sized so
+            `patch + 2 * halo` fits the probed model-input budget. Defaults to None.
+        patch_halo (tuple[int, int, int] | None, optional): Halo size around patches.
+            `None` uses `geometry.halo`, the minimal halo that makes an aligned patch
+            exact; a manual halo is used verbatim (no rounding, no alignment check).
+            Defaults to None.
         single_batch_mode (bool, optional): Whether to use a single batch for prediction. Defaults to True.
         device (str, optional): The computation device ('cpu', 'cuda', etc.). Defaults to 'cuda'.
         model_update (bool, optional): Whether to update the model to the latest version. Defaults to False.

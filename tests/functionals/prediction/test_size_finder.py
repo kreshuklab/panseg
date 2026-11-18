@@ -85,6 +85,76 @@ def test_the_budget_sizes_the_model_input_not_the_patch():
     assert tuple(p + 2 * h for p, h in zip(patch, halo)) == (192, 192, 192)
 
 
+def test_fit_model_input_to_budget_returns_the_minimum_when_it_barely_fits():
+    result = size_finder._fit_model_input_to_budget(
+        min_model_input=np.array((8, 8, 8)),
+        max_model_input=np.array((256, 256, 256)),
+        cap_model_input=np.array((256, 256, 256)),
+        budget=8**3,
+        increment=np.array((8, 8, 8)),
+    )
+
+    assert tuple(result) == (8, 8, 8)
+    assert result.dtype == np.int64
+
+
+def test_fit_model_input_to_budget_respects_the_cap():
+    result = size_finder._fit_model_input_to_budget(
+        min_model_input=np.array((8, 8, 8)),
+        max_model_input=np.array((256, 256, 256)),
+        cap_model_input=np.array((32, 40, 48)),
+        budget=32 * 40 * 48,
+        increment=np.array((8, 8, 8)),
+    )
+
+    assert tuple(result) == (32, 40, 48)
+
+
+def test_fit_model_input_to_budget_spends_leftover_budget_on_the_smallest_axes():
+    result = size_finder._fit_model_input_to_budget(
+        min_model_input=np.array((8, 8, 8)),
+        max_model_input=np.array((256, 256, 256)),
+        cap_model_input=np.array((16, 512, 512)),
+        budget=16 * 512 * 512,
+        increment=np.array((8, 8, 8)),
+    )
+
+    # z stops at its cap, the leftover budget grows the smaller y/x axes
+    assert result[0] == 16
+    assert result[1] > 256 and result[2] > 256
+    assert all(size % 8 == 0 for size in result)
+    assert int(np.prod(result)) <= 16 * 512 * 512
+
+
+def test_fit_model_input_to_budget_is_increment_aligned():
+    result = size_finder._fit_model_input_to_budget(
+        min_model_input=np.array((8, 8, 8)),
+        max_model_input=np.array((300, 300, 300)),
+        cap_model_input=np.array((300, 300, 300)),
+        budget=120**3,
+        increment=np.array((8, 8, 8)),
+    )
+
+    assert all(size % 8 == 0 for size in result)
+    assert int(np.prod(result)) <= 120**3
+    assert tuple(result) != (8, 8, 8)
+
+
+def test_fit_model_input_to_budget_never_returns_below_the_minimum():
+    minimum = np.array((16, 16, 16))
+
+    result = size_finder._fit_model_input_to_budget(
+        min_model_input=minimum,
+        max_model_input=np.array((256, 256, 256)),
+        cap_model_input=np.array((256, 256, 256)),
+        budget=16**3 - 1,
+        increment=np.array((8, 8, 8)),
+    )
+
+    assert tuple(result) == (16, 16, 16)
+    assert (result >= minimum).all()
+
+
 def test_minimum_model_input_above_the_budget_raises():
     with pytest.raises(
         RuntimeError, match="already exceeds the available voxel budget"
