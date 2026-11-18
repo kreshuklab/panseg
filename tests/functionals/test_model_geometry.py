@@ -600,6 +600,27 @@ class TestModelInputShape:
         )
 
 
+class TestCheckInput:
+    @pytest.fixture()
+    def geometry(self):
+        return model_geometry(UNet3D(1, 1, f_maps=[4, 4, 4, 4]))
+
+    def test_check_input_names_the_failing_axis(self, geometry):
+        with pytest.raises(ValueError, match=r"too small in: Y \(7 < 8\)"):
+            geometry.check_input((16, 7, 64))
+
+        with pytest.raises(ValueError, match=r"too small in: Y \(7 < 8\), X \(7 < 8\)"):
+            geometry.check_input((16, 7, 7))
+
+    def test_check_input_hints_a_2d_model_for_thin_z(self, geometry):
+        with pytest.raises(
+            ValueError,
+            match=r"needs at least 8 Z slices, but the image has 4"
+            r".*Use a 2D model for images with fewer Z slices",
+        ):
+            geometry.check_input((4, 64, 64))
+
+
 class TestCheckPatch:
     @pytest.fixture()
     def geometry(self):
@@ -640,4 +661,31 @@ class TestCheckPatch:
     def test_2d_model_accepts_one_z_slice(self):
         geometry = model_geometry(UNet2D(1, 1, f_maps=[4, 4, 4, 4]))
 
+        geometry.check_patch((1, 8, 8), (0, 0, 0))
+
+    def test_check_patch_rejects_a_2d_patch_with_depth(self):
+        geometry = model_geometry(UNet2D(1, 1, f_maps=[4, 4, 4, 4]))
+
+        with pytest.raises(
+            ValueError,
+            match=r"has 2 Z slices, but 2D models predict one Z slice at a time"
+            r".*Set the Z patch size to 1",
+        ):
+            geometry.check_patch((2, 8, 8), (0, 0, 0))
+
+    def test_check_patch_rejects_a_2d_z_halo(self):
+        geometry = model_geometry(UNet2D(1, 1, f_maps=[4, 4, 4, 4]))
+
+        with pytest.raises(
+            ValueError,
+            match=r"has a Z halo of 1, but 2D models predict one Z slice at a time"
+            r".*Set the Z halo to 0",
+        ):
+            geometry.check_patch((1, 8, 8), (1, 48, 48))
+
+    def test_check_patch_accepts_the_2d_defaults(self):
+        geometry = model_geometry(UNet2D(1, 1, f_maps=[4, 4, 4, 4]))
+
+        # the derived patch is one slice deep with no Z halo
+        geometry.check_patch((1, 8, 8))
         geometry.check_patch((1, 8, 8), (0, 0, 0))

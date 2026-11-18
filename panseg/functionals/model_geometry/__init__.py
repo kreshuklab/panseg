@@ -28,11 +28,13 @@ The invariant that ties running and cropping together is::
 
     model_input_shape(patch, halo) >= min_input
 
-which :meth:`ModelGeometry.check_patch` enforces. ``increment`` is a derivation
-and BioImage.IO contract, not a validation gate: manual patch/halo overrides are
-used verbatim. Prediction, training, the viewer and the model zoo all resolve
-geometry through :func:`model_geometry`, following the same "resolved in
-exactly one place" approach as ``panseg.functionals.precision``.
+which :meth:`ModelGeometry.check_patch` enforces on a patch;
+:meth:`ModelGeometry.check_input` applies the same minimum to a whole image.
+``increment`` is a derivation and BioImage.IO contract, not a validation gate:
+manual patch/halo overrides are used verbatim. Prediction, training, the viewer
+and the model zoo all resolve geometry through :func:`model_geometry`, following
+the same "resolved in exactly one place" approach as
+``panseg.functionals.precision``.
 """
 
 import logging
@@ -135,6 +137,32 @@ class ModelGeometry:
         """Sliding-window stride for `patch`, aligned to this geometry's increment."""
         return stride_shape(patch, self.increment, stride_ratio)
 
+    def check_input(self, shape) -> None:
+        """Reject an image below the architectural minimum, before probing.
+
+        Args:
+            shape: image shape (Z, Y, X).
+
+        Raises:
+            ValueError: for a too thin Z axis with the 2D-model hint, else for
+                the failing Y/X axes, naming each axis, its size and the
+                minimum.
+        """
+        shape = _as_3d(shape)
+        min_depth = self.min_input[0]
+        if shape[0] < min_depth:
+            raise ValueError(
+                f"This 3D model needs at least {min_depth} Z slices, but the image has "
+                f"{shape[0]}. Use a 2D model for images with fewer Z slices."
+            )
+        failing = _axis_violations(("Y", "X"), shape[1:], self.min_input[1:])
+        if failing:
+            raise ValueError(
+                f"This model needs an image of at least {self.min_input} (Z, Y, X) "
+                f"to run, but the image shape is {shape}; it is too small in: "
+                f"{', '.join(failing)}. Use a smaller model or a larger image."
+            )
+
     def check_patch(
         self,
         patch: tuple[int, int, int],
@@ -143,28 +171,37 @@ class ModelGeometry:
         """Reject a patch whose model input is below the architectural minimum.
 
         Only runnability is enforced. Manual halos override every automatic
-        calculation, so no alignment or minimum-halo check happens here.
+        calculation, so no alignment or minimum-halo check happens here; they
+        are used verbatim.
+
+        A 2D model additionally needs a one-slice-deep patch without a Z halo,
+        since it predicts one Z slice at a time.
 
         Raises:
             ValueError: naming the failing axis (Z, Y, X), its size and the
-                minimum.
+                minimum, or the offending 2D patch depth or Z halo.
         """
         patch = _as_3d(patch)
+        halo = self.halo if halo is None else _as_3d(halo)
         model_input = self.model_input_shape(patch, halo)
-        failing = [
-            f"{axis} ({size} < {min_size})"
-            for axis, size, min_size in zip(
-                ("Z", "Y", "X"), model_input, self.min_input
-            )
-            if size < min_size
-        ]
+        failing = _axis_violations(("Z", "Y", "X"), model_input, self.min_input)
         if failing:
-            halo = self.halo if halo is None else halo
             raise ValueError(
-                f"Patch shape {patch} with halo {_as_3d(halo)} has "
+                f"Patch shape {patch} with halo {halo} has "
                 f"model input shape {model_input}, which is below the model's "
                 f"architectural minimum {self.min_input} in: {', '.join(failing)}.\n"
                 "Increase the patch size or halo."
+            )
+        if self.is_2d and patch[0] != 1:
+            raise ValueError(
+                f"Patch shape {tuple(patch)} has {patch[0]} Z slices, but 2D models "
+                "predict one Z slice at a time. Set the Z patch size to 1, "
+                "or leave the patch unset to derive a feasible one."
+            )
+        if self.is_2d and halo[0] != 0:
+            raise ValueError(
+                f"Halo shape {tuple(halo)} has a Z halo of {halo[0]}, but "
+                "2D models predict one Z slice at a time. Set the Z halo to 0."
             )
 
 
@@ -320,3 +357,12 @@ def _without_z(
 
 def _as_3d(shape) -> tuple[int, int, int]:
     return (int(shape[0]), int(shape[1]), int(shape[2]))
+
+
+def _axis_violations(names, sizes, minima) -> list[str]:
+    """Format the axes whose `size` is below `minima` as `"axis (size < min)"`."""
+    return [
+        f"{name} ({size} < {minimum})"
+        for name, size, minimum in zip(names, sizes, minima)
+        if size < minimum
+    ]

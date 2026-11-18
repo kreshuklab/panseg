@@ -55,50 +55,6 @@ def _warn_inefficient_auto_patch(geometry: ModelGeometry, patch, patch_halo) -> 
     )
 
 
-def _check_image_fits(geometry: ModelGeometry, raw_shape) -> None:
-    """Reject an image below the model's architecture minimum, before probing."""
-    min_depth = geometry.min_input[0]
-    if raw_shape[0] < min_depth:
-        raise ValueError(
-            f"This 3D model needs at least {min_depth} Z slices, but the image has "
-            f"{raw_shape[0]}. Use a 2D model for images with fewer Z slices."
-        )
-    failing = [
-        f"{axis} ({size} < {min_size})"
-        for axis, size, min_size in zip(
-            ("Y", "X"), raw_shape[1:], geometry.min_input[1:]
-        )
-        if size < min_size
-    ]
-    if failing:
-        raise ValueError(
-            f"This model needs an image of at least {geometry.min_input} (Z, Y, X) "
-            f"to run, but the image shape is {tuple(raw_shape)}; it is too small in: "
-            f"{', '.join(failing)}. Use a smaller model or a larger image."
-        )
-
-
-def _check_patch_axes(geometry: ModelGeometry, raw_shape, patch, patch_halo) -> None:
-    """Reject patch layouts the model cannot run on, before probing the device."""
-    if patch is None:  # an auto-derived patch cannot exceed the image
-        _check_image_fits(geometry, raw_shape)
-    if not geometry.is_2d:  # 3D patches are fully covered by geometry.check_patch
-        return
-    if patch is None:  # the derived patch has depth 1 and no Z halo
-        return
-    if patch[0] != 1:
-        raise ValueError(
-            f"Patch shape {tuple(patch)} has {patch[0]} Z slices, but 2D models "
-            "predict one Z slice at a time. Set the Z patch size to 1, "
-            "or leave the patch unset to derive a feasible one."
-        )
-    if patch_halo[0] != 0:
-        raise ValueError(
-            f"Halo shape {tuple(patch_halo)} has a Z halo of {patch_halo[0]}, but "
-            "2D models predict one Z slice at a time. Set the Z halo to 0."
-        )
-
-
 def biio_prediction(
     raw: np.ndarray,
     input_layout: ImageLayout,
@@ -330,7 +286,10 @@ def unet_prediction(
         raw_shape = raw.shape[1:]
 
     assert len(raw_shape) == 3
-    _check_patch_axes(geometry, raw_shape, patch, patch_halo)
+    # A manual patch is used verbatim, even on a small image; only the derived
+    # patch (from an auto-sized domain) must fit the architectural minimum.
+    if patch is None:
+        geometry.check_input(raw_shape)
 
     # Predict on an aligned domain: SliceBuilder flushes the last patch start
     # to `i - k`, which stays on the phase grid only when the domain is a
