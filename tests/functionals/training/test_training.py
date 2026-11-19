@@ -13,6 +13,7 @@ import yaml
 
 from panseg import FILE_CONFIG_TRAIN_YAML
 from panseg.core.zoo import model_zoo
+from panseg.functionals.model_geometry import model_geometry
 from panseg.functionals.training.augs import Augmenter
 from panseg.functionals.training.h5dataset import HDF5Dataset, resolve_dataset_layouts
 from panseg.functionals.training.losses import DiceLoss
@@ -824,8 +825,10 @@ class TestUnetTraining:
     @patch("panseg.functionals.training.train.Adam")
     @patch("panseg.functionals.training.train.ReduceLROnPlateau")
     @patch("panseg.functionals.training.train.find_batch_size")
+    @patch("panseg.functionals.training.train.model_geometry")
     def test_unet_training_multi_gpu(
         self,
+        mock_model_geometry,
         mock_find_batch_size,
         mock_reduce_lr,
         mock_adam,
@@ -842,6 +845,13 @@ class TestUnetTraining:
         tmp_path,
     ):
         """Test UNet training with multiple GPUs."""
+
+        # The mocked UNet2D stands in for the configured architecture. Geometry
+        # is derived from real modules only (an opaque mock would be refused),
+        # so hand the run the geometry of the architecture it replaces.
+        mock_model_geometry.return_value = model_geometry(
+            UNet2D(in_channels=1, out_channels=2, f_maps=(16, 32))
+        )
 
         # Mock DataParallel to avoid CUDA initialization
         mock_device_count.return_value = 2
@@ -873,8 +883,8 @@ class TestUnetTraining:
 
         mock_data_loader.return_value = [
             (
-                # torch.from_numpy(np.random.rand(1, 1, 64, 64)).type(torch.float32),
-                mock_parallel_model,
+                # a real batch: the packaged test tensor is squeezed/padded
+                torch.zeros(1, 1, 1, 64, 64),
                 None,
             )
         ]

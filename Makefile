@@ -6,4 +6,4 @@ test:
 
 ## Run the panseg CLI from this worktree/checkout instead of the editable install, which points at the main checkout.
 run:
-	env -u QT_QPA_PLATFORM PYTHONPATH=$(CURDIR) python -m panseg.run_panseg $(ARGS)
+	env -u QT_QPA_PLATFORM PYTHONPATH=$(CURDIR) python -m panseg.run_panseg -n $(ARGS)
