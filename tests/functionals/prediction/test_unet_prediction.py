@@ -168,9 +168,9 @@ def test_unet_prediction_auto_patch_below_64_px_warns_once(
     warnings = _prediction_warnings(caplog)
     assert len(warnings) == 1
     message = warnings[0].getMessage()
-    assert "(16, 40, 40)" in message  # derived patch
+    assert "(14, 44, 42)" in message  # derived patch
     assert "(0, 4, 4)" in message  # halo
-    assert "(16, 48, 48)" in message  # resulting model input shape
+    assert "(14, 52, 50)" in message  # resulting model input shape
     assert "(2, 2, 2)" in message  # architectural minimum
     assert "64" in message  # legacy heuristic
     assert "Most of the model input is halo" in message
@@ -240,10 +240,30 @@ def test_unet_prediction_manual_patch_below_64_px_does_not_warn(dummy_model, cap
     assert _prediction_warnings(caplog) == []
 
 
+def test_unet_prediction_pads_an_unaligned_input_to_the_phase_grid(dummy_model):
+    """The automatic path predicts on the aligned domain and crops back."""
+    raw = np.random.rand(15, 95, 97).astype("float32")
+
+    pmap = _predict(dummy_model, raw, "ZYX")
+
+    assert pmap.shape[-3:] == raw.shape
+    assert np.all(np.isfinite(pmap))
+
+
+def test_unet_prediction_manual_unaligned_halo_is_used_as_is(dummy_model):
+    """Manual halos override the automatic derivation: no rounding, no clamping."""
+    raw = np.random.rand(16, 96, 96).astype("float32")
+
+    pmap = _predict(dummy_model, raw, "ZYX", patch=(16, 40, 40), patch_halo=(1, 3, 3))
+
+    assert pmap.shape[-3:] == raw.shape
+    assert np.all(np.isfinite(pmap))
+
+
 def test_unet_prediction_rejects_manual_patch_bigger_than_sample(dummy_model):
     raw = np.random.rand(8, 64, 64).astype("float32")
 
-    with pytest.raises(ValueError, match="bigger than the sample shape"):
+    with pytest.raises(ValueError, match="bigger than the aligned domain shape"):
         unet_prediction(
             raw=raw,
             input_layout="ZYX",
@@ -341,6 +361,23 @@ def test_unet_prediction_2d_model_manual_patch(dummy_model_2d):
     assert np.all(np.isfinite(pmap))
 
 
+def test_unet_prediction_2d_multichannel_preserves_channels(tmp_path):
+    """The spatial crop must not slice the channel axis of a 2D prediction."""
+    model = UNet2D(in_channels=2, out_channels=2, final_sigmoid=True, f_maps=[8, 16])
+    config = MODEL_CONFIG_2D.replace("in_channels: 1", "in_channels: 2")
+    model_files = _save_model(tmp_path, model, config)
+    cyx = np.random.rand(2, 64, 64).astype("float32")
+    czyx = np.random.rand(2, 3, 64, 64).astype("float32")
+
+    cyx_map = _predict(model_files, cyx, "CYX")
+    czyx_map = _predict(model_files, czyx, "CZYX")
+
+    assert cyx_map.shape == (2, 1, 64, 64)
+    assert czyx_map.shape == (2, 3, 64, 64)
+    assert np.all(np.isfinite(cyx_map))
+    assert np.all(np.isfinite(czyx_map))
+
+
 @pytest.mark.parametrize(
     ("patch", "patch_halo", "match"),
     [
@@ -387,6 +424,8 @@ def test_unet_prediction_3d_model_rejects_thin_image(
 def test_unet_prediction_3d_model_accepts_min_depth(
     dummy_model_3d_deep, raw_shape, patch, patch_halo
 ):
+    # The manual (2, 0, 0) halo is used verbatim: the Z model input is
+    # 4 + 2 * 2 = 8, exactly the architectural minimum.
     raw = np.random.rand(*raw_shape).astype("float32")
 
     pmap = _predict(dummy_model_3d_deep, raw, "ZYX", patch=patch, patch_halo=patch_halo)

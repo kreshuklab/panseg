@@ -342,8 +342,6 @@ class Prediction_Widgets:
                     self.widget_unet_prediction.patch_size[0].enabled = False
                     self.widget_unet_prediction.patch_halo[0].enabled = False
                 else:
-                    if self.widget_unet_prediction.model_id.value is None:
-                        return
                     self.widget_unet_prediction.patch_size[
                         0
                     ].value = self.widget_unet_prediction.patch_size[1].value

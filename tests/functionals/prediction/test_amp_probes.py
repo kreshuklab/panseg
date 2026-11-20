@@ -27,7 +27,7 @@ from tests.functionals.prediction.helpers import (
 )
 
 VOL = (48, 1536, 1536)
-HALO = (0, 44, 44)
+HALO = (0, 48, 48)
 
 
 def _record_autocast(model: nn.Module) -> list[tuple[bool, torch.dtype]]:
