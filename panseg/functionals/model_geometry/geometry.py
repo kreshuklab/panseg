@@ -27,16 +27,22 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ModelGeometry:
-    """Spatial input geometry fixed by a model architecture."""
+    """Spatial input geometry fixed by a model architecture.
+
+    Attributes:
+        min_input (tuple[int, int, int]): Smallest input shape (Z, Y, X) the
+            model accepts.
+        increment (tuple[int, int, int]): Phase period (Z, Y, X): the per-axis
+            product of the pooling strides.
+        halo (tuple[int, int, int]): Context (Z, Y, X) each side of a patch
+            needs for an exact output.
+        is_2d (bool): Whether the model consumes one Z slice at a time.
+    """
 
     min_input: tuple[int, int, int]
-    """Smallest input shape (Z, Y, X) the model accepts."""
     increment: tuple[int, int, int]
-    """Phase period (Z, Y, X): the per-axis product of the pooling strides."""
     halo: tuple[int, int, int]
-    """Context (Z, Y, X) each side of a patch needs for an exact output."""
     is_2d: bool
-    """Whether the model consumes one Z slice at a time."""
 
     @classmethod
     def from_model(cls, model: nn.Module) -> "ModelGeometry":

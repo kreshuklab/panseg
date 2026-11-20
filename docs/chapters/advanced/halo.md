@@ -57,7 +57,9 @@ decoder:  2 · (4 + 2 + 1)     = 14
 ```
 
 That is correct for a stack of stride-1 convolutions and is the *smallest* reach
-this network ever has, but it is not the receptive field: 44 is never enough.
+this network ever has, but it is not the receptive field: 44 is never enough
+for a 4-level deep Panseg model.
+Previously, the automatic halo was calculated in this way.
 
 ## Computing the exact reach
 
@@ -90,7 +92,7 @@ is the authoritative source, not a re-derivation for one specific depth.
 
 ## The result
 
-In the interior of a model input whose size is a multiple of `P`:
+In the interior of a 4-level model input whose size is a multiple of `P`:
 
 ```
 L(φ) = S + ((φ + 2) mod P)
@@ -263,3 +265,41 @@ contract is
 `tests/tasks/test_prediction_tasks.py::test_unet_prediction_task_z_slice_invariance`.
 For the classic receptive-field argument behind `S`, see
 <https://doi.org/10.6028/jres.126.009>.
+
+## Receptive field measurements
+
+The following describes a series of experiments to measure which exact pixels influence each other.
+For this, 2D Unets are randomly initialized and fed with a 64x64 black image.
+Iteratively, each pixel is switched to white and the output is recorded.
+Three architectures are measured:  
+
+* The standard 4-level deep Panseg model with f_maps (8, 64, 512, 4096)
+* 3-level with f_maps (8,8,8)
+* 2-level with f_maps (8,8)
+
+![rf_centre_influence.png](https://github.com/kreshuklab/panseg/raw/assets/images/receptive_field_measurements/rf_centre_influence.png)
+
+This first plot shows which input pixels influence the central output pixel.
+In red the calculated RF is shown. White within the RF is caused by the
+randomly initialized activation function dropping some inputs.
+These areas could influence the center in a trained network.
+
+![rf_combined.png](https://github.com/kreshuklab/panseg/raw/assets/images/receptive_field_measurements/rf_combined.png)
+
+Here the empirical RF of each *input* pixel is shown.
+
+![rf_receptive_field_left.png](https://github.com/kreshuklab/panseg/raw/assets/images/receptive_field_measurements/rf_receptive_field_left.png)
+
+The periodicity of the RF is here good visible: only the number of influencing
+pixels to the left of each output pixel is plotted.
+The noise across the y axis for the 4-level network is caused by the randomly
+initialized activation function.
+
+![rf_centre_influence_mean_10seeds_log.png](https://github.com/kreshuklab/panseg/raw/assets/images/receptive_field_measurements/rf_centre_influence_mean_10seeds_log.png)
+
+Looking at the absolute contribution amount of input pixels to the output pixel
+is not very telling as the networks are randomly initialized, leading to a
+clear focus on the respective output position.
+Trained networks could pay attention anywhere inside the RF.
+The steps in the mean influence correspond to the convolution levels in
+the model.
