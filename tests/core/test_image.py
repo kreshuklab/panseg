@@ -29,6 +29,7 @@ from panseg.io.voxelsize import VoxelSize
 from tests.conftest import (
     TIMESERIES_PROPS_KNOWN_T_SPACING,
     TIMESERIES_PROPS_UNKNOWN_T_SPACING,
+    layer_unit_names,
     write_still_tiff,
 )
 
@@ -668,6 +669,66 @@ def test_to_napari_layer_tuple_axis_labels(image_layout, shape, expected_axis_la
     # napari accepts the layer tuple with the axis labels
     layer = Image(layer_tuple[0], **layer_tuple[1])
     assert layer.data.shape == shape
+
+
+@pytest.mark.parametrize(
+    "image_layout, shape, expected_units",
+    [
+        (ImageLayout.YX, (4, 5), ("um", "um")),
+        (ImageLayout.CYX, (2, 4, 5), (None, "um", "um")),
+        (ImageLayout.ZYX, (3, 4, 5), ("um", "um", "um")),
+        (ImageLayout.CZYX, (2, 3, 4, 5), (None, "um", "um", "um")),
+        (ImageLayout.TYX, (7, 4, 5), (None, "um", "um")),
+        (ImageLayout.TCYX, (7, 2, 4, 5), (None, None, "um", "um")),
+        (ImageLayout.TZYX, (7, 3, 4, 5), (None, "um", "um", "um")),
+        (ImageLayout.TCZYX, (7, 2, 3, 4, 5), (None, None, "um", "um", "um")),
+    ],
+)
+def test_to_napari_layer_tuple_units(image_layout, shape, expected_units):
+    """Spatial axes are in micrometers, time and channel axes have no unit."""
+    data = np.random.rand(*shape)
+    voxel_size = VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um")
+    image_props = ImageProperties(
+        name="test_image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=image_layout,
+        original_voxel_size=voxel_size,
+    )
+    ps_image = PanSegImage(data, image_props)
+    layer_tuple = tuple(ps_image.to_napari_layer_tuple())
+
+    assert ps_image.units == expected_units
+    assert layer_tuple[1]["units"] == expected_units
+
+    # napari labels the axes without a unit in pixels
+    layer = Image(layer_tuple[0], **layer_tuple[1])
+    assert layer_unit_names(layer) == [
+        "pixel" if unit is None else "micrometer" for unit in expected_units
+    ]
+
+
+def test_to_napari_layer_tuple_units_without_voxel_size():
+    """Without a voxel size the spatial axes stay in pixels, not micrometers."""
+    data = np.random.rand(3, 4, 5)
+    voxel_size = VoxelSize()
+    image_props = ImageProperties(
+        name="test_image",
+        semantic_type=SemanticType.RAW,
+        voxel_size=voxel_size,
+        image_layout=ImageLayout.ZYX,
+        original_voxel_size=voxel_size,
+    )
+    ps_image = PanSegImage(data, image_props)
+    layer_tuple = tuple(ps_image.to_napari_layer_tuple())
+
+    # The voxel size unit still defaults to micrometers for metadata/export.
+    assert voxel_size.unit == "um"
+    assert ps_image.units == (None, None, None)
+    assert layer_tuple[1]["units"] == (None, None, None)
+
+    layer = Image(layer_tuple[0], **layer_tuple[1])
+    assert layer_unit_names(layer) == ["pixel", "pixel", "pixel"]
 
 
 def test_panseg_image_scale_property():

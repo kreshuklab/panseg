@@ -11,7 +11,7 @@ import pytest
 import torch
 
 from panseg.functionals.prediction import unet_prediction
-from panseg.functionals.prediction.utils import size_finder
+from panseg.functionals.prediction.utils import array_predictor, size_finder
 from panseg.functionals.training.model import UNet2D, UNet3D
 
 MODEL_CONFIG = """model:
@@ -70,7 +70,9 @@ def dummy_model_3d_deep(tmp_path):
     return _save_model(tmp_path, model, MODEL_CONFIG_3D_DEEP)
 
 
-def _predict(model_files, raw, layout, patch=None, patch_halo=None):
+def _predict(
+    model_files, raw, layout, patch=None, patch_halo=None, single_batch_mode=True
+):
     return unet_prediction(
         raw=raw,
         input_layout=layout,
@@ -78,11 +80,22 @@ def _predict(model_files, raw, layout, patch=None, patch_halo=None):
         model_id=None,
         patch=patch,
         patch_halo=patch_halo,
+        single_batch_mode=single_batch_mode,
         config_path=model_files[0],
         model_weights_path=model_files[1],
         device="cpu",
         disable_tqdm=True,
     )
+
+
+def _prediction_warnings(caplog):
+    """Warnings logged by `unet_prediction` itself, in order."""
+    return [
+        record
+        for record in caplog.records
+        if record.name == "panseg.functionals.prediction.prediction"
+        and record.levelname == "WARNING"
+    ]
 
 
 @pytest.fixture()
@@ -105,7 +118,7 @@ def test_unet_prediction_auto_patch_never_exceeds_sample(dummy_model, monkeypatc
     monkeypatch.setattr(
         size_finder,
         "probe_max_patch_shape",
-        lambda model, in_channels, device: (64, 64, 64),
+        lambda model, in_channels, device, amp="auto", **kwargs: (64, 64, 64),
     )
     raw = np.random.rand(16, 96, 256).astype("float32")
 
@@ -124,6 +137,107 @@ def test_unet_prediction_auto_patch_never_exceeds_sample(dummy_model, monkeypatc
 
     assert pmap.shape[-3:] == raw.shape
     assert np.all(np.isfinite(pmap))
+
+
+def test_unet_prediction_auto_patch_below_64_px_warns_once(
+    dummy_model, monkeypatch, caplog
+):
+    """A patch below the 64 px floor is allowed,
+    but its halo-dominated model input must be flagged as inefficient."""
+    monkeypatch.setattr(
+        size_finder,
+        "probe_max_patch_shape",
+        lambda model, in_channels, device, amp="auto", **kwargs: (16, 48, 48),
+    )
+    raw = np.random.rand(16, 96, 96).astype("float32")
+
+    with caplog.at_level("WARNING"):
+        pmap = unet_prediction(
+            raw=raw,
+            input_layout="ZYX",
+            model_name=None,
+            model_id=None,
+            patch=None,
+            patch_halo=(0, 4, 4),
+            config_path=dummy_model[0],
+            model_weights_path=dummy_model[1],
+            device="cpu",
+            disable_tqdm=True,
+        )
+
+    warnings = _prediction_warnings(caplog)
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "(16, 40, 40)" in message  # derived patch
+    assert "(0, 4, 4)" in message  # halo
+    assert "(16, 48, 48)" in message  # resulting model input shape
+    assert "(2, 2, 2)" in message  # architectural minimum
+    assert "64" in message  # legacy heuristic
+    assert "Most of the model input is halo" in message
+    assert pmap.shape[-3:] == raw.shape
+    assert np.all(np.isfinite(pmap))
+
+
+def test_unet_prediction_auto_patch_below_64_px_without_halo_does_not_claim_halo(
+    dummy_model_3d_deep, caplog
+):
+    """The warning must not blame a halo when the derived patch has none."""
+    raw = np.random.rand(8, 48, 48).astype("float32")
+
+    with caplog.at_level("WARNING"):
+        pmap = _predict(dummy_model_3d_deep, raw, "ZYX", patch_halo=(0, 0, 0))
+
+    warnings = _prediction_warnings(caplog)
+    assert len(warnings) == 1
+    assert "Most of the model input is halo" not in warnings[0].getMessage()
+    assert pmap.shape[-3:] == raw.shape
+
+
+@pytest.mark.parametrize(
+    ("raw_shape", "probed_max"),
+    [
+        ((16, 128, 128), (16, 128, 128)),  # full volume, no halo
+        ((16, 160, 160), (16, 96, 96)),  # tiled: patch 88 with halo 4 stays above 64
+    ],
+)
+def test_unet_prediction_auto_patch_above_64_px_does_not_warn(
+    dummy_model, monkeypatch, caplog, raw_shape, probed_max
+):
+    monkeypatch.setattr(
+        size_finder,
+        "probe_max_patch_shape",
+        lambda model, in_channels, device, amp="auto", **kwargs: probed_max,
+    )
+    raw = np.random.rand(*raw_shape).astype("float32")
+
+    with caplog.at_level("WARNING"):
+        pmap = unet_prediction(
+            raw=raw,
+            input_layout="ZYX",
+            model_name=None,
+            model_id=None,
+            patch=None,
+            patch_halo=(0, 4, 4),
+            config_path=dummy_model[0],
+            model_weights_path=dummy_model[1],
+            device="cpu",
+            disable_tqdm=True,
+        )
+
+    assert pmap.shape[-3:] == raw.shape
+    assert _prediction_warnings(caplog) == []
+
+
+def test_unet_prediction_manual_patch_below_64_px_does_not_warn(dummy_model, caplog):
+    raw = np.random.rand(16, 96, 96).astype("float32")
+
+    with caplog.at_level("WARNING"):
+        pmap = _predict(
+            dummy_model, raw, "ZYX", patch=(16, 40, 40), patch_halo=(0, 4, 4)
+        )
+
+    assert pmap.shape[-3:] == raw.shape
+    assert _prediction_warnings(caplog) == []
 
 
 def test_unet_prediction_rejects_manual_patch_bigger_than_sample(dummy_model):
@@ -159,7 +273,7 @@ def test_unet_prediction_2d_model_on_3d_input(
         monkeypatch.setattr(
             size_finder,
             "probe_max_patch_shape",
-            lambda model, in_channels, device: probed_max,
+            lambda model, in_channels, device, amp="auto", **kwargs: probed_max,
         )
     raw = np.random.rand(*raw_shape).astype("float32")
 
@@ -168,6 +282,46 @@ def test_unet_prediction_2d_model_on_3d_input(
     zyx = raw_shape if layout == "ZYX" else (1, *raw_shape)
     assert pmap.shape == (2, *zyx)
     assert np.all(np.isfinite(pmap))
+
+
+def test_unet_prediction_2d_full_slice_auto_patch_recovers_from_loop_oom(
+    dummy_model_2d, monkeypatch
+):
+    """Issue #7: the batch probe fits, but a later loop iteration OOMs.
+
+    A full-slice 2D auto patch plus a batch size accepted by the probe used to
+    abort the run. The predictor must fall back to a smaller batch and produce
+    exactly the same prediction.
+    """
+    monkeypatch.setattr(
+        size_finder,
+        "probe_max_patch_shape",
+        lambda model, in_channels, device, **kwargs: (1, 3200, 3200),
+    )
+    monkeypatch.setattr(array_predictor, "find_batch_size", lambda *a, **k: 16)
+    raw = np.random.default_rng(0).random((32, 64, 64)).astype("float32")
+
+    reference = _predict(dummy_model_2d, raw, "ZYX", single_batch_mode=False)
+
+    original_forward = UNet2D.forward
+    seen_batch_sizes = []
+    calls = 0
+
+    def forward_with_one_oom(self, x):
+        nonlocal calls
+        calls += 1
+        seen_batch_sizes.append(x.shape[0])
+        if calls == 2:  # first batch succeeded, so the restart must reset the maps
+            raise RuntimeError("CUDA out of memory. Tried to allocate 999.00 GiB.")
+        return original_forward(self, x)
+
+    monkeypatch.setattr(UNet2D, "forward", forward_with_one_oom)
+
+    prediction = _predict(dummy_model_2d, raw, "ZYX", single_batch_mode=False)
+
+    assert seen_batch_sizes == [16, 16, 8, 8, 8, 8]
+    # due to gpu memory batch size might change
+    np.testing.assert_allclose(prediction, reference, rtol=1e-5)
 
 
 def test_unet_prediction_2d_model_auto_patch_drops_z_halo(dummy_model_2d):
@@ -214,7 +368,7 @@ def test_unet_prediction_2d_model_rejects_z_patch_or_halo(
             "needs at least 8 Z slices, but the image has 4",
         ),
         ((64, 64), "YX", None, (0, 0, 0), "the image has 1"),
-        ((16, 64, 64), "ZYX", (4, 64, 64), (1, 0, 0), "has 6"),
+        ((16, 64, 64), "ZYX", (4, 64, 64), (1, 0, 0), r"Z \(6 < 8\)"),
     ],
 )
 def test_unet_prediction_3d_model_rejects_thin_image(
@@ -239,3 +393,56 @@ def test_unet_prediction_3d_model_accepts_min_depth(
 
     assert pmap.shape == (1, *raw_shape)
     assert np.all(np.isfinite(pmap))
+
+
+def test_unet_prediction_3d_model_accepts_architectural_minimum(dummy_model_3d_deep):
+    raw = np.random.rand(8, 8, 8).astype("float32")
+
+    pmap = _predict(
+        dummy_model_3d_deep, raw, "ZYX", patch=(8, 8, 8), patch_halo=(0, 0, 0)
+    )
+
+    assert pmap.shape == (1, 8, 8, 8)
+    assert np.all(np.isfinite(pmap))
+
+
+def test_unet_prediction_3d_model_rejects_patch_below_architectural_minimum(
+    dummy_model_3d_deep,
+):
+    raw = np.random.rand(8, 8, 8).astype("float32")
+
+    with pytest.raises(ValueError, match=r"Z \(7 < 8\).*Y \(7 < 8\).*X \(7 < 8\)"):
+        _predict(dummy_model_3d_deep, raw, "ZYX", patch=(7, 7, 7), patch_halo=(0, 0, 0))
+
+
+def test_unet_prediction_names_failing_yx_axes_below_architectural_minimum(
+    dummy_model_3d_deep,
+):
+    raw = np.random.rand(8, 8, 8).astype("float32")
+
+    with pytest.raises(ValueError, match=r"Y \(7 < 8\).*X \(7 < 8\)"):
+        _predict(dummy_model_3d_deep, raw, "ZYX", patch=(8, 7, 7), patch_halo=(0, 0, 0))
+
+
+def test_unet_prediction_auto_patch_rejects_small_image_before_probing(
+    dummy_model_3d_deep, monkeypatch
+):
+    """The image check must fail before any device probe is spent on it."""
+
+    def _probe_must_not_run(*args, **kwargs):
+        raise AssertionError("probed the device before rejecting the small image")
+
+    monkeypatch.setattr(size_finder, "probe_max_patch_shape", _probe_must_not_run)
+    raw = np.random.rand(8, 7, 7).astype("float32")
+
+    with pytest.raises(ValueError, match=r"Y \(7 < 8\)"):
+        _predict(dummy_model_3d_deep, raw, "ZYX", patch=None, patch_halo=(0, 0, 0))
+
+
+def test_unet_prediction_auto_patch_rejects_below_architectural_minimum(
+    dummy_model_3d_deep,
+):
+    raw = np.random.rand(8, 7, 7).astype("float32")
+
+    with pytest.raises(ValueError, match=r"Y \(7 < 8\)"):
+        _predict(dummy_model_3d_deep, raw, "ZYX", patch=None, patch_halo=(0, 0, 0))

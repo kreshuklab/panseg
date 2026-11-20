@@ -36,6 +36,10 @@ For a detailed description of the methods employed in PanSeg, please refer to ou
 }
 ```
 
+## User survey
+
+This is an approved de.NBI service. Please help us improve by taking our short [user survey](https://www.surveymonkey.de/r/denbi-service?sc=hd-hub&tool=panseg)
+
 ## PanSeg & PlantSeg
 
 This project stated 2020 as `PlantSeg`, but its capabilities are not

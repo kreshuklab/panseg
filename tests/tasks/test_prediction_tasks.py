@@ -17,7 +17,7 @@ from bioimageio.spec.model.v0_5 import (
     PytorchStateDictWeightsDescr,
     SizeReference,
     SpaceInputAxis,
-    SpaceOutputAxis,
+    SpaceOutputAxisWithHalo,
     TensorId,
     Version,
     WeightsDescr,
@@ -29,6 +29,7 @@ from panseg.core.image import (
     PanSegImage,
     SemanticType,
 )
+from panseg.functionals.model_geometry import ModelGeometry
 from panseg.functionals.training.biio import make_model_description
 from panseg.functionals.training.model import UNet3D
 from panseg.io.voxelsize import VoxelSize
@@ -141,6 +142,8 @@ def test_biio_prediction_task_mock_model_fixed_size(tmp_path):
 
     Covers model-id resolution from a local zip, real bioimageio.core
     inference, and the fixed input_block_shape branch of biio_prediction.
+    The callable is the probabilities subclass, matching what `biio.py`
+    exports: published models emit [0, 1] probabilities, not logits.
     """
     torch.manual_seed(0)
     model = UNet3D(**MOCK_UNET_KWARGS)
@@ -151,12 +154,13 @@ def test_biio_prediction_task_mock_model_fixed_size(tmp_path):
             id=AxisId(axis_id), size=size, scale=1.0, unit="micrometer"
         )
 
-    def space_output(axis_id: str) -> SpaceOutputAxis:
-        return SpaceOutputAxis(
+    def space_output(axis_id: str, halo: int) -> SpaceOutputAxisWithHalo:
+        return SpaceOutputAxisWithHalo(
             id=AxisId(axis_id),
             size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId(axis_id)),
             scale=1.0,
             unit="micrometer",
+            halo=halo,
         )
 
     with chdir(tmp_path):
@@ -182,9 +186,9 @@ def test_biio_prediction_task_mock_model_fixed_size(tmp_path):
                     axes=[
                         BatchAxis(),
                         ChannelAxis(channel_names=[Identifier("out_ch0")]),
-                        space_output("z"),
-                        space_output("y"),
-                        space_output("x"),
+                        space_output("z", 1),
+                        space_output("y", 2),
+                        space_output("x", 2),
                     ],
                     data=IntervalOrRatioDataDescr(type="float32"),
                 )
@@ -194,7 +198,7 @@ def test_biio_prediction_task_mock_model_fixed_size(tmp_path):
                     source=Path("weights.pytorch"),
                     architecture=ArchitectureFromLibraryDescr(
                         import_from="panseg.functionals.training.model",
-                        callable="UNet3D",
+                        callable="UNet3DProbabilities",
                         kwargs=MOCK_UNET_KWARGS,
                     ),
                     pytorch_version=Version(torch.__version__),
@@ -237,8 +241,9 @@ def test_biio_prediction_task_mock_model_parameterized(tmp_path):
             out_channels=1,
             feature_maps=[8, 16],
             final_sigmoid=MOCK_UNET_KWARGS["final_sigmoid"],
-            axis_min_sizes=(16, 32, 64),
-            dimensionality="3D",
+            geometry=ModelGeometry(
+                min_input=(16, 32, 64), halo=(4, 8, 12), is_2d=False
+            ),
             layer_order="bcr",
             modality="confocal",
             output_type="boundaries",

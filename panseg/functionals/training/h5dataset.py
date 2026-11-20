@@ -5,7 +5,10 @@ import h5py
 import numpy as np
 from torch.utils.data import Dataset
 
-from panseg.functionals.prediction.utils.slice_builder import FilterSliceBuilder
+from panseg.functionals.prediction.utils.slice_builder import (
+    FilterSliceBuilder,
+    SliceBuilder,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +205,16 @@ class HDF5Dataset(Dataset):
         raw_internal_path (str or list): H5 internal path to the raw dataset
         label_internal_path (str or list): H5 internal path to the label dataset
         global_normalization (bool): if True, the mean and std of the raw data will be calculated over the whole dataset
+        filter_patches (bool): if True (train), build the patch grid with
+            `FilterSliceBuilder`: stride max(p // 2, 1) and patches below the
+            foreground threshold dropped. If False (val), build a plain
+            `SliceBuilder` grid: no threshold filtering and (by default)
+            non-overlapping, so the val loss covers the whole volume and is not
+            biased towards foreground-rich patches.
+        stride_shape (tuple): patch stride for the unfiltered grid
+            (`filter_patches=False`); defaults to `patch_shape`, i.e.
+            non-overlapping. Must be None for the filtered train grid (which
+            always uses max(p // 2, 1) as stride).
     """
 
     def __init__(
@@ -213,6 +226,8 @@ class HDF5Dataset(Dataset):
         raw_internal_path="raw",
         label_internal_path="label",
         global_normalization=True,
+        filter_patches: bool = True,
+        stride_shape: tuple[int, int, int] | None = None,
     ):
         self.file_path = file_path
         self.dimensionality = dimensionality
@@ -232,8 +247,17 @@ class HDF5Dataset(Dataset):
                     f"2D training on volumetric data in {file_path}: "
                     "training per z-slice."
                 )
-            self.raw = _apply_layout(raw_ds[:], raw_layout, ensure_channel=True)
-            stats = calculate_stats(self.raw, global_normalization)
+            # keep the raw volume float32 end-to-end: the augmenter works in
+            # float32 and the old uint16 -> float64 -> float32 churn cost two
+            # extra full copies per patch. The statistics are computed from the
+            # on-disk values (before the cast) and stored as float32.
+            raw_values = raw_ds[:]
+            stats = calculate_stats(raw_values, global_normalization)
+            self.raw = _apply_layout(
+                raw_values.astype(np.float32, copy=False),
+                raw_layout,
+                ensure_channel=True,
+            )
             self.augmenter = augmenter
             self.raw_transform = self.augmenter.raw_transform(stats)
 
@@ -243,11 +267,29 @@ class HDF5Dataset(Dataset):
             self._check_volume_sizes()
 
             # build slice indices for raw and label data sets
-            slice_builder = FilterSliceBuilder(
-                self.raw,
-                self.label,
-                patch_shape=patch_shape,
-            )
+            if filter_patches:
+                # train: overlapping, foreground-filtered grid
+                if stride_shape is not None:
+                    raise ValueError(
+                        "stride_shape is only configurable for the unfiltered "
+                        "(validation) grid; the filtered train grid always uses "
+                        "max(patch_shape // 2, 1) as stride."
+                    )
+                slice_builder = FilterSliceBuilder(
+                    self.raw,
+                    self.label,
+                    patch_shape=patch_shape,
+                )
+            else:
+                # val: unfiltered grid, non-overlapping unless configured otherwise
+                slice_builder = SliceBuilder(
+                    self.raw,
+                    self.label,
+                    patch_shape=patch_shape,
+                    stride_shape=stride_shape
+                    if stride_shape is not None
+                    else patch_shape,
+                )
             self.raw_slices = slice_builder.raw_slices
             label_slices = slice_builder.label_slices
             assert label_slices is not None, "label slices exist when a label is given"
@@ -293,18 +335,67 @@ class HDF5Dataset(Dataset):
         )
 
 
+_HISTOGRAM_MAX_RANGE = 2**20
+"""Largest value range the histogram percentile path handles (1M bins max)."""
+
+
+def _percentiles(flat: np.ndarray, qs: tuple[float, ...]) -> np.ndarray:
+    """Percentiles of `flat` at `qs` (percent units), numpy's 'linear' method.
+
+    Integer data with a bounded value range gets an exact O(n) histogram pass
+    (a single count scan plus a tiny cumulative histogram; no partition and no
+    copy of the data). Everything else falls back to one combined
+    `np.percentile` call, i.e. a single partition for all quantiles instead of
+    one per quantile.
+    """
+    if np.issubdtype(flat.dtype, np.integer) and flat.size > 0:
+        lo = int(flat.min())
+        hi = int(flat.max())
+        if hi - lo <= _HISTOGRAM_MAX_RANGE:
+            counts = np.bincount(flat - lo, minlength=hi - lo + 1)
+            cum = np.cumsum(counts)  # cum[i] == #{elements <= lo + i}
+            n = flat.size
+            result = np.empty(len(qs), dtype=np.float64)
+            for i, q in enumerate(qs):
+                # numpy's 'linear' method: virtual index q/100 * (n - 1),
+                # interpolated between the neighboring order statistics
+                virtual = (q / 100.0) * (n - 1)
+                k = int(np.floor(virtual))
+                gamma = virtual - k
+                a = lo + int(np.searchsorted(cum, k + 1))
+                b = lo + min(int(np.searchsorted(cum, k + 2)), hi - lo)
+                # same two branches as numpy's _lerp (exactness)
+                if gamma >= 0.5:
+                    result[i] = b - (b - a) * (1 - gamma)
+                else:
+                    result[i] = a + (b - a) * gamma
+            return result
+    return np.percentile(flat, qs)
+
+
 def calculate_stats(images, global_normalization=True):
     """
-    Calculates min, max, mean, std given a list of nd-arrays
+    Calculates min, max, mean, std given a list of nd-arrays (or a single one).
+
+    The percentiles are computed in one pass over the flattened data (no
+    materialized concatenation copy, no per-quantile sort -- see `_percentiles`)
+    and the moments accumulate in float64. The results are stored as float32:
+    that is the precision the raw patches are kept in, and the stats must match
+    them without up-casting the transform pipeline.
     """
     if global_normalization:
-        # flatten first since the images might not be the same size
-        flat = np.concatenate([img.ravel() for img in images])
+        if isinstance(images, np.ndarray):
+            flat = images.reshape(-1)  # a view; no concatenated copy
+        else:
+            flat = np.concatenate([img.reshape(-1) for img in images])
+        pmin, pmax = _percentiles(flat, (1, 99.6))
+        mean = flat.mean(dtype=np.float64)
+        std = flat.std(dtype=np.float64)
         pmin, pmax, mean, std = (
-            np.percentile(flat, 1),
-            np.percentile(flat, 99.6),
-            np.mean(flat),
-            np.std(flat),
+            np.float32(pmin),
+            np.float32(pmax),
+            np.float32(mean),
+            np.float32(std),
         )
     else:
         pmin, pmax, mean, std = None, None, None, None

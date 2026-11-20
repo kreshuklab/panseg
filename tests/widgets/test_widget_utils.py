@@ -5,6 +5,7 @@ from napari.layers import Image, Labels
 from panseg.core.image import PanSegImage
 from panseg.tasks.workflow_handler import task_tracker
 from panseg.viewer_napari.widgets import utils
+from tests.conftest import layer_unit_names
 
 
 def test_return_value_if_widget_is_widget(mocker):
@@ -38,6 +39,21 @@ def test_add_ps_image_to_viewer(make_napari_viewer, napari_raw):
     utils.add_ps_image_to_viewer(ps_image, False)
     assert ps_image.name in viewer.layers
     assert isinstance(viewer.layers[0], Image)
+    assert layer_unit_names(viewer.layers[0]) == ["micrometer"] * 3
+
+
+def test_add_ps_image_to_viewer_timeseries(make_napari_viewer, napari_timeseries):
+    viewer = make_napari_viewer()
+    ps_image = PanSegImage.from_napari_layer(napari_timeseries)
+    utils.add_ps_image_to_viewer(ps_image, False)
+    assert ps_image.name in viewer.layers
+    # Spatial axes are in micrometers, the time axis stays in pixels.
+    assert layer_unit_names(viewer.layers[0]) == [
+        "pixel",
+        "micrometer",
+        "micrometer",
+        "micrometer",
+    ]
 
 
 def test_add_ps_image_to_viewer_label(make_napari_viewer, napari_segmentation):
@@ -53,6 +69,7 @@ def test_add_ps_image_to_viewer_replace(make_napari_viewer, napari_raw):
     ps_image = PanSegImage.from_napari_layer(napari_raw)
     utils.add_ps_image_to_viewer(ps_image, True)
     assert ps_image.name in viewer.layers
+    assert layer_unit_names(viewer.layers[0]) == ["micrometer"] * 3
 
     utils.add_ps_image_to_viewer(ps_image, True)
     assert ps_image.name in viewer.layers

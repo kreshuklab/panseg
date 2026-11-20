@@ -1,5 +1,6 @@
 import pytest
 
+from panseg.functionals.training.model import UNet2D, UNet3D
 from panseg.tasks.prediction_tasks import biio_prediction_task, unet_prediction_task
 from panseg.viewer_napari.widgets.prediction import UNetPredictionMode
 from panseg.viewer_napari.widgets.segmentation import Segmentation_Tab

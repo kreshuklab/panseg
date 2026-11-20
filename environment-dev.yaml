@@ -14,7 +14,7 @@ dependencies:
   - mkdocs-material==9.7.7
   - mkdocstrings==1.0.7
   - mkdocstrings-python
-  - napari==0.9.1
+  - napari==0.10.0
   - nifty==1.2.4
   - numpy==2.5.3
   - pip

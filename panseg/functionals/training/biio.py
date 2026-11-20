@@ -2,7 +2,6 @@ import logging
 import re
 from fractions import Fraction
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 import torch
@@ -24,6 +23,7 @@ from bioimageio.spec.model.v0_5 import (
     SizeReference,
     SpaceInputAxis,
     SpaceOutputAxis,
+    SpaceOutputAxisWithHalo,
     TensorId,
     Version,
     WeightsDescr,
@@ -32,6 +32,7 @@ from bioimageio.spec.model.v0_5 import (
 from imageio.v3 import imwrite
 from pydantic import ValidationError
 
+from panseg.functionals.model_geometry import ModelGeometry
 from panseg.functionals.training.augs import PercentileNormalizer
 
 logger = logging.getLogger(__name__)
@@ -207,6 +208,60 @@ def _write_documentation(documentation: str, model_name: str) -> Path:
     return Path("README.md")
 
 
+def pad_to_effective_minimum(
+    test_in: torch.Tensor,
+    geometry: ModelGeometry,
+) -> torch.Tensor:
+    """Zero-pad the spatial axes of `test_in` up to `geometry.effective_min_input`.
+
+    The packaged test input must satisfy the input-axis minima the description
+    declares, and the effective minimum can exceed a training patch on halo
+    axes (`2 * halo + 1`). Padding keeps the description honest instead of
+    shrinking its minimum or halo; `test_out` is computed from the padded
+    tensor so the pair stays consistent. Each axis is padded symmetrically,
+    with the odd pixel going to the right.
+    """
+    minima = geometry.tensor_effective_min_input()
+    sizes = test_in.shape[-len(minima) :]
+    pads: list[int] = []
+    # torch padding runs last axis first; minima/sizes are (Z),Y,X
+    for size, minimum in zip(reversed(sizes), reversed(minima)):
+        total = max(0, minimum - size)
+        left = total // 2
+        pads.extend([left, total - left])
+    if not any(pads):
+        return test_in
+    return torch.nn.functional.pad(test_in, pads)
+
+
+def _input_axis(axis_id: str, minimum: int, scale: float, unit: str) -> SpaceInputAxis:
+    return SpaceInputAxis(
+        id=AxisId(axis_id),
+        size=ParameterizedSize(min=minimum, step=1),
+        scale=scale,
+        unit=unit,
+    )
+
+
+def _output_axis(
+    axis_id: str, halo: int, scale: float, unit: str
+) -> SpaceOutputAxis | SpaceOutputAxisWithHalo:
+    """Output axis referencing the input axis and declaring the true halo.
+
+    `bioimageio.spec` requires at least one pixel of interior after cropping the
+    halo (`input_minimum - 2 * halo >= 1`). That holds by construction, because
+    the input axes declare `ModelGeometry.effective_min_input`; the halo itself
+    is never capped. A zero-halo axis keeps a plain output axis (`halo` must be
+    >= 1).
+    """
+    size = SizeReference(tensor_id=TensorId("input"), axis_id=AxisId(axis_id))
+    if halo < 1:
+        return SpaceOutputAxis(id=AxisId(axis_id), size=size, scale=scale, unit=unit)
+    return SpaceOutputAxisWithHalo(
+        id=AxisId(axis_id), size=size, scale=scale, unit=unit, halo=halo
+    )
+
+
 def make_model_description(
     weights: Path,
     model_name: str,
@@ -214,8 +269,7 @@ def make_model_description(
     out_channels: int,
     feature_maps: int | list[int] | tuple[int, ...],
     final_sigmoid: bool,
-    axis_min_sizes: tuple[int, int, int],
-    dimensionality: Literal["2D", "3D"],
+    geometry: ModelGeometry,
     layer_order: str,
     modality: str,
     output_type: str,
@@ -229,59 +283,47 @@ def make_model_description(
     license: str | None = None,
     documentation: str | None = None,
 ):
+    """Build the BioImage.IO description of a trained model.
 
+    `geometry` supplies every architecture-dependent shape fact, including
+    whether the axes are 2D or 3D. Output axes with a halo get a
+    `SpaceOutputAxisWithHalo` declaring the true `geometry.halo`; that is what
+    lets external consumers tile with enough overlap. `bioimageio.spec` requires
+    at least one pixel of interior after cropping the halo
+    (`input_minimum - 2 * halo >= 1`), so the input axes declare
+    `geometry.effective_min_input`, the smallest tile that both runs and leaves
+    a non-empty artifact-free interior. Zero-halo axes declare
+    `geometry.min_input` and stay plain output axes. Callers package test
+    tensors that satisfy these minima; `train.py` pads the training patch up to
+    them with `pad_to_effective_minimum` when needed.
+    """
     # input and output axes share the same scale/unit pair: the output axis sizes
     # are declared as SizeReferences to the input axes
     (z_scale, z_unit), (y_scale, y_unit), (x_scale, x_unit) = (
         _exact_scale(r) for r in resolution
     )
 
-    if dimensionality == "3D":
-        in_axes = [
-            BatchAxis(),
-            ChannelAxis(
-                channel_names=[Identifier(f"in_ch_{i}") for i in range(in_channels)]
-            ),
-            SpaceInputAxis(
-                id=AxisId("z"),
-                size=ParameterizedSize(min=axis_min_sizes[0], step=1),
-                scale=z_scale,
-                unit=z_unit,
-            ),
-            SpaceInputAxis(
-                id=AxisId("y"),
-                size=ParameterizedSize(min=axis_min_sizes[1], step=1),
-                scale=y_scale,
-                unit=y_unit,
-            ),
-            SpaceInputAxis(
-                id=AxisId("x"),
-                size=ParameterizedSize(min=axis_min_sizes[2], step=1),
-                scale=x_scale,
-                unit=x_unit,
-            ),
-        ]
-    elif dimensionality == "2D":
-        in_axes = [
-            BatchAxis(),
-            ChannelAxis(
-                channel_names=[Identifier(f"in_ch_{i}") for i in range(in_channels)]
-            ),
-            SpaceInputAxis(
-                id=AxisId("y"),
-                size=ParameterizedSize(min=axis_min_sizes[1], step=1),
-                scale=y_scale,
-                unit=y_unit,
-            ),
-            SpaceInputAxis(
-                id=AxisId("x"),
-                size=ParameterizedSize(min=axis_min_sizes[2], step=1),
-                scale=x_scale,
-                unit=x_unit,
-            ),
-        ]
+    if geometry.is_2d:
+        axis_ids = ("y", "x")
+        halos = geometry.halo[1:]
+        scales = ((y_scale, y_unit), (x_scale, x_unit))
     else:
-        raise ValueError("Unknown dimension")
+        axis_ids = ("z", "y", "x")
+        halos = geometry.halo
+        scales = ((z_scale, z_unit), (y_scale, y_unit), (x_scale, x_unit))
+
+    minima = geometry.tensor_effective_min_input()
+
+    in_axes = [
+        BatchAxis(),
+        ChannelAxis(
+            channel_names=[Identifier(f"in_ch_{i}") for i in range(in_channels)]
+        ),
+        *(
+            _input_axis(axis_id, minimum, scale, unit)
+            for axis_id, minimum, (scale, unit) in zip(axis_ids, minima, scales)
+        ),
+    ]
 
     input_desc = InputTensorDescr(
         description="model input",
@@ -292,50 +334,16 @@ def make_model_description(
         preprocessing=[ZeroMeanUnitVarianceDescr()],
     )
 
-    if dimensionality == "3D":
-        out_axes = [
-            BatchAxis(),
-            ChannelAxis(
-                channel_names=[Identifier(f"out_ch_{i}") for i in range(out_channels)]
-            ),
-            SpaceOutputAxis(
-                id=AxisId("z"),
-                size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId("z")),
-                scale=z_scale,
-                unit=z_unit,
-            ),
-            SpaceOutputAxis(
-                id=AxisId("y"),
-                size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId("y")),
-                scale=y_scale,
-                unit=y_unit,
-            ),
-            SpaceOutputAxis(
-                id=AxisId("x"),
-                size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId("x")),
-                scale=x_scale,
-                unit=x_unit,
-            ),
-        ]
-    elif dimensionality == "2D":
-        out_axes = [
-            BatchAxis(),
-            ChannelAxis(
-                channel_names=[Identifier(f"out_ch_{i}") for i in range(out_channels)]
-            ),
-            SpaceOutputAxis(
-                id=AxisId("y"),
-                size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId("y")),
-                scale=y_scale,
-                unit=y_unit,
-            ),
-            SpaceOutputAxis(
-                id=AxisId("x"),
-                size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId("x")),
-                scale=x_scale,
-                unit=x_unit,
-            ),
-        ]
+    out_axes = [
+        BatchAxis(),
+        ChannelAxis(
+            channel_names=[Identifier(f"out_ch_{i}") for i in range(out_channels)]
+        ),
+        *(
+            _output_axis(axis_id, halo, scale, unit)
+            for axis_id, halo, (scale, unit) in zip(axis_ids, halos, scales)
+        ),
+    ]
 
     output_desc = OutputTensorDescr(
         id=TensorId("output"),
@@ -347,10 +355,11 @@ def make_model_description(
 
     pytorch_version = Version(torch.__version__)
 
-    if dimensionality == "3D":
-        net_id = Identifier("UNet3D")
-    elif dimensionality == "2D":
-        net_id = Identifier("UNet2D")
+    # the exported callable returns probabilities (its forward applies the
+    # final activation): published models keep their [0, 1] output contract
+    net_id = Identifier(
+        "UNet2DProbabilities" if geometry.is_2d else "UNet3DProbabilities"
+    )
 
     pytorch_architecture = ArchitectureFromFileDescr(
         source=Path(__file__).parent / "model.py",

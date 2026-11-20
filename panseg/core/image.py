@@ -519,6 +519,7 @@ class PanSegImage:
             {
                 "name": self.name,
                 "scale": self.scale,
+                "units": self.units,
                 "axis_labels": [ax.lower() for ax in self.image_layout.value],
                 "metadata": metadata,
             },
@@ -719,6 +720,24 @@ class PanSegImage:
             "X": self.voxel_size.x,
         }
         return tuple(axis_scales[ax] for ax in self.image_layout.value)
+
+    @property
+    def units(self) -> tuple[str | None, ...]:
+        """Returns the units of the image axes.
+
+        The spatial axes carry the voxel size unit when a voxel size is set
+        and no unit (i.e. pixels) otherwise. The time and channel axes carry
+        no unit.
+        """
+        spatial_unit = self.voxel_size.unit if self.has_valid_voxel_size() else None
+        axis_units = {
+            "T": None,
+            "C": None,
+            "Z": spatial_unit,
+            "Y": spatial_unit,
+            "X": spatial_unit,
+        }
+        return tuple(axis_units[ax] for ax in self.image_layout.value)
 
     @property
     def shape(self) -> tuple[int, ...]:

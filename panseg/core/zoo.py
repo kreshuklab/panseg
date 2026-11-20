@@ -17,7 +17,6 @@ from bioimageio.spec.model.v0_5 import ModelDescr as ModelDescr_v0_5
 from bioimageio.spec.utils import download
 from pandas import DataFrame, concat
 from pydantic import AliasChoices, BaseModel, Field, HttpUrl, model_validator
-from torch.nn import Conv2d, Conv3d, MaxPool2d, MaxPool3d, Module
 
 from panseg import (
     FILE_BEST_MODEL_PYTORCH,
@@ -27,11 +26,10 @@ from panseg import (
     PATH_MODEL_ZOO_CUSTOM,
     PATH_PANSEG_MODELS,
 )
+from panseg.functionals.model_geometry import model_geometry
 from panseg.functionals.training.model import (
     AbstractUNet,
-    InterpolateUpsampling,
     UNet2D,
-    UNet3D,
 )
 from panseg.utils import download_files, get_class, load_config, save_config
 
@@ -582,71 +580,15 @@ class ModelZoo:
         ]
         return sorted([(name, id) for id, name in id_name.itertuples()])
 
-    def _flatten_module(self, module: Module) -> list[Module]:
-        """Recursively flatten a PyTorch nn.Module into a list of its elemental layers."""
-        layers = []
-        for child in module.children():
-            if not list(child.children()):  # Check if the module has no children
-                layers.append(child)
-            else:  # Recursively flatten the child that has its own submodules
-                layers.extend(self._flatten_module(child))
-        return layers
-
-    def compute_halo(self, module: Module) -> int:
-        """Compute the halo size for a UNet model.
-
-        The halo is computed based on the increase and decrease in effective spatial resolution
-        as the network processes inputs through successive pooling and upsampling layers,
-        respectively. Each convolutional layer's contribution to the halo depends on its level
-        in the network hierarchy, defined by the number of max-pool layers minus the number
-        of up-conv layers encountered along the longest path from the input to that layer.
-
-        Args:
-            module (nn.Module): The UNet model, either UNet2D or UNet3D.
-
-        Returns:
-            int: Halo size for one side in each dimension.
-
-        References:
-            - For further details on how halos are calculated in the context of neural networks,
-            see: https://doi.org/10.6028/jres.126.009
-        """
-        module_list = self._flatten_module(module)
-        level = 0
-        conv_contribution = []
-
-        for mod in module_list:
-            if isinstance(mod, MaxPool3d) or isinstance(mod, MaxPool2d):
-                level += 1
-            elif isinstance(mod, InterpolateUpsampling):
-                level -= 1
-            elif isinstance(mod, Conv3d) or isinstance(mod, Conv2d):
-                conv_contribution.append(2**level * (mod.kernel_size[0] // 2))
-
-        halo = sum(conv_contribution)
-        return halo
-
-    def compute_3D_halo_for_pytorch3dunet(
-        self, module: UNet2D | UNet3D
-    ) -> tuple[int, int, int]:
-        if isinstance(module, UNet3D):
-            halo = self.compute_halo(module)
-            return halo, halo, halo
-        elif isinstance(module, UNet2D):
-            halo = self.compute_halo(module)
-            return 0, halo, halo
-        else:
-            raise ValueError(f"Unsupported model type: {type(module).__name__}")
-
     def compute_3D_halo_for_zoo_models(self, model_name: str) -> tuple[int, int, int]:
         model, _, _ = self.get_model_by_name(model_name)
-        return self.compute_3D_halo_for_pytorch3dunet(model)
+        return model_geometry(model).halo
 
     def compute_3D_halo_for_bioimageio_models(
         self, model_id: str
     ) -> tuple[int, int, int]:
         model, _, _ = self.get_model_by_id(model_id)
-        return self.compute_3D_halo_for_pytorch3dunet(model)
+        return model_geometry(model).halo
 
     def is_2D(self, module: AbstractUNet) -> bool:
         return isinstance(module, UNet2D)
