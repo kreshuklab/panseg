@@ -4,13 +4,16 @@
 
 import json
 import logging
+import re
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path
 from shutil import copy2
 from typing import Optional, Self
 
 import numpy as np
 import pooch
+import requests
 from bioimageio.spec import InvalidDescr, load_description
 from bioimageio.spec.model.v0_4 import ModelDescr as ModelDescr_v0_4
 from bioimageio.spec.model.v0_5 import ModelDescr as ModelDescr_v0_5
@@ -31,7 +34,13 @@ from panseg.functionals.training.model import (
     AbstractUNet,
     UNet2D,
 )
-from panseg.utils import download_files, get_class, load_config, save_config
+from panseg.utils import (
+    download_files,
+    fetch_json,
+    get_class,
+    load_config,
+    save_config,
+)
 
 logger_zoo = logging.getLogger(__name__)
 
@@ -48,8 +57,76 @@ BIOIMAGE_IO_COLLECTION_URL = (
     f"{BIOIMAGE_IO_ARTIFACTS_URL}/bioimage.io/children"
     '?filters={"type":"model"}&limit=10000'
 )
-# Same pattern bioimageio.spec uses to resolve a model ID.
-BIOIMAGE_IO_RDF_URL = BIOIMAGE_IO_ARTIFACTS_URL + "/{id}/files/rdf.yaml"
+# Newer uploads name the RDF `bioimageio.yaml`, older ones `rdf.yaml`;
+# bioimage.io looks for them in this order.
+BIOIMAGE_IO_RDF_FILE_NAMES = ("bioimageio.yaml", "rdf.yaml")
+BIOIMAGE_IO_MODEL_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)+")
+BIOIMAGE_IO_LOOKUP_TIMEOUT = (5, 30)
+
+
+def _hypha_model_artifacts(payload) -> list[dict]:
+    """Model artifacts in a Hypha `children` response.
+
+    Hypha answers with either a bare list or a page
+    `{"items", "total", "offset", "limit"}`.
+    """
+    if isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        artifacts = payload["items"]
+        total = payload.get("total")
+        if isinstance(total, int) and total > len(artifacts):
+            logger_zoo.warning(
+                f"BioImage.IO returned {len(artifacts)} of {total} models"
+            )
+    elif isinstance(payload, list):
+        artifacts = payload
+    else:
+        raise ValueError(f"Unexpected BioImage.IO model list: {type(payload).__name__}")
+    return [
+        artifact
+        for artifact in artifacts
+        if isinstance(artifact, dict)
+        and artifact.get("type") == "model"
+        and isinstance(artifact.get("alias"), str)
+        and isinstance(artifact.get("manifest"), dict)
+    ]
+
+
+@lru_cache(maxsize=64)
+def bioimageio_rdf_url(model_id: str) -> str:
+    """URL of the RDF of a bioimage.io model, e.g. 'efficient-chipmunk'."""
+    files_url = f"{BIOIMAGE_IO_ARTIFACTS_URL}/{model_id}/files/"
+    try:
+        files = fetch_json(files_url, timeout=BIOIMAGE_IO_LOOKUP_TIMEOUT)
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            raise ValueError(f"BioImage.IO model '{model_id}' not found") from e
+        raise
+    if isinstance(files, dict):
+        files = files.get("items", [])
+    names = {file.get("name") for file in files if isinstance(file, dict)}
+    for name in BIOIMAGE_IO_RDF_FILE_NAMES:
+        if name in names:
+            url = files_url + name
+            logger_zoo.info(f"Resolved BioImage.IO model {model_id} to {url}")
+            return url
+    raise ValueError(
+        f"BioImage.IO model '{model_id}' has no "
+        f"{' or '.join(BIOIMAGE_IO_RDF_FILE_NAMES)}"
+    )
+
+
+def resolve_bioimageio_source(source):
+    """RDF URL for a bioimage.io model ID; URLs and existing paths pass through."""
+    if not isinstance(source, str) or "://" in source or Path(source).exists():
+        return source
+    model_id = source.removeprefix("bioimage-io/")
+    if not BIOIMAGE_IO_MODEL_ID.fullmatch(model_id):
+        # bioimageio.spec would look it up in the retired EBI id map
+        raise ValueError(
+            f"'{source}' is not a BioImage.IO model ID such as 'efficient-chipmunk', "
+            "a URL, or an existing path"
+        )
+    return bioimageio_rdf_url(model_id)
 
 
 class ModelZooRecord(BaseModel):
@@ -72,7 +149,6 @@ class ModelZooRecord(BaseModel):
     # BioImage.IO models specific fields. TODO: unify.
     id: Optional[str] = None
     name_display: Optional[str] = None
-    rdf_source: Optional[HttpUrl] = None
     supported: Optional[bool] = None
 
     @model_validator(mode="after")
@@ -85,12 +161,10 @@ class ModelZooRecord(BaseModel):
     @model_validator(mode="after")
     def check_id_fields_present(self) -> Self:
         if self.id is not None and (
-            self.name_display is None
-            or self.rdf_source is None
-            or self.supported is None
+            self.name_display is None or self.supported is None
         ):
             raise ValueError(
-                f"If `id` exists, then `name_display`, `rdf_source` and `supported` must be present: {self}"
+                f"If `id` exists, then `name_display` and `supported` must be present: {self}"
             )
         return self
 
@@ -409,18 +483,11 @@ class ModelZoo:
     def get_model_by_id(self, model_id: str):
         """Load model from BioImage.IO Model Zoo.
 
-        E.g. model_id = 'efficient-chipmunk', whose RDF URL is:
-        https://hypha.aicell.io/bioimage-io/artifacts/efficient-chipmunk/files/rdf.yaml
+        `model_id` is a bioimage.io model ID such as 'efficient-chipmunk', or the
+        URL or path of an RDF or model package.
         """
-
-        if not hasattr(self, "models_bioimageio"):
-            self.refresh_bioimageio_zoo_urls()
-
-        if model_id not in self.models_bioimageio.index:
-            raise ValueError(f"Model ID {model_id} not found in BioImage.IO Model Zoo")
-
-        rdf_url = self.models_bioimageio.at[model_id, "rdf_source"]
-        model_description = load_description(rdf_url)
+        rdf_source = resolve_bioimageio_source(model_id)
+        model_description = load_description(rdf_source, perform_io_checks=False)
 
         # Check if description is `ResourceDescr`
         if isinstance(model_description, InvalidDescr):
@@ -481,9 +548,8 @@ class ModelZoo:
         }
         model_config.update(architecture_kwargs)
         model = self._create_model_by_config(model_config)
-        model_weights_path = download(
-            model_description.weights.pytorch_state_dict.source
-        )
+        # the file description carries the sha256, so the download is verified and cached
+        model_weights_path = download(model_description.weights.pytorch_state_dict)
 
         logger_zoo.info(f"Created {architecture} model with kwargs {model_config}.")
         logger_zoo.info(f"Loaded model from BioImage.IO Model Zoo: {model_id}")
@@ -518,14 +584,16 @@ class ModelZoo:
         with collection_path.open(encoding="utf-8") as f:
             collection = json.load(f)
 
-        # Hypha artifact: `alias` is the model ID (e.g. 'efficient-chipmunk'),
-        # `manifest` is its RDF content.
+        # `alias` is the model ID (e.g. 'efficient-chipmunk'), `manifest` its RDF.
         models = [
-            {**artifact["manifest"], "id": artifact["alias"]}
-            for artifact in collection
-            if artifact["type"] == "model"
+            {
+                **artifact["manifest"],
+                "id": artifact["alias"],
+                "name": artifact["manifest"].get("name") or artifact["alias"],
+            }
+            for artifact in _hypha_model_artifacts(collection)
         ]
-        max_nickname_length = max(len(entry["id"]) for entry in models)
+        max_nickname_length = max((len(entry["id"]) for entry in models), default=0)
 
         def truncate_name(name, length=100):
             return name[:length] + "..." if len(name) > length else name
@@ -538,7 +606,6 @@ class ModelZoo:
                     "id": entry["id"],
                     "name": entry["name"],
                     "name_display": f"{entry['id']:<{max_nickname_length}}: {truncate_name(entry['name'])}",
-                    "rdf_source": BIOIMAGE_IO_RDF_URL.format(id=entry["id"]),
                     "supported": self._is_panseg_model(entry),
                 }
                 for entry in filtered_models
@@ -547,45 +614,50 @@ class ModelZoo:
         self._bioimageio_zoo_collection = collection
         self._bioimageio_zoo_all_model_url_dict = build_model_url_dict()
         self._init_bioimageio_zoo_df()
+        supported = sum(
+            model["supported"]
+            for model in self._bioimageio_zoo_all_model_url_dict.values()
+        )
+        logger_zoo.info(
+            f"Loaded {len(models)} BioImage.IO models, {supported} of them for PanSeg"
+        )
 
     def _is_panseg_model(self, collection_entry: dict) -> bool:
         """Determines if the 'tags' field in a collection entry contains the keyword 'panseg'."""
         tags = collection_entry.get("tags")
-        if tags is None:
-            return False
         if not isinstance(tags, list):
-            raise ValueError(
-                f"Tags in a collection entry must be a list of strings, got {type(tags).__name__}"
-            )
+            return False
 
         # Normalize tags to lower case and remove non-alphanumeric characters
-        normalized_tags = ["".join(filter(str.isalnum, tag.lower())) for tag in tags]
-        return "plantseg" in normalized_tags or "panseg" in normalized_tags
+        normalized_tags = {
+            "".join(filter(str.isalnum, tag.lower()))
+            for tag in tags
+            if isinstance(tag, str)
+        }
+        return not normalized_tags.isdisjoint({"plantseg", "panseg"})
+
+    def _get_bioimageio_zoo_model_names(
+        self, supported: Optional[bool] = None
+    ) -> list[tuple[str, str]]:
+        if not hasattr(self, "models_bioimageio"):
+            self.refresh_bioimageio_zoo_urls()
+        models = self.models_bioimageio
+        if supported is not None:
+            # an empty frame has an object column, which can't be used as a mask
+            models = models[models["supported"].astype(bool) == supported]
+        return sorted(zip(models["name_display"], models.index))
 
     def get_bioimageio_zoo_all_model_names(self) -> list[tuple[str, str]]:
-        """Return a list of (model id, model display name) in the BioImage.IO Model Zoo."""
-        if not hasattr(self, "models_bioimageio"):
-            self.refresh_bioimageio_zoo_urls()
-        id_name = self.models_bioimageio[["name_display"]]
-        return sorted([(name, id) for id, name in id_name.itertuples()])
+        """Return (display name, model ID) of every model in the BioImage.IO Model Zoo."""
+        return self._get_bioimageio_zoo_model_names()
 
     def get_bioimageio_zoo_panseg_model_names(self) -> list[tuple[str, str]]:
-        """Return a list of (model id, model display name) in the BioImage.IO Model Zoo tagged with 'plantseg'."""
-        if not hasattr(self, "models_bioimageio"):
-            self.refresh_bioimageio_zoo_urls()
-        id_name = self.models_bioimageio[self.models_bioimageio["supported"]][
-            ["name_display"]
-        ]
-        return sorted([(name, id) for id, name in id_name.itertuples()])
+        """Return (display name, model ID) of BioImage.IO models tagged 'panseg' or 'plantseg'."""
+        return self._get_bioimageio_zoo_model_names(supported=True)
 
     def get_bioimageio_zoo_other_model_names(self) -> list[tuple[str, str]]:
-        """Return a list of (model id, model display name) in the BioImage.IO Model Zoo not tagged with 'panseg'."""
-        if not hasattr(self, "models_bioimageio"):
-            self.refresh_bioimageio_zoo_urls()
-        id_name = self.models_bioimageio[~self.models_bioimageio["supported"]][
-            ["name_display"]
-        ]
-        return sorted([(name, id) for id, name in id_name.itertuples()])
+        """Return (display name, model ID) of BioImage.IO models not tagged for PanSeg."""
+        return self._get_bioimageio_zoo_model_names(supported=False)
 
     def compute_3D_halo_for_zoo_models(self, model_name: str) -> tuple[int, int, int]:
         model, _, _ = self.get_model_by_name(model_name)

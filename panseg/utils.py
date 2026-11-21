@@ -120,6 +120,13 @@ def download_file(url: str, filename: Path) -> None:
     ) from last_error
 
 
+def fetch_json(url: str, *, timeout=REQUEST_TIMEOUT):
+    """GET a JSON document; raises `requests.RequestException` on failure."""
+    response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
 def download_files(urls: dict, out_dir: Path) -> None:
     """Download files from URLs to a specified directory.
 
