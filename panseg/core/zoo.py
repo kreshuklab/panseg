@@ -5,6 +5,8 @@
 import json
 import logging
 import re
+import time
+from datetime import datetime
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
@@ -12,7 +14,6 @@ from shutil import copy2
 from typing import Optional, Self
 
 import numpy as np
-import pooch
 import requests
 from bioimageio.spec import InvalidDescr, load_description
 from bioimageio.spec.model.v0_4 import ModelDescr as ModelDescr_v0_4
@@ -40,6 +41,7 @@ from panseg.utils import (
     get_class,
     load_config,
     save_config,
+    write_text_atomic,
 )
 
 logger_zoo = logging.getLogger(__name__)
@@ -62,6 +64,9 @@ BIOIMAGE_IO_COLLECTION_URL = (
 BIOIMAGE_IO_RDF_FILE_NAMES = ("bioimageio.yaml", "rdf.yaml")
 BIOIMAGE_IO_MODEL_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)+")
 BIOIMAGE_IO_LOOKUP_TIMEOUT = (5, 30)
+# Fetched again once a day; the cached copy stands in when a fetch fails.
+PATH_BIOIMAGE_IO_MODEL_LIST = PATH_PANSEG_MODELS / "bioimageio_models.json"
+BIOIMAGE_IO_LIST_MAX_AGE = 24 * 60 * 60  # seconds
 
 
 def _hypha_model_artifacts(payload) -> list[dict]:
@@ -89,6 +94,29 @@ def _hypha_model_artifacts(payload) -> list[dict]:
         and isinstance(artifact.get("alias"), str)
         and isinstance(artifact.get("manifest"), dict)
     ]
+
+
+def _download_bioimageio_model_list(path: Path) -> list[dict]:
+    """Fetch the model list and cache it at `path`; only a valid list replaces it."""
+    artifacts = _hypha_model_artifacts(
+        fetch_json(BIOIMAGE_IO_COLLECTION_URL, timeout=BIOIMAGE_IO_LOOKUP_TIMEOUT)
+    )
+    if not artifacts:
+        raise ValueError("BioImage.IO returned no models")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(path, json.dumps(artifacts))
+    except OSError as e:
+        logger_zoo.warning(f"Could not cache the BioImage.IO model list at {path}: {e}")
+    return artifacts
+
+
+def _read_bioimageio_model_list(path: Path) -> list[dict]:
+    try:
+        return _hypha_model_artifacts(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError) as e:
+        logger_zoo.warning(f"Ignoring unreadable BioImage.IO model list {path}: {e}")
+        return []
 
 
 @lru_cache(maxsize=64)
@@ -567,22 +595,38 @@ class ModelZoo:
             columns=list(ModelZooRecord.model_fields.keys()),
         ).set_index("id")
 
-    def refresh_bioimageio_zoo_urls(self):
-        """Initialize the BioImage.IO Model Zoo collection and URL dictionaries.
+    def refresh_bioimageio_zoo_urls(self, force: bool = False) -> None:
+        """Load the BioImage.IO model list into `models_bioimageio`.
 
-        The BioImage.IO Model Zoo collection is not downloaded during ModelZoo initialization to avoid unnecessary
-        network requests. This method downloads the collection and extracts the model URLs for all models.
-
-        Note that `models_bioimageio` doesn't exist until this method is called.
+        The list is cached on disk and fetched again once the copy is a day old,
+        or when `force` is set. If the fetch fails, the cached copy is used, or no
+        models at all, so this never fails for want of network.
         """
-        logger_zoo.info(
-            f"Fetching BioImage.IO Model Zoo collection from {BIOIMAGE_IO_COLLECTION_URL}"
+        path = PATH_BIOIMAGE_IO_MODEL_LIST
+        fresh = (
+            path.exists()
+            and time.time() - path.stat().st_mtime < BIOIMAGE_IO_LIST_MAX_AGE
         )
-        collection_path = Path(
-            pooch.retrieve(BIOIMAGE_IO_COLLECTION_URL, known_hash=None)
-        )
-        with collection_path.open(encoding="utf-8") as f:
-            collection = json.load(f)
+        collection = _read_bioimageio_model_list(path) if fresh and not force else []
+        if not collection:
+            logger_zoo.info(
+                f"Fetching the BioImage.IO model list from {BIOIMAGE_IO_COLLECTION_URL}"
+            )
+            try:
+                collection = _download_bioimageio_model_list(path)
+            except (requests.RequestException, ValueError) as e:
+                collection = _read_bioimageio_model_list(path) if path.exists() else []
+                if collection:
+                    saved = datetime.fromtimestamp(path.stat().st_mtime)
+                    logger_zoo.warning(
+                        f"Could not fetch the BioImage.IO model list ({e}); "
+                        f"using the copy from {saved:%Y-%m-%d %H:%M}"
+                    )
+                else:
+                    logger_zoo.warning(
+                        f"Could not fetch the BioImage.IO model list ({e}); "
+                        "no BioImage.IO models are available"
+                    )
 
         # `alias` is the model ID (e.g. 'efficient-chipmunk'), `manifest` its RDF.
         models = [
@@ -591,7 +635,7 @@ class ModelZoo:
                 "id": artifact["alias"],
                 "name": artifact["manifest"].get("name") or artifact["alias"],
             }
-            for artifact in _hypha_model_artifacts(collection)
+            for artifact in collection
         ]
         max_nickname_length = max((len(entry["id"]) for entry in models), default=0)
 
@@ -635,6 +679,10 @@ class ModelZoo:
             if isinstance(tag, str)
         }
         return not normalized_tags.isdisjoint({"plantseg", "panseg"})
+
+    def has_bioimageio_models(self) -> bool:
+        """Whether a non-empty BioImage.IO model list is loaded; never fetches it."""
+        return hasattr(self, "models_bioimageio") and not self.models_bioimageio.empty
 
     def _get_bioimageio_zoo_model_names(
         self, supported: Optional[bool] = None

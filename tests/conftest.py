@@ -903,3 +903,52 @@ def mock_biio_package(tmp_path) -> Path:
         package = tmp_path / "mock_model.zip"
         desc.package(package)
     return package
+
+
+# Trimmed entries of the Hypha model list: two share a name, one has malformed
+# tags, and the last two are not models PanSeg can list.
+HYPHA_MODEL_LIST = [
+    {
+        "alias": "efficient-chipmunk",
+        "type": "model",
+        "manifest": {"name": "PlantSeg Plant Nuclei 3D UNet", "tags": ["plantseg"]},
+    },
+    {
+        "alias": "affable-shark",
+        "type": "model",
+        "manifest": {"name": "NucleiSegmentationBoundaryModel", "tags": ["nuclei"]},
+    },
+    {
+        "alias": "hiding-tiger",
+        "type": "model",
+        "manifest": {"name": "NucleiSegmentationBoundaryModel", "tags": []},
+    },
+    {
+        "alias": "odd-tags",
+        "type": "model",
+        "manifest": {"name": "Odd Tags", "tags": "plantseg"},
+    },
+    {"alias": "some-dataset", "type": "dataset", "manifest": {"name": "Data"}},
+    {"type": "model", "manifest": {"name": "No Alias"}},
+]
+
+
+@pytest.fixture
+def offline_bioimageio_zoo(monkeypatch, mocker, tmp_path):
+    """Serve the BioImage.IO model list from memory and cache it in `tmp_path`.
+
+    Returns the mocked `fetch_json`; set its `return_value` or `side_effect` to
+    change what BioImage.IO answers. The shared model zoo is restored afterwards.
+    """
+    import panseg.core.zoo as zoo_module
+    from panseg.core.zoo import model_zoo
+
+    monkeypatch.setattr(
+        zoo_module,
+        "PATH_BIOIMAGE_IO_MODEL_LIST",
+        tmp_path / "bioimageio_models.json",
+    )
+    for attr in ("_bioimageio_zoo_collection", "_bioimageio_zoo_all_model_url_dict"):
+        monkeypatch.setattr(model_zoo, attr, getattr(model_zoo, attr))
+    monkeypatch.delattr(model_zoo, "models_bioimageio", raising=False)
+    return mocker.patch.object(zoo_module, "fetch_json", return_value=HYPHA_MODEL_LIST)
