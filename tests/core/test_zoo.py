@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from pathlib import Path
@@ -109,6 +110,58 @@ class TestBioImageIOModelZoo:
         """Compute the halo for a BioImage.IO model."""
         model, _ = biio_model(model_id)
         assert model_geometry(model).halo == expected
+
+
+# Trimmed entries of the Hypha model list; the last two share a name.
+HYPHA_MODEL_LIST = [
+    {
+        "alias": "efficient-chipmunk",
+        "type": "model",
+        "manifest": {"name": "PlantSeg Plant Nuclei 3D UNet", "tags": ["plantseg"]},
+    },
+    {
+        "alias": "affable-shark",
+        "type": "model",
+        "manifest": {"name": "NucleiSegmentationBoundaryModel", "tags": ["nuclei"]},
+    },
+    {
+        "alias": "hiding-tiger",
+        "type": "model",
+        "manifest": {"name": "NucleiSegmentationBoundaryModel", "tags": []},
+    },
+]
+
+
+def test_refresh_bioimageio_zoo_reads_hypha_model_list(mocker, monkeypatch, tmp_path):
+    collection_path = tmp_path / "children.json"
+    collection_path.write_text(json.dumps(HYPHA_MODEL_LIST))
+    mocker.patch.object(zoo_module.pooch, "retrieve", return_value=str(collection_path))
+    # restore the shared singleton's real collection after the test
+    for attr in (
+        "models_bioimageio",
+        "_bioimageio_zoo_collection",
+        "_bioimageio_zoo_all_model_url_dict",
+    ):
+        monkeypatch.setattr(
+            model_zoo, attr, getattr(model_zoo, attr, None), raising=False
+        )
+
+    model_zoo.refresh_bioimageio_zoo_urls()
+
+    models = model_zoo.models_bioimageio
+    assert sorted(models.index) == [
+        "affable-shark",
+        "efficient-chipmunk",
+        "hiding-tiger",
+    ]
+    assert models["supported"].to_dict() == {
+        "efficient-chipmunk": True,
+        "affable-shark": False,
+        "hiding-tiger": False,
+    }
+    assert str(models.at["efficient-chipmunk", "rdf_source"]) == (
+        "https://hypha.aicell.io/bioimage-io/artifacts/efficient-chipmunk/files/rdf.yaml"
+    )
 
 
 def test_dimensionality_filter_is_spatial_only():

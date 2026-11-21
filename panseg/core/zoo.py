@@ -42,9 +42,14 @@ class Author(str, Enum):
     USER = "user"
 
 
+BIOIMAGE_IO_ARTIFACTS_URL = "https://hypha.aicell.io/bioimage-io/artifacts"
+# Published models with their manifests; bioimage.io serves its collection from here.
 BIOIMAGE_IO_COLLECTION_URL = (
-    "https://uk1s3.embassy.ebi.ac.uk/public-datasets/bioimage.io/collection.json"
+    f"{BIOIMAGE_IO_ARTIFACTS_URL}/bioimage.io/children"
+    '?filters={"type":"model"}&limit=10000'
 )
+# Same pattern bioimageio.spec uses to resolve a model ID.
+BIOIMAGE_IO_RDF_URL = BIOIMAGE_IO_ARTIFACTS_URL + "/{id}/files/rdf.yaml"
 
 
 class ModelZooRecord(BaseModel):
@@ -104,7 +109,7 @@ class ModelZoo:
 
     _zoo_dict: dict = {}
     _zoo_custom_dict: dict = {}
-    _bioimageio_zoo_collection: dict = {}
+    _bioimageio_zoo_collection: list = []
     _bioimageio_zoo_all_model_url_dict: dict = {}
 
     path_zoo: Path = PATH_MODEL_ZOO
@@ -405,7 +410,7 @@ class ModelZoo:
         """Load model from BioImage.IO Model Zoo.
 
         E.g. model_id = 'efficient-chipmunk', whose RDF URL is:
-        https://bioimage-io.github.io/collection-bioimage-io/rdfs/10.5281/zenodo.8401064/8429203/rdf.yaml
+        https://hypha.aicell.io/bioimage-io/artifacts/efficient-chipmunk/files/rdf.yaml
         """
 
         if not hasattr(self, "models_bioimageio"):
@@ -513,25 +518,27 @@ class ModelZoo:
         with collection_path.open(encoding="utf-8") as f:
             collection = json.load(f)
 
-        def get_id(entry):
-            return entry["id"] if "nickname" not in entry else entry["nickname"]
-
+        # Hypha artifact: `alias` is the model ID (e.g. 'efficient-chipmunk'),
+        # `manifest` is its RDF content.
         models = [
-            entry for entry in collection["collection"] if entry["type"] == "model"
+            {**artifact["manifest"], "id": artifact["alias"]}
+            for artifact in collection
+            if artifact["type"] == "model"
         ]
-        max_nickname_length = max(len(get_id(entry)) for entry in models)
+        max_nickname_length = max(len(entry["id"]) for entry in models)
 
         def truncate_name(name, length=100):
             return name[:length] + "..." if len(name) > length else name
 
         def build_model_url_dict(filter_func=None):
             filtered_models = filter(filter_func, models) if filter_func else models
+            # Keyed by ID: model names on bioimage.io are not unique.
             return {
-                entry["name"]: {
-                    "id": get_id(entry),
+                entry["id"]: {
+                    "id": entry["id"],
                     "name": entry["name"],
-                    "name_display": f"{get_id(entry):<{max_nickname_length}}: {truncate_name(entry['name'])}",
-                    "rdf_source": entry["rdf_source"],
+                    "name_display": f"{entry['id']:<{max_nickname_length}}: {truncate_name(entry['name'])}",
+                    "rdf_source": BIOIMAGE_IO_RDF_URL.format(id=entry["id"]),
                     "supported": self._is_panseg_model(entry),
                 }
                 for entry in filtered_models
