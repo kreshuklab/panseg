@@ -35,7 +35,6 @@ jobs:
           path: |
             ~/.panseg_models
             ~/.cache/bioimageio
-            ~/.cache/pooch
           key: panseg-models-${{ steps.model-zoo-key.outputs.hash }}
           restore-keys: |
             panseg-models-

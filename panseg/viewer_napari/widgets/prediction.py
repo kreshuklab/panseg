@@ -90,6 +90,11 @@ class Prediction_Widgets:
         )
         self.widget_unet_prediction.panseg_filter.reset_choices()
         self.widget_unet_prediction.panseg_filter.value = True
+        # empty until BioImage.IO mode is chosen, so startup needs no network
+        self.widget_unet_prediction.model_id._default_choices = (
+            self._bioimageio_model_choices
+        )
+        self.widget_unet_prediction.model_id.reset_choices()
 
         self.widget_unet_prediction.single_patch._default_choices = (
             self.SINGLE_PATCH_MODE
@@ -188,8 +193,8 @@ class Prediction_Widgets:
         model_id={
             "label": "BioImage.IO model",
             "tooltip": "Select a model from BioImage.IO model zoo.",
-            "choices": model_zoo.get_bioimageio_zoo_panseg_model_names(),
-            "value": model_zoo.get_bioimageio_zoo_panseg_model_names()[0][1],
+            "choices": [None],
+            "value": None,
         },
         advanced={
             "label": "Show advanced parameters",
@@ -298,6 +303,11 @@ class Prediction_Widgets:
             )
         elif mode is UNetPredictionMode.BIOIMAGEIO:
             if model_id is None:
+                log(
+                    "Choose a BioImage.IO model first!",
+                    thread="Prediction",
+                    level="WARNING",
+                )
                 return
             suffix = model_id
             model_name = None
@@ -342,8 +352,6 @@ class Prediction_Widgets:
                     self.widget_unet_prediction.patch_size[0].enabled = False
                     self.widget_unet_prediction.patch_halo[0].enabled = False
                 else:
-                    if self.widget_unet_prediction.model_id.value is None:
-                        return
                     self.widget_unet_prediction.patch_size[
                         0
                     ].value = self.widget_unet_prediction.patch_size[1].value
@@ -405,6 +413,7 @@ class Prediction_Widgets:
                 widget.hide()
             for widget in widgets_b:
                 widget.show()
+            self._load_bioimageio_models()
         else:
             raise NotImplementedError(f"Mode {mode} not implemented yet.")
 
@@ -415,17 +424,50 @@ class Prediction_Widgets:
         logger.debug(
             f"_on_widget_unet_prediction_panseg_filter_change called: {panseg_filter}"
         )
-        if panseg_filter:
-            self.widget_unet_prediction.model_id.choices = (
-                model_zoo.get_bioimageio_zoo_panseg_model_names()
+        self._reset_bioimageio_model_choices()
+
+    def _bioimageio_model_choices(self, _widget=None) -> list:
+        """BioImage.IO models matching the filter; never fetches the list.
+
+        magicgui calls this whenever the widget is re-parented, so it must not
+        do any I/O.
+        """
+        if not model_zoo.has_bioimageio_models():
+            return []
+        choices = model_zoo.get_bioimageio_zoo_panseg_model_names()
+        if not self.widget_unet_prediction.panseg_filter.value:
+            # `[('', Separator)]` for list[tuple[str, str]], [Separator] for list[str]
+            choices += [("", Separator)]
+            choices += model_zoo.get_bioimageio_zoo_other_model_names()
+        return choices
+
+    def _reset_bioimageio_model_choices(self) -> None:
+        """Refresh the choices and select the first model if none is selected."""
+        model_id = self.widget_unet_prediction.model_id
+        # a default selection is not a user's choice, so it shouldn't trigger handlers
+        with model_id.changed.blocked():
+            model_id.reset_choices()
+            if model_id.value is None:
+                model_id.value = next(
+                    (choice for choice in model_id.choices if choice is not None),
+                    None,
+                )
+
+    def _load_bioimageio_models(self) -> None:
+        if not model_zoo.has_bioimageio_models():
+            log(
+                "Loading the BioImage.IO model list...",
+                thread="BioImage.IO Core prediction",
+                level="INFO",
             )
-        else:
-            self.widget_unet_prediction.model_id.choices = (
-                model_zoo.get_bioimageio_zoo_panseg_model_names()
-                + [
-                    ("", Separator)
-                ]  # `[('', Separator)]` for list[tuple[str, str]], [Separator] for list[str]
-                + model_zoo.get_bioimageio_zoo_other_model_names()
+            model_zoo.refresh_bioimageio_zoo_urls()
+        self._reset_bioimageio_model_choices()
+        if self.widget_unet_prediction.model_id.value is None:
+            log(
+                "Could not load the BioImage.IO model list; "
+                "check your network connection.",
+                thread="BioImage.IO Core prediction",
+                level="WARNING",
             )
 
     def _on_any_metadata_changed(self, widget):

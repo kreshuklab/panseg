@@ -797,3 +797,158 @@ def write_still_tiff(
         layout="YX" if len(shape) == 2 else "ZYX",
     )
     return path
+
+
+# Small UNet3D used to build local BioImage.IO model packages at test time, so
+# BioImage.IO loading and prediction can be tested without any network access.
+MOCK_UNET_KWARGS = {
+    "in_channels": 1,
+    "out_channels": 1,
+    "final_sigmoid": True,
+    "f_maps": [8, 16],
+    "layer_order": "bcr",
+}
+
+
+@pytest.fixture
+def mock_biio_package(tmp_path) -> Path:
+    """Local BioImage.IO package of a tiny UNet3D with fixed (8, 32, 32) input axes.
+
+    The callable is the probabilities subclass, matching what `biio.py`
+    exports: published models emit [0, 1] probabilities, not logits.
+    """
+    from contextlib import chdir
+
+    from bioimageio.spec.model.v0_5 import (
+        ArchitectureFromLibraryDescr,
+        AxisId,
+        BatchAxis,
+        ChannelAxis,
+        Identifier,
+        InputTensorDescr,
+        IntervalOrRatioDataDescr,
+        ModelDescr,
+        OutputTensorDescr,
+        PytorchStateDictWeightsDescr,
+        SizeReference,
+        SpaceInputAxis,
+        SpaceOutputAxisWithHalo,
+        TensorId,
+        Version,
+        WeightsDescr,
+    )
+
+    from panseg.functionals.training.model import UNet3D
+
+    torch.manual_seed(0)
+    model = UNet3D(**MOCK_UNET_KWARGS)
+    torch.save(model.state_dict(), tmp_path / "weights.pytorch")
+
+    def space_input(axis_id: str, size: int) -> SpaceInputAxis:
+        return SpaceInputAxis(
+            id=AxisId(axis_id), size=size, scale=1.0, unit="micrometer"
+        )
+
+    def space_output(axis_id: str, halo: int) -> SpaceOutputAxisWithHalo:
+        return SpaceOutputAxisWithHalo(
+            id=AxisId(axis_id),
+            size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId(axis_id)),
+            scale=1.0,
+            unit="micrometer",
+            halo=halo,
+        )
+
+    with chdir(tmp_path):
+        desc = ModelDescr(
+            name="mock-unet3d-fixed-size",
+            description="Tiny UNet3D built at test time; no network access.",
+            inputs=[
+                InputTensorDescr(
+                    id=TensorId("input"),
+                    axes=[
+                        BatchAxis(),
+                        ChannelAxis(channel_names=[Identifier("ch0")]),
+                        space_input("z", 8),
+                        space_input("y", 32),
+                        space_input("x", 32),
+                    ],
+                    data=IntervalOrRatioDataDescr(type="float32"),
+                )
+            ],
+            outputs=[
+                OutputTensorDescr(
+                    id=TensorId("output"),
+                    axes=[
+                        BatchAxis(),
+                        ChannelAxis(channel_names=[Identifier("out_ch0")]),
+                        space_output("z", 1),
+                        space_output("y", 2),
+                        space_output("x", 2),
+                    ],
+                    data=IntervalOrRatioDataDescr(type="float32"),
+                )
+            ],
+            weights=WeightsDescr(
+                pytorch_state_dict=PytorchStateDictWeightsDescr(
+                    source=Path("weights.pytorch"),
+                    architecture=ArchitectureFromLibraryDescr(
+                        import_from="panseg.functionals.training.model",
+                        callable="UNet3DProbabilities",
+                        kwargs=MOCK_UNET_KWARGS,
+                    ),
+                    pytorch_version=Version(torch.__version__),
+                )
+            ),
+        )
+        package = tmp_path / "mock_model.zip"
+        desc.package(package)
+    return package
+
+
+# Trimmed entries of the Hypha model list: two share a name, one has malformed
+# tags, and the last two are not models PanSeg can list.
+HYPHA_MODEL_LIST = [
+    {
+        "alias": "efficient-chipmunk",
+        "type": "model",
+        "manifest": {"name": "PlantSeg Plant Nuclei 3D UNet", "tags": ["plantseg"]},
+    },
+    {
+        "alias": "affable-shark",
+        "type": "model",
+        "manifest": {"name": "NucleiSegmentationBoundaryModel", "tags": ["nuclei"]},
+    },
+    {
+        "alias": "hiding-tiger",
+        "type": "model",
+        "manifest": {"name": "NucleiSegmentationBoundaryModel", "tags": []},
+    },
+    {
+        "alias": "odd-tags",
+        "type": "model",
+        "manifest": {"name": "Odd Tags", "tags": "plantseg"},
+    },
+    {"alias": "some-dataset", "type": "dataset", "manifest": {"name": "Data"}},
+    {"type": "model", "manifest": {"name": "No Alias"}},
+]
+
+
+@pytest.fixture
+def offline_bioimageio_zoo(monkeypatch, mocker, tmp_path):
+    """Serve the BioImage.IO model list from memory and cache it in `tmp_path`.
+
+    Returns the mocked `fetch_json`; set its `return_value` or `side_effect` to
+    change what BioImage.IO answers. The shared model zoo is restored afterwards.
+    """
+    import panseg.core.zoo as zoo_module
+    from panseg.core.zoo import model_zoo
+
+    monkeypatch.setattr(
+        zoo_module,
+        "PATH_BIOIMAGE_IO_MODEL_LIST",
+        tmp_path / "bioimageio_models.json",
+    )
+    for attr in ("_bioimageio_zoo_collection", "_bioimageio_zoo_all_model_url_dict"):
+        monkeypatch.setattr(model_zoo, attr, getattr(model_zoo, attr))
+    monkeypatch.delattr(model_zoo, "models_bioimageio", raising=False)
+    return mocker.patch.object(zoo_module, "fetch_json", return_value=HYPHA_MODEL_LIST)
