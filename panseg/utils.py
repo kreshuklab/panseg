@@ -120,6 +120,27 @@ def download_file(url: str, filename: Path) -> None:
     ) from last_error
 
 
+def fetch_json(url: str, *, timeout=REQUEST_TIMEOUT):
+    """GET a JSON document; raises `requests.RequestException` on failure."""
+    response = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    """Write `text` through a temporary file, so `path` is never left half written."""
+    path = Path(path)
+    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp_path, path)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+
 def download_files(urls: dict, out_dir: Path) -> None:
     """Download files from URLs to a specified directory.
 

@@ -1,9 +1,16 @@
 import pytest
+import requests
 
 from panseg.functionals.training.model import UNet2D, UNet3D
 from panseg.tasks.prediction_tasks import biio_prediction_task, unet_prediction_task
 from panseg.viewer_napari.widgets.prediction import UNetPredictionMode
 from panseg.viewer_napari.widgets.segmentation import Segmentation_Tab
+
+
+@pytest.fixture(autouse=True)
+def _offline_bioimageio_zoo(offline_bioimageio_zoo):
+    """Keep the prediction widget off the network."""
+    return offline_bioimageio_zoo
 
 
 @pytest.fixture
@@ -163,6 +170,13 @@ def test_update_halo(segmentation_tab):
     assert w_unet.patch_halo.value == (0, 48, 48)
     assert not w_unet.patch_halo[0].enabled
 
+    # back to 3D re-enables Z, with no BioImage.IO model selected
+    assert w_unet.model_id.value is None
+    w_unet.model_name.value = "generic_confocal_3D_unet"
+    segmentation_tab.prediction_widgets.update_halo()
+    assert w_unet.patch_size[0].enabled
+    assert w_unet.patch_halo[0].enabled
+
 
 def test_update_halo_biio(segmentation_tab, mocker):
     mocked_log = mocker.patch(
@@ -273,27 +287,69 @@ def test_on_widget_unet_mode_change(segmentation_tab, mocker):
     mocked_halo.assert_called_once()
 
 
-def test_on_widget_unet_prediction_panseg_filter_change(segmentation_tab, mocker):
-    mocked_panseg = mocker.patch(
-        "panseg.viewer_napari.widgets.prediction.model_zoo.get_bioimageio_zoo_panseg_model_names"
-    )
-    mocked_other = mocker.patch(
-        "panseg.viewer_napari.widgets.prediction.model_zoo.get_bioimageio_zoo_other_model_names"
-    )
-    segmentation_tab.prediction_widgets.widget_unet_prediction.panseg_filter.value = (
-        False
-    )
-    mocked_panseg.assert_called_once()
-    mocked_other.assert_called_once()
+def test_bioimageio_mode_loads_models_and_selects_first(
+    segmentation_tab, offline_bioimageio_zoo
+):
+    w_unet = segmentation_tab.prediction_widgets.widget_unet_prediction
+    # building the widgets needs no network
+    offline_bioimageio_zoo.assert_not_called()
+    assert w_unet.model_id.choices == (None,)
 
-    mocked_panseg.reset_mock()
-    mocked_other.reset_mock()
+    w_unet.mode.value = UNetPredictionMode.BIOIMAGEIO
 
-    segmentation_tab.prediction_widgets.widget_unet_prediction.panseg_filter.value = (
-        True
+    offline_bioimageio_zoo.assert_called_once()
+    assert w_unet.model_id.choices == (None, "efficient-chipmunk")
+    assert w_unet.model_id.value == "efficient-chipmunk"
+
+
+def test_bioimageio_mode_without_model_list(
+    segmentation_tab, offline_bioimageio_zoo, mocker, napari_raw
+):
+    offline_bioimageio_zoo.side_effect = requests.ConnectionError("offline")
+    mocked_scheduler = mocker.patch(
+        target="panseg.viewer_napari.widgets.prediction.schedule_task",
+        autospec=True,
     )
-    mocked_panseg.assert_called_once()
-    mocked_other.assert_not_called()
+    mocked_log = mocker.patch(
+        target="panseg.viewer_napari.widgets.prediction.log",
+        autospec=True,
+    )
+    w_unet = segmentation_tab.prediction_widgets.widget_unet_prediction
+
+    w_unet.mode.value = UNetPredictionMode.BIOIMAGEIO
+
+    assert w_unet.model_id.choices == (None,)
+    mocked_log.assert_called_with(
+        "Could not load the BioImage.IO model list; check your network connection.",
+        thread="BioImage.IO Core prediction",
+        level="WARNING",
+    )
+
+    segmentation_tab.widget_layer_select.layer.choices = (napari_raw,)
+    segmentation_tab.widget_layer_select.layer.value = napari_raw
+    w_unet()
+    mocked_scheduler.assert_not_called()
+    mocked_log.assert_called_with(
+        "Choose a BioImage.IO model first!", thread="Prediction", level="WARNING"
+    )
+
+
+def test_on_widget_unet_prediction_panseg_filter_change(segmentation_tab):
+    w_unet = segmentation_tab.prediction_widgets.widget_unet_prediction
+    w_unet.mode.value = UNetPredictionMode.BIOIMAGEIO
+
+    w_unet.panseg_filter.value = False
+    other_models = ("affable-shark", "hiding-tiger", "odd-tags")
+    assert w_unet.model_id.choices == (None, "efficient-chipmunk", *other_models)
+
+    # re-parenting resets the choices, which must keep the filter
+    w_unet.reset_choices()
+    assert w_unet.model_id.choices == (None, "efficient-chipmunk", *other_models)
+    w_unet.model_id.value = "affable-shark"
+
+    w_unet.panseg_filter.value = True
+    assert w_unet.model_id.choices == (None, "efficient-chipmunk")
+    assert w_unet.model_id.value == "efficient-chipmunk"
 
 
 def test_on_any_metadata_changed(segmentation_tab):

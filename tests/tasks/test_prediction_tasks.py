@@ -4,24 +4,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 import torch
-from bioimageio.spec.model.v0_5 import (
-    ArchitectureFromLibraryDescr,
-    AxisId,
-    BatchAxis,
-    ChannelAxis,
-    Identifier,
-    InputTensorDescr,
-    IntervalOrRatioDataDescr,
-    ModelDescr,
-    OutputTensorDescr,
-    PytorchStateDictWeightsDescr,
-    SizeReference,
-    SpaceInputAxis,
-    SpaceOutputAxisWithHalo,
-    TensorId,
-    Version,
-    WeightsDescr,
-)
 
 from panseg.core.image import (
     ImageLayout,
@@ -35,6 +17,7 @@ from panseg.functionals.training.model import UNet3D
 from panseg.io.h5 import load_h5, read_h5_voxel_size
 from panseg.io.voxelsize import VoxelSize
 from panseg.tasks.prediction_tasks import biio_prediction_task, unet_prediction_task
+from tests.conftest import MOCK_UNET_KWARGS
 
 
 @pytest.mark.parametrize(
@@ -156,17 +139,6 @@ def test_biio_prediction_task(raw_fixture_name, input_layout, model_id, request)
         assert "_biio_prediction" in new_image.name
 
 
-# Small UNet3D used to build local BioImage.IO model packages at test time,
-# so the biio_prediction task can be tested end-to-end without any network access.
-MOCK_UNET_KWARGS = {
-    "in_channels": 1,
-    "out_channels": 1,
-    "final_sigmoid": True,
-    "f_maps": [8, 16],
-    "layer_order": "bcr",
-}
-
-
 def _mock_raw_image(data: np.ndarray) -> PanSegImage:
     return PanSegImage(
         data=data,
@@ -194,84 +166,30 @@ def _assert_biio_prediction_result(result, shape: tuple[int, ...]) -> None:
     assert np.all((data >= 0.0) & (data <= 1.0))
 
 
-def test_biio_prediction_task_mock_model_fixed_size(tmp_path):
+@pytest.mark.parametrize("by_id", [False, True], ids=["path", "bioimageio_id"])
+def test_biio_prediction_task_mock_model_fixed_size(mock_biio_package, by_id, mocker):
     """Task end-to-end on a local model package with fixed-size input axes.
 
-    Covers model-id resolution from a local zip, real bioimageio.core
-    inference, and the fixed input_block_shape branch of biio_prediction.
-    The callable is the probabilities subclass, matching what `biio.py`
-    exports: published models emit [0, 1] probabilities, not logits.
+    Covers model-id resolution (a local zip, or a bioimage.io ID resolved to
+    it), real bioimageio.core inference, and the fixed input_block_shape
+    branch of biio_prediction.
     """
-    torch.manual_seed(0)
-    model = UNet3D(**MOCK_UNET_KWARGS)
-    torch.save(model.state_dict(), tmp_path / "weights.pytorch")
-
-    def space_input(axis_id: str, size: int) -> SpaceInputAxis:
-        return SpaceInputAxis(
-            id=AxisId(axis_id), size=size, scale=1.0, unit="micrometer"
+    model_id = str(mock_biio_package)
+    if by_id:
+        resolve = mocker.patch(
+            "panseg.core.zoo.bioimageio_rdf_url", return_value=model_id
         )
-
-    def space_output(axis_id: str, halo: int) -> SpaceOutputAxisWithHalo:
-        return SpaceOutputAxisWithHalo(
-            id=AxisId(axis_id),
-            size=SizeReference(tensor_id=TensorId("input"), axis_id=AxisId(axis_id)),
-            scale=1.0,
-            unit="micrometer",
-            halo=halo,
-        )
-
-    with chdir(tmp_path):
-        desc = ModelDescr(
-            name="mock-unet3d-fixed-size",
-            description="Tiny UNet3D built at test time; no network access.",
-            inputs=[
-                InputTensorDescr(
-                    id=TensorId("input"),
-                    axes=[
-                        BatchAxis(),
-                        ChannelAxis(channel_names=[Identifier("ch0")]),
-                        space_input("z", 8),
-                        space_input("y", 32),
-                        space_input("x", 32),
-                    ],
-                    data=IntervalOrRatioDataDescr(type="float32"),
-                )
-            ],
-            outputs=[
-                OutputTensorDescr(
-                    id=TensorId("output"),
-                    axes=[
-                        BatchAxis(),
-                        ChannelAxis(channel_names=[Identifier("out_ch0")]),
-                        space_output("z", 1),
-                        space_output("y", 2),
-                        space_output("x", 2),
-                    ],
-                    data=IntervalOrRatioDataDescr(type="float32"),
-                )
-            ],
-            weights=WeightsDescr(
-                pytorch_state_dict=PytorchStateDictWeightsDescr(
-                    source=Path("weights.pytorch"),
-                    architecture=ArchitectureFromLibraryDescr(
-                        import_from="panseg.functionals.training.model",
-                        callable="UNet3DProbabilities",
-                        kwargs=MOCK_UNET_KWARGS,
-                    ),
-                    pytorch_version=Version(torch.__version__),
-                )
-            ),
-        )
-        package = tmp_path / "mock_model.zip"
-        desc.package(package)
+        model_id = "mock-unet3d"
 
     result = biio_prediction_task(
         image=_mock_raw_image(np.zeros((8, 32, 32), dtype="float32")),
-        model_id=str(package),
+        model_id=model_id,
         suffix="_biio_prediction",
         device="cpu",
     )
     _assert_biio_prediction_result(result, (8, 32, 32))
+    if by_id:
+        resolve.assert_called_once_with("mock-unet3d")
 
 
 def test_biio_prediction_task_mock_model_parameterized(tmp_path):

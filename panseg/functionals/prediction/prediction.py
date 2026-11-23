@@ -13,7 +13,7 @@ from bioimageio.spec import load_model_description
 from bioimageio.spec.model import v0_4, v0_5
 from bioimageio.spec.model.v0_5 import TensorId
 
-from panseg.core.zoo import model_zoo
+from panseg.core.zoo import model_zoo, resolve_bioimageio_source
 from panseg.functionals.dataprocessing.dataprocessing import (
     ImageLayout,
     fix_layout_to_CZYX,
@@ -61,8 +61,15 @@ def biio_prediction(
     model_id: str,
     device: str,
 ) -> dict[str, np.ndarray]:
+    """Predict with a BioImage.IO model.
+
+    `model_id` is a bioimage.io model ID such as 'efficient-chipmunk', or the URL
+    or path of an RDF or model package.
+    """
     assert isinstance(input_layout, str)
-    model = load_model_description(model_id, perform_io_checks=False)
+    source = resolve_bioimageio_source(model_id)
+    logger.info(f"Loading BioImage.IO model {model_id} from {source}")
+    model = load_model_description(source, perform_io_checks=False)
     if isinstance(model, v0_4.ModelDescr):
         input_ids = [input_tensor.name for input_tensor in model.inputs]
     elif isinstance(model, v0_5.ModelDescr):

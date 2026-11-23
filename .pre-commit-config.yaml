@@ -9,12 +9,12 @@ default_install_hook_types:
 
 repos:
   - repo: https://github.com/crate-ci/typos
-    rev: v1
+    rev: v1.52.0
     hooks:
       - id: typos
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.6
+    rev: v0.17.3
     hooks:
       - id: ruff
         types_or: [python, pyi, jupyter]
@@ -24,7 +24,7 @@ repos:
         args: [--config=pyproject.toml]
 
   - repo: https://github.com/compilerla/conventional-pre-commit
-    rev: v4.4.0
+    rev: v4.5.0
     hooks:
       - id: conventional-pre-commit
         stages: [commit-msg]
