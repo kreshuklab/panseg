@@ -1,9 +1,10 @@
-import json
 import logging
 import os
+import time
 from pathlib import Path
 
 import pytest
+import requests
 import torch
 
 import panseg.core.zoo as zoo_module
@@ -11,7 +12,7 @@ from panseg import FILE_BEST_MODEL_PYTORCH, FILE_CONFIG_TRAIN_YAML
 from panseg.core.zoo import Author, model_zoo, resolve_bioimageio_source
 from panseg.functionals.model_geometry import model_geometry
 from panseg.functionals.training.model import UNet2D, UNet3D
-from tests.conftest import IS_CUDA_AVAILABLE, MOCK_UNET_KWARGS
+from tests.conftest import HYPHA_MODEL_LIST, IS_CUDA_AVAILABLE, MOCK_UNET_KWARGS
 
 IN_GITHUB_ACTIONS = os.getenv("GITHUB_ACTIONS") == "true"
 
@@ -126,61 +127,23 @@ def test_get_model_by_id_resolves_bioimageio_id(mock_biio_package, mocker):
     model.load_state_dict(torch.load(weights, map_location="cpu", weights_only=True))
 
 
-# Trimmed entries of the Hypha model list: two share a name, one has malformed
-# tags, and the last two are not models PanSeg can list.
-HYPHA_MODEL_LIST = [
-    {
-        "alias": "efficient-chipmunk",
-        "type": "model",
-        "manifest": {"name": "PlantSeg Plant Nuclei 3D UNet", "tags": ["plantseg"]},
-    },
-    {
-        "alias": "affable-shark",
-        "type": "model",
-        "manifest": {"name": "NucleiSegmentationBoundaryModel", "tags": ["nuclei"]},
-    },
-    {
-        "alias": "hiding-tiger",
-        "type": "model",
-        "manifest": {"name": "NucleiSegmentationBoundaryModel", "tags": []},
-    },
-    {
-        "alias": "odd-tags",
-        "type": "model",
-        "manifest": {"name": "Odd Tags", "tags": "plantseg"},
-    },
-    {"alias": "some-dataset", "type": "dataset", "manifest": {"name": "Data"}},
-    {"type": "model", "manifest": {"name": "No Alias"}},
-]
-
-
-@pytest.fixture
-def restore_bioimageio_zoo(monkeypatch):
-    """Let a test replace the shared singleton's BioImage.IO model list."""
-    for attr in (
-        "models_bioimageio",
-        "_bioimageio_zoo_collection",
-        "_bioimageio_zoo_all_model_url_dict",
-    ):
-        monkeypatch.setattr(
-            model_zoo, attr, getattr(model_zoo, attr, None), raising=False
-        )
-
-
-def _serve_model_list(mocker, tmp_path, payload) -> None:
-    path = tmp_path / "children.json"
-    path.write_text(json.dumps(payload))
-    mocker.patch.object(zoo_module.pooch, "retrieve", return_value=str(path))
+def _panseg_model_ids() -> list[str]:
+    return [
+        model_id for _, model_id in model_zoo.get_bioimageio_zoo_panseg_model_names()
+    ]
 
 
 @pytest.mark.parametrize("paginated", [False, True], ids=["list", "page"])
 def test_refresh_bioimageio_zoo_reads_hypha_model_list(
-    paginated, mocker, tmp_path, restore_bioimageio_zoo
+    paginated, offline_bioimageio_zoo
 ):
-    payload = HYPHA_MODEL_LIST
     if paginated:
-        payload = {"items": payload, "total": len(payload), "offset": 0, "limit": 10}
-    _serve_model_list(mocker, tmp_path, payload)
+        offline_bioimageio_zoo.return_value = {
+            "items": HYPHA_MODEL_LIST,
+            "total": len(HYPHA_MODEL_LIST),
+            "offset": 0,
+            "limit": 10,
+        }
 
     model_zoo.refresh_bioimageio_zoo_urls()
 
@@ -190,30 +153,78 @@ def test_refresh_bioimageio_zoo_reads_hypha_model_list(
         "hiding-tiger": False,
         "odd-tags": False,
     }
-    panseg_ids = [
-        model_id for _, model_id in model_zoo.get_bioimageio_zoo_panseg_model_names()
-    ]
-    assert panseg_ids == ["efficient-chipmunk"]
+    assert _panseg_model_ids() == ["efficient-chipmunk"]
 
 
-def test_refresh_bioimageio_zoo_handles_empty_list(
-    mocker, tmp_path, restore_bioimageio_zoo
-):
-    _serve_model_list(mocker, tmp_path, [])
-
+def test_refresh_bioimageio_zoo_caches_list_for_a_day(offline_bioimageio_zoo):
     model_zoo.refresh_bioimageio_zoo_urls()
+    model_zoo.refresh_bioimageio_zoo_urls()
+    assert offline_bioimageio_zoo.call_count == 1
 
+    day_old = time.time() - zoo_module.BIOIMAGE_IO_LIST_MAX_AGE - 60
+    os.utime(zoo_module.PATH_BIOIMAGE_IO_MODEL_LIST, (day_old, day_old))
+    model_zoo.refresh_bioimageio_zoo_urls()
+    assert offline_bioimageio_zoo.call_count == 2
+
+    model_zoo.refresh_bioimageio_zoo_urls(force=True)
+    assert offline_bioimageio_zoo.call_count == 3
+
+
+def test_refresh_bioimageio_zoo_falls_back_to_cached_list(
+    offline_bioimageio_zoo, caplog
+):
+    model_zoo.refresh_bioimageio_zoo_urls()
+    offline_bioimageio_zoo.side_effect = requests.ConnectionError("offline")
+
+    with caplog.at_level(logging.WARNING, logger="panseg.core.zoo"):
+        model_zoo.refresh_bioimageio_zoo_urls(force=True)
+
+    assert "using the copy from" in caplog.text
+    assert _panseg_model_ids() == ["efficient-chipmunk"]
+
+
+def test_refresh_bioimageio_zoo_without_network_or_cache(
+    offline_bioimageio_zoo, caplog
+):
+    offline_bioimageio_zoo.side_effect = requests.ConnectionError("offline")
+
+    with caplog.at_level(logging.WARNING, logger="panseg.core.zoo"):
+        model_zoo.refresh_bioimageio_zoo_urls()
+
+    assert "no BioImage.IO models are available" in caplog.text
+    assert not model_zoo.has_bioimageio_models()
     assert model_zoo.get_bioimageio_zoo_panseg_model_names() == []
     assert model_zoo.get_bioimageio_zoo_other_model_names() == []
 
 
-def test_refresh_bioimageio_zoo_rejects_unknown_response(
-    mocker, tmp_path, restore_bioimageio_zoo
+def test_refresh_bioimageio_zoo_uses_list_it_cannot_cache(
+    offline_bioimageio_zoo, mocker, caplog
 ):
-    _serve_model_list(mocker, tmp_path, {"detail": "Internal Server Error"})
+    mocker.patch.object(
+        zoo_module, "write_text_atomic", side_effect=OSError("No space left")
+    )
 
-    with pytest.raises(ValueError, match="Unexpected BioImage.IO model list"):
+    with caplog.at_level(logging.WARNING, logger="panseg.core.zoo"):
         model_zoo.refresh_bioimageio_zoo_urls()
+
+    assert "Could not cache the BioImage.IO model list" in caplog.text
+    assert _panseg_model_ids() == ["efficient-chipmunk"]
+
+
+@pytest.mark.parametrize(
+    "response", [[], {"detail": "Internal Server Error"}], ids=["empty", "error"]
+)
+def test_refresh_bioimageio_zoo_keeps_cache_on_bad_response(
+    response, offline_bioimageio_zoo
+):
+    model_zoo.refresh_bioimageio_zoo_urls()
+    cached = zoo_module.PATH_BIOIMAGE_IO_MODEL_LIST.read_bytes()
+    offline_bioimageio_zoo.return_value = response
+
+    model_zoo.refresh_bioimageio_zoo_urls(force=True)
+
+    assert zoo_module.PATH_BIOIMAGE_IO_MODEL_LIST.read_bytes() == cached
+    assert _panseg_model_ids() == ["efficient-chipmunk"]
 
 
 HYPHA_FILES_URL = "https://hypha.aicell.io/bioimage-io/artifacts/{}/files/"
