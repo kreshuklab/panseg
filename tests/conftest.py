@@ -16,6 +16,7 @@ import tifffile
 import torch
 import yaml
 from napari.layers import Image, Labels, Shapes
+from skimage.segmentation import find_boundaries
 
 from panseg.core.image import SemanticType
 from panseg.io.io import smart_load
@@ -220,6 +221,36 @@ def ovule_cells() -> LabelledVolume:
     """Arabidopsis ovule cell walls, confocal, (32, 128, 128) uint8 at
     (0.235, 0.15, 0.15) µm: the data of PanSeg's confocal ovule models."""
     return _load_labelled_volume(TEST_FILES / "sample_ovule.h5")
+
+
+@pytest.fixture(scope="session")
+def ovule_nuclei() -> LabelledVolume:
+    """Arabidopsis ovule nuclei (TO-PRO-3), confocal, (100, 100, 100) uint8 at
+    (0.284, 0.127, 0.127) µm: stack 1135, held out from PanSeg's nuclei models."""
+    return _load_labelled_volume(TEST_FILES / "data" / "train" / "1135_mini.h5")
+
+
+@pytest.fixture(scope="session")
+def shoot_meristem_cells() -> LabelledVolume:
+    """Arabidopsis shoot apical meristem cell walls, confocal, (100, 128, 128)
+    uint8 at 0.25 µm: a stack emotional-cricket was validated, not trained, on."""
+    return _load_labelled_volume(TEST_FILES / "model_data" / "shoot_meristem_cells.h5")
+
+
+@pytest.fixture(scope="session")
+def lateral_root_cells() -> LabelledVolume:
+    """Arabidopsis lateral root primordium cell walls, light-sheet,
+    (32, 192, 192) uint8 at (0.25, 0.1625, 0.1625) µm: from the test set of
+    PanSeg's light-sheet models."""
+    return _load_labelled_volume(TEST_FILES / "model_data" / "lateral_root_cells.h5")
+
+
+def wall_contrast(prediction: np.ndarray, label: np.ndarray) -> float:
+    """How much higher a boundary prediction is on the walls between labelled
+    cells than inside them; well above 0 when a model finds the walls."""
+    walls = find_boundaries(label, mode="thick")
+    cells = (label > 0) & ~walls
+    return float(prediction[walls].mean() - prediction[cells].mean())
 
 
 @pytest.fixture
