@@ -167,12 +167,16 @@ def _assert_biio_prediction_result(result, shape: tuple[int, ...]) -> None:
 
 
 @pytest.mark.parametrize("by_id", [False, True], ids=["path", "bioimageio_id"])
-def test_biio_prediction_task_mock_model_fixed_size(mock_biio_package, by_id, mocker):
-    """Task end-to-end on a local model package with fixed-size input axes.
+@pytest.mark.parametrize("shape", [(8, 32, 32), (16, 64, 64)], ids=["one", "blocks"])
+def test_biio_prediction_task_mock_model_fixed_size(
+    mock_biio_package, by_id, shape, mocker
+):
+    """Task end-to-end on a local model package with fixed (8, 32, 32) input axes.
 
     Covers model-id resolution (a local zip, or a bioimage.io ID resolved to
-    it), real bioimageio.core inference, and the fixed input_block_shape
-    branch of biio_prediction.
+    it), real bioimageio.core inference, and the fixed-size branch of
+    biio_prediction, for an image of the model's size and a larger one that
+    is predicted in blocks.
     """
     model_id = str(mock_biio_package)
     if by_id:
@@ -182,12 +186,12 @@ def test_biio_prediction_task_mock_model_fixed_size(mock_biio_package, by_id, mo
         model_id = "mock-unet3d"
 
     result = biio_prediction_task(
-        image=_mock_raw_image(np.zeros((8, 32, 32), dtype="float32")),
+        image=_mock_raw_image(np.zeros(shape, dtype="float32")),
         model_id=model_id,
         suffix="_biio_prediction",
         device="cpu",
     )
-    _assert_biio_prediction_result(result, (8, 32, 32))
+    _assert_biio_prediction_result(result, shape)
     if by_id:
         resolve.assert_called_once_with("mock-unet3d")
 

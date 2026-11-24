@@ -127,16 +127,22 @@ def biio_prediction(
             size_to_check = sizes_in_rdf[AxisId("x")]
             if isinstance(size_to_check, int):  # e.g. 'emotional-cricket'
                 # 'emotional-cricket' has {'batch': None, 'channel': 1, 'z': 100, 'y': 128, 'x': 128}
-                input_block_shape = {
-                    TensorId(tensor_id): {
-                        a.id: a.size if isinstance(a.size, int) else 1
-                        for a in axes
-                        if not isinstance(a, str)  # for a.size/a.id type checking only
-                    }
+                block_shape = {
+                    a.id: a.size if isinstance(a.size, int) else 1
+                    for a in axes
+                    if not isinstance(a, str)  # for a.size/a.id type checking only
                 }
-                sample_out = predict(
-                    model=pipeline, inputs=sample, input_block_shape=input_block_shape
-                )
+                image_shape = members[TensorId(tensor_id)].tagged_shape
+                if all(image_shape.get(a, 1) == s for a, s in block_shape.items()):
+                    # A single block: blocking would carve the halo out of it and
+                    # predict the image in padded pieces.
+                    sample_out = predict(model=pipeline, inputs=sample)
+                else:
+                    sample_out = predict(
+                        model=pipeline,
+                        inputs=sample,
+                        input_block_shape={TensorId(tensor_id): block_shape},
+                    )
             elif isinstance(
                 size_to_check, v0_5.ParameterizedSize
             ):  # e.g. 'philosophical-panda'
