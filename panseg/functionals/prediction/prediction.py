@@ -34,6 +34,22 @@ logger = logging.getLogger(__name__)
 # Below WARN_MIN_PATCH_XY computation is inefficient.
 WARN_MIN_PATCH_XY = 64
 
+# Voxels each BioImage.IO block contributes per axis, between its halos.
+BIOIMAGEIO_BLOCK_INTERIOR = 96
+
+
+def _input_halo(model: v0_5.ModelDescr, tensor_id: TensorId) -> dict[AxisId, int]:
+    """Halo of each axis of an input, from the output axes sized after it."""
+    halo: dict[AxisId, int] = {}
+    for output in model.outputs:
+        for axis in output.axes:
+            size = getattr(axis, "size", None)
+            if isinstance(size, v0_5.SizeReference) and size.tensor_id == tensor_id:
+                halo[size.axis_id] = max(
+                    halo.get(size.axis_id, 0), getattr(axis, "halo", 0)
+                )
+    return halo
+
 
 def _warn_inefficient_auto_patch(geometry: ModelGeometry, patch, patch_halo) -> None:
     """Flag an auto-derived patch that is halo-dominated."""
@@ -145,25 +161,73 @@ def biio_prediction(
                     )
             elif isinstance(
                 size_to_check, v0_5.ParameterizedSize
-            ):  # e.g. 'philosophical-panda'
+            ):  # e.g. models exported by PanSeg, 'philosophical-panda'
                 # 'philosophical-panda' has:
                 #   {'z': ParameterizedSize(min=1, step=1),
                 #    'channel': 2,
                 #    'y': ParameterizedSize(min=16, step=16),
                 #    'x': ParameterizedSize(min=16, step=16)}
-                blocksize_parameter = {
-                    (TensorId(tensor_id), a.id): (
-                        (96 - a.size.min) // a.size.step
-                        if isinstance(a.size, v0_5.ParameterizedSize)
-                        else 1
+                image = members[TensorId(tensor_id)]
+                halo = _input_halo(model, TensorId(tensor_id))
+                blocksize_parameter = {}
+                whole_shape, tiled_shape = {}, {}
+                fits = True
+                for a in axes:
+                    if isinstance(a, str):  # for a.size/a.id type checking only
+                        continue
+                    if not isinstance(a.size, v0_5.ParameterizedSize):
+                        blocksize_parameter[(TensorId(tensor_id), a.id)] = 1
+                        continue
+                    minimum, step = a.size.min, a.size.step
+                    size = image.tagged_shape[a.id]
+                    # smallest block the model takes with the interior between its halos
+                    interior = 2 * halo.get(a.id, 0) + BIOIMAGEIO_BLOCK_INTERIOR
+                    n = max(0, -(-(interior - minimum) // step))
+                    block = minimum + n * step
+                    blocksize_parameter[(TensorId(tensor_id), a.id)] = n
+                    # smallest size the model takes that holds the whole axis
+                    whole_shape[a.id] = minimum + step * max(
+                        0, -(-(size - minimum) // step)
                     )
-                    for a in axes
-                    if not isinstance(a, str)  # for a.size/a.id type checking only
-                }
-                sample_out = predict(
-                    model=pipeline,
-                    inputs=sample,
-                    blocksize_parameter=blocksize_parameter,
+                    # bioimageio.core puts the last block flush with the end, so
+                    # a size on the step grid keeps that block's phase too
+                    tiled_shape[a.id] = max(whole_shape[a.id], block)
+                    fits = fits and size <= block
+
+                # Pad up to sizes the model takes, then crop the outputs back.
+                sample = Sample(
+                    members={
+                        TensorId(tensor_id): image.pad_to(
+                            whole_shape if fits else tiled_shape, pad_where="right"
+                        )
+                    },
+                    stat={},
+                    id="raw",
+                )
+                if fits:
+                    # One block holds the image: predict it whole, as the model does,
+                    # since blocking would carve the halo out of it.
+                    sample_out = predict(model=pipeline, inputs=sample)
+                else:
+                    sample_out = predict(
+                        model=pipeline,
+                        inputs=sample,
+                        blocksize_parameter=blocksize_parameter,
+                    )
+                sample_out = Sample(
+                    members={
+                        i: o.crop_to(
+                            {
+                                a: image.tagged_shape[a]
+                                for a in whole_shape
+                                if a in o.dims
+                            },
+                            crop_where="right",
+                        )
+                        for i, o in sample_out.members.items()
+                    },
+                    stat={},
+                    id=sample_out.id,
                 )
             else:
                 assert_never(size_to_check)

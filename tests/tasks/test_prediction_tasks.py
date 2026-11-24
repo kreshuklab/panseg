@@ -1,9 +1,5 @@
-from contextlib import chdir
-from pathlib import Path
-
 import numpy as np
 import pytest
-import torch
 
 from panseg.core.image import (
     ImageLayout,
@@ -11,13 +7,9 @@ from panseg.core.image import (
     PanSegImage,
     SemanticType,
 )
-from panseg.functionals.model_geometry import ModelGeometry
-from panseg.functionals.training.biio import make_model_description
-from panseg.functionals.training.model import UNet3D
 from panseg.io.h5 import load_h5, read_h5_voxel_size
 from panseg.io.voxelsize import VoxelSize
 from panseg.tasks.prediction_tasks import biio_prediction_task, unet_prediction_task
-from tests.conftest import MOCK_UNET_KWARGS
 
 
 @pytest.mark.parametrize(
@@ -196,52 +188,25 @@ def test_biio_prediction_task_mock_model_fixed_size(
         resolve.assert_called_once_with("mock-unet3d")
 
 
-def test_biio_prediction_task_mock_model_parameterized(tmp_path):
+@pytest.mark.parametrize(
+    "shape",
+    [(96, 96, 96), (8, 16, 32), (120, 40, 70)],
+    ids=["one_pass", "below_minimum", "blocks"],
+)
+def test_biio_prediction_task_mock_model_parameterized(
+    mock_biio_package_parameterized, shape
+):
     """Task end-to-end on a PanSeg-packaged model with parameterized axes.
 
-    Covers the blocksize_parameter tiling branch of biio_prediction and the
-    file-based architecture loading of PanSeg's own model packaging.
+    Covers the parameterized branch of biio_prediction, for an image that fits
+    in one block, one below the model's minimum input, and one tiled into
+    blocks, as well as the file-based architecture loading of PanSeg's own
+    model packaging.
     """
-    torch.manual_seed(0)
-    model = UNet3D(**MOCK_UNET_KWARGS)
-    torch.save(model.state_dict(), tmp_path / "weights.pytorch")
-    np.save(
-        tmp_path / "test_in.npy", np.random.rand(1, 1, 16, 32, 64).astype("float32")
-    )
-    np.save(
-        tmp_path / "test_out.npy", np.random.rand(1, 1, 16, 32, 64).astype("float32")
-    )
-
-    with chdir(tmp_path):
-        desc = make_model_description(
-            weights=Path("weights.pytorch"),
-            model_name="mock-unet3d-parameterized",
-            in_channels=1,
-            out_channels=1,
-            feature_maps=[8, 16],
-            final_sigmoid=MOCK_UNET_KWARGS["final_sigmoid"],
-            geometry=ModelGeometry(
-                min_input=(16, 32, 64),
-                increment=(8, 8, 8),
-                halo=(4, 8, 12),
-                is_2d=False,
-            ),
-            layer_order="bcr",
-            modality="confocal",
-            output_type="boundaries",
-            description="Tiny UNet3D built at test time; no network access.",
-            resolution=(1.0, 1.0, 1.0),
-            test_in=tmp_path / "test_in.npy",
-            test_out=tmp_path / "test_out.npy",
-            panseg_config=Path("weights.pytorch"),
-        )
-        package = tmp_path / "mock_model.zip"
-        desc.package(package)
-
     result = biio_prediction_task(
-        image=_mock_raw_image(np.zeros((96, 96, 96), dtype="float32")),
-        model_id=str(package),
+        image=_mock_raw_image(np.zeros(shape, dtype="float32")),
+        model_id=str(mock_biio_package_parameterized),
         suffix="_biio_prediction",
         device="cpu",
     )
-    _assert_biio_prediction_result(result, (96, 96, 96))
+    _assert_biio_prediction_result(result, shape)

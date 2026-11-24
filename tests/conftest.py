@@ -912,6 +912,55 @@ def mock_biio_package(tmp_path, request) -> Path:
     return package
 
 
+# Geometry of `mock_biio_package_parameterized`: inputs of (16, 32, 64) plus any
+# multiple of 8, and halos of (4, 8, 12).
+MOCK_PARAMETERIZED_GEOMETRY = {
+    "min_input": (16, 32, 64),
+    "increment": (8, 8, 8),
+    "halo": (4, 8, 12),
+}
+
+
+@pytest.fixture
+def mock_biio_package_parameterized(tmp_path) -> Path:
+    """Local BioImage.IO package of a tiny UNet3D exported by PanSeg, so its
+    input axes are parameterized and its output axes declare halos."""
+    from contextlib import chdir
+
+    from panseg.functionals.model_geometry import ModelGeometry
+    from panseg.functionals.training.biio import make_model_description
+    from panseg.functionals.training.model import UNet3D
+
+    torch.manual_seed(0)
+    model = UNet3D(**MOCK_UNET_KWARGS)
+    torch.save(model.state_dict(), tmp_path / "weights.pytorch")
+    rng = np.random.default_rng(0)
+    for name in ("test_in.npy", "test_out.npy"):
+        np.save(tmp_path / name, rng.random((1, 1, 16, 32, 64), dtype=np.float32))
+
+    with chdir(tmp_path):
+        desc = make_model_description(
+            weights=Path("weights.pytorch"),
+            model_name="mock-unet3d-parameterized",
+            in_channels=1,
+            out_channels=1,
+            feature_maps=MOCK_UNET_KWARGS["f_maps"],
+            final_sigmoid=MOCK_UNET_KWARGS["final_sigmoid"],
+            geometry=ModelGeometry(**MOCK_PARAMETERIZED_GEOMETRY, is_2d=False),
+            layer_order=MOCK_UNET_KWARGS["layer_order"],
+            modality="confocal",
+            output_type="boundaries",
+            description="Tiny UNet3D built at test time; no network access.",
+            resolution=(1.0, 1.0, 1.0),
+            test_in=tmp_path / "test_in.npy",
+            test_out=tmp_path / "test_out.npy",
+            panseg_config=Path("weights.pytorch"),
+        )
+        package = tmp_path / "mock_model.zip"
+        desc.package(package)
+    return package
+
+
 # Trimmed entries of the Hypha model list: two share a name, one has malformed
 # tags, and the last two are not models PanSeg can list.
 HYPHA_MODEL_LIST = [
