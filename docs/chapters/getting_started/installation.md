@@ -3,6 +3,11 @@
 !!! note "PlantSeg v1 Documentation"
     To view the installation guide for PlantSeg v1, switch to an older version in the top bar.
 
+!!! warning "Outdated versions"
+    Versions < 2.2.1 of PanSeg did reference some resources at a now unavailable
+    domain. If you encounter problems starting PanSeg or using BioimageIO models,
+    make sure you are running the latest PanSeg version.
+
 ## Download
 
 Download the installer from [heibox](https://heibox.uni-heidelberg.de/d/72b4bd3ba5f14409bfee/) and choose according to your platform.
