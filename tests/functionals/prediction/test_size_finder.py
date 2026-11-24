@@ -26,6 +26,26 @@ def _aligned(shape, increment):
     return tuple(-(-s // i) * i for s, i in zip(shape, increment))
 
 
+def _assert_locally_maximal(
+    patch, halo, max_patch_shape, full_volume_shape, increment, is_2d=False
+):
+    """No axis can take one more increment without leaving the domain or budget."""
+    model_input = np.array(patch) + 2 * np.array(halo)
+    domain = np.array(_aligned(full_volume_shape, increment))
+    if is_2d:
+        domain[0] = 1
+    cap = domain + 2 * np.array(halo)
+    for axis, period in enumerate(increment):
+        grown = model_input.copy()
+        grown[axis] += period
+        if grown[axis] > cap[axis]:
+            continue
+        assert int(np.prod(grown)) > int(np.prod(max_patch_shape)), (
+            f"budget left on axis {axis}: {tuple(model_input)} -> "
+            f"{tuple(grown)} still fits the budget {tuple(max_patch_shape)}"
+        )
+
+
 @pytest.mark.parametrize(
     "full_volume_shape, max_patch_shape, min_halo_shape",
     [
@@ -53,16 +73,9 @@ def test_derived_shapes_are_aligned_and_fit_the_budget(
     assert all(h == expected for h, expected in zip(halo, min_halo_shape))
     assert np.prod(np.array(patch) + 2 * np.array(halo)) <= np.prod(max_patch_shape)
     assert all(p <= d for p, d in zip(patch, domain))
-
-    # the same halo, expressed as a total for both sides, derives the same shape
-    double_halo_shape = tuple(h * 2 for h in min_halo_shape)
-    assert derive_patch_and_halo_shapes(
-        full_volume_shape,
-        max_patch_shape,
-        double_halo_shape,
-        both_sides=True,
-        increment=INCREMENT_3D,
-    ) == (patch, halo)
+    _assert_locally_maximal(
+        patch, halo, max_patch_shape, full_volume_shape, INCREMENT_3D
+    )
 
 
 def test_a_volume_that_fits_one_patch_still_gets_its_halo():
@@ -83,6 +96,22 @@ def test_the_budget_sizes_the_model_input_not_the_patch():
     assert patch == (96, 96, 96)
     assert halo == (48, 48, 48)
     assert tuple(p + 2 * h for p, h in zip(patch, halo)) == (192, 192, 192)
+
+
+def test_leftover_budget_is_spent_past_the_probe_box():
+    # The probe box caps the patch at 3200 in X (model input 3296), but the
+    # domain is 8000 long, so the same voxel budget can grow the input to 4880
+    # (patch 4784). A fixed cap of nine increments leaves most of it unused.
+    patch, halo = derive_patch_and_halo_shapes(
+        (4, 2000, 8000),
+        (1, 3200, 3200),
+        (0, 48, 48),
+        is_2d=True,
+        increment=INCREMENT_2D,
+    )
+
+    assert patch == (1, 2000, 4784)
+    assert halo == (0, 48, 48)
 
 
 def test_fit_model_input_to_budget_returns_the_minimum_when_it_barely_fits():
@@ -124,6 +153,19 @@ def test_fit_model_input_to_budget_spends_leftover_budget_on_the_smallest_axes()
     assert result[1] > 256 and result[2] > 256
     assert all(size % 8 == 0 for size in result)
     assert int(np.prod(result)) <= 16 * 512 * 512
+
+
+def test_fit_model_input_to_budget_grows_until_no_axis_fits():
+    result = size_finder._fit_model_input_to_budget(
+        min_model_input=np.array((8, 8, 8)),
+        max_model_input=np.array((8, 8, 32)),
+        cap_model_input=np.array((8, 8, 4096)),
+        budget=8 * 8 * 1000,
+        increment=np.array((8, 8, 8)),
+    )
+
+    # A nine-increment cap would stop at z=104; the budget allows z=1000.
+    assert tuple(result) == (8, 8, 1000)
 
 
 def test_fit_model_input_to_budget_is_increment_aligned():
@@ -192,6 +234,9 @@ def test_derived_shapes_are_aligned_and_fit_the_budget_2d(
     assert np.prod(np.array(patch) + np.array(halo) * 2) <= np.prod(max_patch_shape)
     # the halo is applied to Y/X even when the volume fits in one patch
     assert halo[1:] == min_halo_shape[1:]
+    _assert_locally_maximal(
+        patch, halo, max_patch_shape, full_volume_shape, INCREMENT_2D, is_2d=True
+    )
 
 
 def test_a_2d_volume_that_fits_one_patch_keeps_its_yx_halo():
@@ -279,12 +324,13 @@ def test_find_feasible_patch_and_halo_shapes_drives_oom_probe(fake_oom_probe):
 def test_find_feasible_patch_and_halo_shapes_shrinks_until_verified(
     fake_oom_probe,
 ):
-    fake_oom_probe.threshold = (
-        5_000_000  # first attempt (5.9M voxels) OOMs, a shrunken one fits
-    )
+    # Each derived shape now uses the whole voxel budget (~16.8M voxels), so
+    # reaching the 5M threshold takes five 25% budget shrinks; the sixth
+    # attempt fits.
+    fake_oom_probe.threshold = 5_000_000
 
     result = find_feasible_patch_and_halo_shapes(
-        nn.Module(), 1, VOL, HALO, device="cuda"
+        nn.Module(), 1, VOL, HALO, device="cuda", max_attempts=6
     )
 
     result_voxels = int(np.prod([result[0][i] + 2 * result[1][i] for i in range(3)]))

@@ -152,7 +152,6 @@ def derive_patch_and_halo_shapes(
     full_volume_shape: tuple[int, int, int],
     max_patch_shape: tuple[int, int, int],
     min_halo_shape: tuple[int, int, int],
-    both_sides: bool = False,
     is_2d: bool = False,
     increment: tuple[int, int, int] = (1, 1, 1),
 ) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
@@ -176,9 +175,6 @@ def derive_patch_and_halo_shapes(
             voxel product is the budget for `patch + 2 * halo`.
         min_halo_shape (tuple[int, int, int]):
             The minimum required halo size per side (Z, Y, X).
-        both_sides (bool, optional):
-            If True, the `min_halo_shape` is applied symmetrically on both sides of the patch.
-            Defaults to False.
         is_2d (bool, optional):
             If True, the model is 2D and predicts one Z slice at a time: patch depth 1,
             Z halo 0, and the voxel budget goes to Y and X only. Defaults to False.
@@ -199,11 +195,8 @@ def derive_patch_and_halo_shapes(
     shape_volume = np.array(full_volume_shape, dtype=np.int64)
     shape_patch_max = np.array(max_patch_shape, dtype=np.int64)
     shape_increment = np.array(increment, dtype=np.int64)
-    halo_shape = (
-        np.array(min_halo_shape, dtype=np.int64) // 2
-        if both_sides
-        else np.array(min_halo_shape, dtype=np.int64)
-    )
+    halo_shape = np.array(min_halo_shape, dtype=np.int64)
+
     if is_2d:  # one Z slice per patch
         shape_volume[0] = shape_patch_max[0] = 1
         shape_increment[0] = 1
@@ -240,12 +233,6 @@ def derive_patch_and_halo_shapes(
     max_patch = np.maximum(max_patch, shape_increment)
     max_model_input = max_patch + 2 * halo_shape
 
-    if int(np.prod(max_model_input)) <= budget:
-        return (
-            _int_tuple3(max_patch),
-            _int_tuple3(halo_shape),
-        )
-
     best = _fit_model_input_to_budget(
         min_model_input,
         max_model_input,
@@ -267,8 +254,9 @@ def _fit_model_input_to_budget(
     """Largest increment-aligned model-input shape in [min, cap] that fits budget.
 
     Binary-searches the per-axis fraction between `min` and `max`, aligns each
-    axis down to the phase period, then spends leftover budget by growing the
-    smallest axes up to `cap_model_input` so the model input stays balanced.
+    axis down to the phase period, then spends the whole leftover budget by
+    growing the smallest axes up to `cap_model_input` so the model input stays
+    balanced.
     """
     # A caller that already knows the domain passes it as the cap; the search
     # must not exceed it even when `max_model_input` is larger.
@@ -294,11 +282,12 @@ def _fit_model_input_to_budget(
         else:
             high = fraction
 
-    # Spend any leftover budget by growing the smallest axes first, which keeps
-    # the model input as balanced as the budget allows. A handful of passes is
-    # enough because every axis is rounded down to the phase period first.
-    for _ in range(3 * len(best)):
-        grown = False
+    # Spend all leftover budget by growing the smallest axes first, which keeps
+    # the model input as balanced as the budget allows. The loop ends only when
+    # no axis can take one more increment without exceeding the budget or the
+    # domain cap; `best` only grows and every axis is bounded by
+    # `cap_model_input`, so it terminates.
+    while True:
         for axis in np.argsort(best):
             candidate = best.copy()
             candidate[axis] += increment[axis]
@@ -306,9 +295,8 @@ def _fit_model_input_to_budget(
                 continue
             if int(np.prod(candidate)) <= budget:
                 best = candidate
-                grown = True
                 break
-        if not grown:
+        else:
             break
 
     return np.maximum(best, min_model_input)
@@ -431,7 +419,6 @@ def find_feasible_patch_and_halo_shapes(
     min_halo_shape: tuple[int, int, int],
     device: str,
     max_attempts: int = 5,
-    both_sides: bool = False,
     amp: AmpSetting = "auto",
     channels_last_3d: bool = False,
     geometry: ModelGeometry | None = None,
@@ -459,8 +446,6 @@ def find_feasible_patch_and_halo_shapes(
         device (str): The computation device ('cpu', 'cuda', etc.).
         max_attempts (int, optional): Maximum number of derive-and-verify attempts.
             Defaults to 5.
-        both_sides (bool, optional): If True, the `min_halo_shape` is applied symmetrically
-            on both sides of the patch. Defaults to False.
         amp (str): precision mode the memory probes run in (``"auto"``/``"off"``),
             to match the precision of the prediction they size for. Defaults to
             ``"auto"``.
@@ -491,7 +476,6 @@ def find_feasible_patch_and_halo_shapes(
             full_volume_shape,
             max_shape,
             min_halo_shape,
-            both_sides,
             is_2d,
             increment,
         )

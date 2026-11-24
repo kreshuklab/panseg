@@ -323,7 +323,6 @@ def unet_prediction(
             domain_shape,
             patch_halo,
             device,
-            both_sides=False,
             amp=amp,
             channels_last_3d=channels_last_3d,
             geometry=geometry,
