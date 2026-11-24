@@ -27,18 +27,22 @@ def _predict_whole(package, raw: np.ndarray) -> np.ndarray:
 
 
 @pytest.mark.parametrize(
-    ("package", "shape"),
+    ("package", "crop"),
     [
-        ("mock_biio_package", (8, 32, 32)),  # the model's fixed size
-        ("mock_biio_package_parameterized", (40, 48, 80)),  # fits in one block
+        # the model's fixed size, (8, 32, 32)
+        ("mock_biio_package", np.s_[12:20, 48:80, 48:80]),
+        # (32, 48, 80), which fits in one block
+        ("mock_biio_package_parameterized", np.s_[:, 40:88, 24:104]),
     ],
     ids=["fixed", "parameterized"],
 )
-def test_image_that_fits_in_one_block_is_predicted_whole(package, shape, request):
+def test_image_that_fits_in_one_block_is_predicted_whole(
+    package, crop, ovule_cells, request
+):
     """An image that fits in one block is predicted whole, as the model itself
     does, rather than in padded pieces with the halo carved out."""
     package = request.getfixturevalue(package)
-    raw = np.random.default_rng(0).random(shape, dtype=np.float32)
+    raw = ovule_cells.raw[crop].astype(np.float32)
 
     prediction = biio_prediction(
         raw=raw, input_layout="ZYX", model_id=str(package), device="cpu"

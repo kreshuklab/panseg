@@ -159,15 +159,19 @@ def _assert_biio_prediction_result(result, shape: tuple[int, ...]) -> None:
 
 
 @pytest.mark.parametrize("by_id", [False, True], ids=["path", "bioimageio_id"])
-@pytest.mark.parametrize("shape", [(8, 32, 32), (16, 64, 64)], ids=["one", "blocks"])
+@pytest.mark.parametrize(
+    "crop",
+    [np.s_[12:20, 48:80, 48:80], np.s_[8:24, 32:96, 32:96]],
+    ids=["one", "blocks"],
+)
 def test_biio_prediction_task_mock_model_fixed_size(
-    mock_biio_package, by_id, shape, mocker
+    mock_biio_package, by_id, crop, ovule_cells, mocker
 ):
     """Task end-to-end on a local model package with fixed (8, 32, 32) input axes.
 
     Covers model-id resolution (a local zip, or a bioimage.io ID resolved to
     it), real bioimageio.core inference, and the fixed-size branch of
-    biio_prediction, for an image of the model's size and a larger one that
+    biio_prediction, for an ovule crop of the model's size and a larger one that
     is predicted in blocks.
     """
     model_id = str(mock_biio_package)
@@ -176,37 +180,40 @@ def test_biio_prediction_task_mock_model_fixed_size(
             "panseg.core.zoo.bioimageio_rdf_url", return_value=model_id
         )
         model_id = "mock-unet3d"
+    data = ovule_cells.raw[crop].astype("float32")
 
     result = biio_prediction_task(
-        image=_mock_raw_image(np.zeros(shape, dtype="float32")),
+        image=_mock_raw_image(data),
         model_id=model_id,
         suffix="_biio_prediction",
         device="cpu",
     )
-    _assert_biio_prediction_result(result, shape)
+    _assert_biio_prediction_result(result, data.shape)
     if by_id:
         resolve.assert_called_once_with("mock-unet3d")
 
 
 @pytest.mark.parametrize(
-    "shape",
-    [(96, 96, 96), (8, 16, 32), (120, 40, 70)],
+    "crop",
+    [np.s_[:, 16:112, 16:112], np.s_[12:20, 56:72, 48:80], np.s_[:]],
     ids=["one_pass", "below_minimum", "blocks"],
 )
 def test_biio_prediction_task_mock_model_parameterized(
-    mock_biio_package_parameterized, shape
+    mock_biio_package_parameterized, crop, ovule_cells
 ):
     """Task end-to-end on a PanSeg-packaged model with parameterized axes.
 
-    Covers the parameterized branch of biio_prediction, for an image that fits
-    in one block, one below the model's minimum input, and one tiled into
-    blocks, as well as the file-based architecture loading of PanSeg's own
-    model packaging.
+    Covers the parameterized branch of biio_prediction, for an ovule crop that
+    fits in one block, one below the model's minimum input, and the whole
+    (32, 128, 128) ovule image, which is tiled into blocks; as well as the
+    file-based architecture loading of PanSeg's own model packaging.
     """
+    data = ovule_cells.raw[crop].astype("float32")
+
     result = biio_prediction_task(
-        image=_mock_raw_image(np.zeros(shape, dtype="float32")),
+        image=_mock_raw_image(data),
         model_id=str(mock_biio_package_parameterized),
         suffix="_biio_prediction",
         device="cpu",
     )
-    _assert_biio_prediction_result(result, shape)
+    _assert_biio_prediction_result(result, data.shape)

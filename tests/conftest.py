@@ -3,10 +3,12 @@
 import itertools
 import shutil
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 from xml.etree import ElementTree
 
+import h5py
 import numpy as np
 import pytest
 import skimage.transform as skt
@@ -192,6 +194,32 @@ def raw_cell_3d_100x128x128(raw_zcyx_75x2x75x75):
 @pytest.fixture
 def raw_cell_2d_96x96(raw_cell_3d_100x128x128):
     return raw_cell_3d_100x128x128[48]
+
+
+@dataclass(frozen=True)
+class LabelledVolume:
+    """A raw image with its ground-truth labels, at the voxel size (ZYX, µm) of
+    the models it suits. Crop or cast, don't write to, the shared arrays."""
+
+    raw: np.ndarray
+    label: np.ndarray
+    voxel_size: tuple[float, float, float]
+
+
+def _load_labelled_volume(path: Path) -> LabelledVolume:
+    with h5py.File(path, "r") as f:
+        return LabelledVolume(
+            raw=f["raw"][...],
+            label=f["label"][...],
+            voxel_size=tuple(float(s) for s in f["raw"].attrs["element_size_um"]),
+        )
+
+
+@pytest.fixture(scope="session")
+def ovule_cells() -> LabelledVolume:
+    """Arabidopsis ovule cell walls, confocal, (32, 128, 128) uint8 at
+    (0.235, 0.15, 0.15) µm: the data of PanSeg's confocal ovule models."""
+    return _load_labelled_volume(TEST_FILES / "sample_ovule.h5")
 
 
 @pytest.fixture
@@ -922,10 +950,18 @@ MOCK_PARAMETERIZED_GEOMETRY = {
 
 
 @pytest.fixture
-def mock_biio_package_parameterized(tmp_path) -> Path:
+def mock_biio_package_parameterized(tmp_path, ovule_cells) -> Path:
     """Local BioImage.IO package of a tiny UNet3D exported by PanSeg, so its
-    input axes are parameterized and its output axes declare halos."""
+    input axes are parameterized and its output axes declare halos.
+
+    The test input is a crop of the ovule image and the test output is the
+    model's own prediction of it, so the package passes bioimageio.core's test.
+    """
     from contextlib import chdir
+
+    from bioimageio.core import create_prediction_pipeline
+    from bioimageio.core.digest_spec import get_test_inputs
+    from bioimageio.core.prediction import predict
 
     from panseg.functionals.model_geometry import ModelGeometry
     from panseg.functionals.training.biio import make_model_description
@@ -934,12 +970,14 @@ def mock_biio_package_parameterized(tmp_path) -> Path:
     torch.manual_seed(0)
     model = UNet3D(**MOCK_UNET_KWARGS)
     torch.save(model.state_dict(), tmp_path / "weights.pytorch")
-    rng = np.random.default_rng(0)
-    for name in ("test_in.npy", "test_out.npy"):
-        np.save(tmp_path / name, rng.random((1, 1, 16, 32, 64), dtype=np.float32))
+    test_in = ovule_cells.raw[8:24, 48:80, 32:96].astype(np.float32)
+    np.save(tmp_path / "test_in.npy", test_in[None, None])
+    # a placeholder until the model has predicted the test input; the spec
+    # rejects one of zeros
+    np.save(tmp_path / "test_out.npy", test_in[None, None])
 
-    with chdir(tmp_path):
-        desc = make_model_description(
+    def describe():
+        return make_model_description(
             weights=Path("weights.pytorch"),
             model_name="mock-unet3d-parameterized",
             in_channels=1,
@@ -956,8 +994,17 @@ def mock_biio_package_parameterized(tmp_path) -> Path:
             test_out=tmp_path / "test_out.npy",
             panseg_config=Path("weights.pytorch"),
         )
+
+    with chdir(tmp_path):
+        desc = describe()
+        pipeline = create_prediction_pipeline(desc, devices=["cpu"])
+        output = predict(model=pipeline, inputs=get_test_inputs(desc))
+        pipeline.unload()
+        test_out = next(iter(output.members.values())).data.to_numpy()
+        np.save(tmp_path / "test_out.npy", test_out.astype(np.float32))
+
         package = tmp_path / "mock_model.zip"
-        desc.package(package)
+        describe().package(package)
     return package
 
 
