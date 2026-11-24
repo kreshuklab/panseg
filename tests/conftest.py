@@ -811,11 +811,14 @@ MOCK_UNET_KWARGS = {
 
 
 @pytest.fixture
-def mock_biio_package(tmp_path) -> Path:
+def mock_biio_package(tmp_path, request) -> Path:
     """Local BioImage.IO package of a tiny UNet3D with fixed (8, 32, 32) input axes.
 
     The callable is the probabilities subclass, matching what `biio.py`
     exports: published models emit [0, 1] probabilities, not logits.
+
+    Parametrize indirectly with True to save the weights in PyTorch's legacy
+    (non-zip) format, as some published models do.
     """
     from contextlib import chdir
 
@@ -842,7 +845,11 @@ def mock_biio_package(tmp_path) -> Path:
 
     torch.manual_seed(0)
     model = UNet3D(**MOCK_UNET_KWARGS)
-    torch.save(model.state_dict(), tmp_path / "weights.pytorch")
+    torch.save(
+        model.state_dict(),
+        tmp_path / "weights.pytorch",
+        _use_new_zipfile_serialization=not getattr(request, "param", False),
+    )
 
     def space_input(axis_id: str, size: int) -> SpaceInputAxis:
         return SpaceInputAxis(
