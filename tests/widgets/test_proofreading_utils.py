@@ -1,12 +1,15 @@
-import os
-
 import numpy as np
 import pytest
 from numba.typed import List
 
 from panseg.functionals.proofreading import utils
 
-os.environ["NUMBA_JIT_COVERAGE"] = "1"
+
+@pytest.fixture(autouse=True)
+def _numba_jit_coverage(monkeypatch):
+    # Let coverage record lines inside the jitted helpers. Scoped to this
+    # module so it doesn't leak into every numba compilation in the session.
+    monkeypatch.setenv("NUMBA_JIT_COVERAGE", "1")
 
 
 def test_get_bboxes3D():

@@ -24,6 +24,9 @@ dependencies:
   - pyside6==6.11.2
   - pytest
   - pytest-cov
+  # coverage 7.17.5 removed Collector.lock_data, which numba 0.68.1 still reads.
+  # Remove this pin once a numba release supports coverage >= 7.17.5.
+  - coverage<7.17.5
   - pytest-mock
   - pytest-qt
   - python-elf==0.9.2
