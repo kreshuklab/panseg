@@ -111,8 +111,12 @@ class TestBioImageIOModelZoo:
         assert model_geometry(model).halo == expected
 
 
+@pytest.mark.parametrize(
+    "mock_biio_package", [False, True], ids=["zip", "legacy"], indirect=True
+)
 def test_get_model_by_id_resolves_bioimageio_id(mock_biio_package, mocker):
-    """A bioimage.io ID is resolved on its own, without the full model list."""
+    """A bioimage.io ID is resolved on its own, without the full model list, and
+    the weights load whichever format PyTorch saved them in."""
     resolve = mocker.patch.object(
         zoo_module, "bioimageio_rdf_url", return_value=str(mock_biio_package)
     )

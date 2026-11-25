@@ -2,6 +2,7 @@
 
 # pylint: disable=C0116,C0103
 
+import io
 import json
 import logging
 import re
@@ -576,8 +577,12 @@ class ModelZoo:
         }
         model_config.update(architecture_kwargs)
         model = self._create_model_by_config(model_config)
-        # the file description carries the sha256, so the download is verified and cached
-        model_weights_path = download(model_description.weights.pytorch_state_dict)
+        # The file description carries the sha256, so the download is verified and
+        # cached. torch.load needs `readline` for PyTorch's legacy (non-zip) format,
+        # which the downloaded reader lacks.
+        model_weights_path = io.BytesIO(
+            download(model_description.weights.pytorch_state_dict).read()
+        )
 
         logger_zoo.info(f"Created {architecture} model with kwargs {model_config}.")
         logger_zoo.info(f"Loaded model from BioImage.IO Model Zoo: {model_id}")
