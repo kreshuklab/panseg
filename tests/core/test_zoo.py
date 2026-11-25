@@ -98,9 +98,9 @@ class TestBioImageIOModelZoo:
     @pytest.mark.parametrize(
         ("model_id", "expected"),
         [
-            ("efficient-chipmunk", (44, 44, 44)),
+            ("efficient-chipmunk", (48, 48, 48)),
             # 2D models predict one Z slice at a time
-            ("pioneering-rhino", (0, 44, 44)),
+            ("pioneering-rhino", (0, 48, 48)),
         ],
     )
     def test_halo_computation_for_bioimageio_model(

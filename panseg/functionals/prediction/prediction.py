@@ -21,13 +21,12 @@ from panseg.functionals.dataprocessing.dataprocessing import (
 )
 from panseg.functionals.model_geometry import ModelGeometry, model_geometry
 from panseg.functionals.precision import AmpSetting, validate_amp
-from panseg.functionals.prediction.utils.array_dataset import ArrayDataset
+from panseg.functionals.prediction.utils.array_dataset import ArrayDataset, pad_to_shape
 from panseg.functionals.prediction.utils.array_predictor import ArrayPredictor
 from panseg.functionals.prediction.utils.size_finder import (
     find_feasible_patch_and_halo_shapes,
 )
 from panseg.functionals.prediction.utils.slice_builder import SliceBuilder
-from panseg.functionals.prediction.utils.utils import get_stride_shape
 from panseg.functionals.training.augs import get_test_augmentations
 
 logger = logging.getLogger(__name__)
@@ -54,50 +53,6 @@ def _warn_inefficient_auto_patch(geometry: ModelGeometry, patch, patch_halo) -> 
         f"{geometry.min_input}.\n{inefficiency}\n"
         "Reduce the model size or halo, or increase patch size."
     )
-
-
-def _check_image_fits(geometry: ModelGeometry, raw_shape) -> None:
-    """Reject an image below the model's architecture minimum, before probing."""
-    min_depth = geometry.min_input[0]
-    if raw_shape[0] < min_depth:
-        raise ValueError(
-            f"This 3D model needs at least {min_depth} Z slices, but the image has "
-            f"{raw_shape[0]}. Use a 2D model for images with fewer Z slices."
-        )
-    failing = [
-        f"{axis} ({size} < {min_size})"
-        for axis, size, min_size in zip(
-            ("Y", "X"), raw_shape[1:], geometry.min_input[1:]
-        )
-        if size < min_size
-    ]
-    if failing:
-        raise ValueError(
-            f"This model needs an image of at least {geometry.min_input} (Z, Y, X) "
-            f"to run, but the image shape is {tuple(raw_shape)}; it is too small in: "
-            f"{', '.join(failing)}. Use a smaller model or a larger image."
-        )
-
-
-def _check_patch_axes(geometry: ModelGeometry, raw_shape, patch, patch_halo) -> None:
-    """Reject patch layouts the model cannot run on, before probing the device."""
-    if patch is None:  # an auto-derived patch cannot exceed the image
-        _check_image_fits(geometry, raw_shape)
-    if not geometry.is_2d:  # 3D patches are fully covered by geometry.check_patch
-        return
-    if patch is None:  # the derived patch has depth 1 and no Z halo
-        return
-    if patch[0] != 1:
-        raise ValueError(
-            f"Patch shape {tuple(patch)} has {patch[0]} Z slices, but 2D models "
-            "predict one Z slice at a time. Set the Z patch size to 1, "
-            "or leave the patch unset to derive a feasible one."
-        )
-    if patch_halo[0] != 0:
-        raise ValueError(
-            f"Halo shape {tuple(patch_halo)} has a Z halo of {patch_halo[0]}, but "
-            "2D models predict one Z slice at a time. Set the Z halo to 0."
-        )
 
 
 def biio_prediction(
@@ -261,6 +216,8 @@ def unet_prediction(
 
     This function handles both single and multi-channel outputs from the model,
     returning appropriately shaped arrays based on the output channel configuration.
+    The raw volume is reflect-padded up to the aligned domain and the prediction
+    is cropped back, so the returned shape always equals the input shape.
 
     For Bioimage.IO Model Zoo models, weights are downloaded and loaded into `UNet3D` or `UNet2D`
     in `panseg.functionals.training.model`, i.e. `bioimageio.core` is not used. `biio_prediction()` uses
@@ -271,8 +228,13 @@ def unet_prediction(
         Input_layout (ImageLayout): The layout of the input data.
         model_name (str | None): The name of the model to use.
         model_id (str | None): The ID of the model from the BioImage.IO model zoo.
-        patch (tuple[int, int, int], optional): Patch size for prediction. Defaults to (80, 160, 160).
-        patch_halo (tuple[int, int, int] | None, optional): Halo size around patches. Defaults to None.
+        patch (tuple[int, int, int] | None, optional): Patch size for prediction.
+            `None` derives a patch aligned to `geometry.increment` and sized so
+            `patch + 2 * halo` fits the probed model-input budget. Defaults to None.
+        patch_halo (tuple[int, int, int] | None, optional): Halo size around patches.
+            `None` uses `geometry.halo`, the minimal halo that makes an aligned patch
+            exact; a manual halo is used verbatim (no rounding, no alignment check).
+            Defaults to None.
         single_batch_mode (bool, optional): Whether to use a single batch for prediction. Defaults to True.
         device (str, optional): The computation device ('cpu', 'cuda', etc.). Defaults to 'cuda'.
         model_update (bool, optional): Whether to update the model to the latest version. Defaults to False.
@@ -323,6 +285,7 @@ def unet_prediction(
     # One architecture traversal per prediction: the default halo, the
     # pre-probe checks and the final validation all share this geometry.
     geometry = model_geometry(model)
+    user_halo = patch_halo is not None
     if patch_halo is None:
         patch_halo = geometry.halo
         logger.info(f"Computed theoretical minimum halo from model: {patch_halo}")
@@ -337,17 +300,29 @@ def unet_prediction(
         raw_shape = raw.shape[1:]
 
     assert len(raw_shape) == 3
-    _check_patch_axes(geometry, raw_shape, patch, patch_halo)
+    # A manual patch is used verbatim, even on a small image; only the derived
+    # patch (from an auto-sized domain) must fit the architectural minimum.
+    if patch is None:
+        geometry.check_input(raw_shape)
 
+    # Predict on an aligned domain: SliceBuilder flushes the last patch start
+    # to `i - k`, which stays on the phase grid only when the domain is a
+    # multiple of the increment. Reflect-pad the domain up to it; the result is
+    # cropped back to `raw_shape` below.
+    domain_shape = geometry.aligned_shape(raw_shape)
     auto_patch = patch is None
     if auto_patch:
+        if user_halo:
+            logger.info(
+                f"Using the manually specified halo {patch_halo} while deriving a "
+                "phase-aligned patch."
+            )
         patch, patch_halo = find_feasible_patch_and_halo_shapes(
             model,
             model_config["in_channels"],
-            raw_shape,
+            domain_shape,
             patch_halo,
             device,
-            both_sides=False,
             amp=amp,
             channels_last_3d=channels_last_3d,
             geometry=geometry,
@@ -358,14 +333,14 @@ def unet_prediction(
         _warn_inefficient_auto_patch(geometry, patch, patch_halo)
 
     oversized_dims = [
-        f"{dim}: patch {p} > sample {s}"
-        for dim, p, s in zip(("Z", "Y", "X"), patch, raw_shape)
+        f"{dim}: patch {p} > domain {s}"
+        for dim, p, s in zip(("Z", "Y", "X"), patch, domain_shape)
         if p > s
     ]
     if oversized_dims:
         raise ValueError(
-            f"Patch shape {tuple(patch)} is bigger than the sample shape "
-            f"{tuple(raw_shape)} in: {', '.join(oversized_dims)}. "
+            f"Patch shape {tuple(patch)} is bigger than the aligned domain shape "
+            f"{tuple(domain_shape)} in: {', '.join(oversized_dims)}. "
             "Reduce the patch size, or leave it unset to derive a feasible one."
         )
 
@@ -398,8 +373,9 @@ def unet_prediction(
     raw = raw.astype("float32")
     augs = get_test_augmentations(
         raw
-    )  # using full raw to compute global normalization mean and std
-    stride = get_stride_shape(patch)
+    )  # normalization stats of the original raw, before the domain pad
+    raw = pad_to_shape(raw, domain_shape)
+    stride = geometry.stride_shape(patch)
     slice_builder = SliceBuilder(
         raw, label_dataset=None, patch_shape=patch, stride_shape=stride
     )
@@ -412,5 +388,9 @@ def unet_prediction(
         verbose_logging=False,
     )
 
-    pmaps = predictor(test_dataset)  # pmaps either (C, Z, Y, X) or (C, Y, X)
-    return pmaps
+    prediction = predictor(test_dataset)
+    # `raw` was reflect-padded up to the phase-aligned domain, so the map covers
+    # the padded extent; the public API returns the raw extent. The last three
+    # axes are spatial even for 2D models (singleton z), so C stays untouched.
+    z, y, x = raw_shape
+    return prediction[..., :z, :y, :x]
