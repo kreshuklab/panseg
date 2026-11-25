@@ -212,21 +212,29 @@ def pad_to_effective_minimum(
     test_in: torch.Tensor,
     geometry: ModelGeometry,
 ) -> torch.Tensor:
-    """Zero-pad the spatial axes of `test_in` up to `geometry.effective_min_input`.
+    """Zero-pad the spatial axes of `test_in` to a valid declared input size.
 
-    The packaged test input must satisfy the input-axis minima the description
-    declares, and the effective minimum can exceed a training patch on halo
-    axes (`2 * halo + 1`). Padding keeps the description honest instead of
-    shrinking its minimum or halo; `test_out` is computed from the padded
-    tensor so the pair stays consistent. Each axis is padded symmetrically,
-    with the odd pixel going to the right.
+    The packaged test input must satisfy the input-axis contract the description
+    declares (`size = min + n * step`), and the effective minimum can exceed a
+    training patch on halo axes (`2 * halo + 1`). Padding keeps the description
+    honest instead of shrinking its minimum or halo; `test_out` is computed from
+    the padded tensor so the pair stays consistent. An axis below its minimum is
+    padded up to it; an axis above it is rounded up to the next multiple of the
+    phase period (`geometry.increment`), because the spec rejects any size that
+    is not `min + n * step`. Each axis is padded symmetrically, with the odd
+    pixel going to the right.
     """
     minima = geometry.tensor_effective_min_input()
+    increments = geometry.increment[1:] if geometry.is_2d else geometry.increment
     sizes = test_in.shape[-len(minima) :]
     pads: list[int] = []
-    # torch padding runs last axis first; minima/sizes are (Z),Y,X
-    for size, minimum in zip(reversed(sizes), reversed(minima)):
-        total = max(0, minimum - size)
+    # torch padding runs last axis first; minima/sizes/increments are (Z),Y,X
+    for size, minimum, increment in zip(
+        reversed(sizes), reversed(minima), reversed(increments)
+    ):
+        # smallest size >= minimum that is parameterized by `min + n * step`
+        steps = max(0, -(-(size - minimum) // increment))
+        total = minimum + steps * increment - size
         left = total // 2
         pads.extend([left, total - left])
     if not any(pads):
@@ -298,8 +306,9 @@ def make_model_description(
     input axes declare `geometry.effective_min_input`, the smallest tile that
     both runs, leaves a non-empty artifact-free interior and is step-valid.
     Zero-halo axes declare their effective minimum and stay plain output axes.
-    Callers package test tensors that satisfy these minima; `train.py` pads the
-    training patch up to them with `pad_to_effective_minimum` when needed.
+    Callers package test tensors that satisfy these minima and steps; `train.py`
+    pads the training patch to a valid input size with
+    `pad_to_effective_minimum` when needed.
     """
     # input and output axes share the same scale/unit pair: the output axis sizes
     # are declared as SizeReferences to the input axes

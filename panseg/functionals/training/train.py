@@ -2,7 +2,7 @@ import gc
 import logging
 from contextlib import chdir
 from pathlib import Path
-from typing import Literal, Optional, TypeVar
+from typing import Literal
 
 import numpy as np
 import torch
@@ -35,13 +35,11 @@ from panseg.functionals.training.trainer import UNetTrainer, load_pretrained_wei
 logger = logging.getLogger(__name__)
 
 
-_T = TypeVar("_T", np.ndarray, torch.Tensor)
-
 ZMUV_EPS = 1e-6
 """Epsilon of the `ZeroMeanUnitVarianceDescr` preprocessing declared for the input."""
 
 
-def zero_mean_unit_variance(x: _T) -> _T:
+def zero_mean_unit_variance[T: (np.ndarray, torch.Tensor)](x: T) -> T:
     """Apply the input preprocessing declared in the model description.
 
     Mirrors `ZeroMeanUnitVarianceDescr()` with its default kwargs (normalize all
@@ -103,8 +101,8 @@ def create_model_config(
     sparse,
     f_maps,
     max_num_iters,
-    pre_trained: Optional[Path] = None,
-    val_stride_shape: Optional[tuple[int, int, int]] = None,
+    pre_trained: Path | None = None,
+    val_stride_shape: tuple[int, int, int] | None = None,
 ):
     """Write training config to yaml file."""
 
@@ -154,7 +152,7 @@ def unet_training(
     output_type: str = "",
     description: str = "",
     resolution: tuple[float, float, float] = (1.0, 1.0, 1.0),
-    pre_trained: Optional[Path] = None,
+    pre_trained: Path | None = None,
     layer_order: str = "bcr",
     authors: list[str] | None = None,
     additional_citations: list[str] | None = None,
@@ -417,7 +415,8 @@ def unet_training(
 
     # The description declares `geometry.effective_min_input` as the input
     # minimum (at least 2 * halo + 1 on halo axes), which can exceed the
-    # training patch; bioimageio.spec rejects a test tensor below it.
+    # training patch; `bioimageio.spec` rejects a test tensor below it or off
+    # its `min + n * step` grid.
     test_in = pad_to_effective_minimum(test_in, geometry)
 
     with torch.no_grad():
@@ -472,7 +471,7 @@ def create_datasets(
     phase: Literal["train", "val"],
     patch_shape: tuple[int, int, int],
     dimensionality: Literal["2D", "3D"],
-    in_channels: Optional[int] = None,
+    in_channels: int | None = None,
     stride_shape: tuple[int, int, int] | None = None,
 ):
     """

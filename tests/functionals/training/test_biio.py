@@ -294,6 +294,38 @@ def test_pad_to_effective_minimum_pads_every_spatial_axis():
     assert padded[0, 0, :44].count_nonzero() == 0
 
 
+def test_pad_to_effective_minimum_pads_off_step_axes_above_the_minimum():
+    """Sizes above the minimum must still satisfy `min + n * step`.
+
+    The description declares a `ParameterizedSize`, so a 150 px axis is
+    invalid for `min = 104, step = 8` even though it exceeds the minimum.
+    Leaving it untouched fails BioImage.IO validation after training; the
+    axis must be rounded up to the next valid size (152).
+    """
+    geometry = ModelGeometry(
+        min_input=(8, 8, 8), increment=(8, 8, 8), halo=(48, 48, 48), is_2d=False
+    )
+    test_in = torch.rand(1, 1, 80, 150, 150)
+
+    padded = pad_to_effective_minimum(test_in, geometry)
+
+    assert tuple(padded.shape) == (1, 1, 104, 152, 152)
+    # symmetric padding with the odd pixel on the right; the data is unchanged
+    assert padded[0, 0, 12:92, 1:151, 1:151].equal(test_in[0, 0])
+
+
+def test_pad_to_effective_minimum_rounds_2d_axes_to_the_step():
+    geometry = ModelGeometry(
+        min_input=(1, 4, 4), increment=(1, 8, 8), halo=(0, 20, 20), is_2d=True
+    )
+    test_in = torch.rand(1, 1, 7, 52)
+
+    padded = pad_to_effective_minimum(test_in, geometry)
+
+    assert tuple(padded.shape) == (1, 1, 48, 56)
+    assert padded[0, 0, 20:27, 2:54].equal(test_in[0, 0])
+
+
 def test_pad_to_effective_minimum_is_a_no_op_above_the_minimum():
     geometry = ModelGeometry(
         min_input=(8, 8, 8), increment=(8, 8, 8), halo=(48, 48, 48), is_2d=False
@@ -338,6 +370,30 @@ def test_padded_small_patch_produces_a_valid_description(model_dir):
         == np.load(model_dir / "outputs.npy").shape
         == tuple(test_in.shape)
     )
+
+
+def test_padded_off_step_patch_produces_a_valid_description(model_dir):
+    """A patch above the minimum but off the step still exports.
+
+    Regression test for the training patch (80, 150, 150): padding only up to
+    the effective minimum left Y/X at 150, which `bioimageio.spec` rejects
+    because 150 is not 104 + n * 8.
+    """
+    geometry = ModelGeometry(
+        min_input=(8, 8, 8), increment=(8, 8, 8), halo=(48, 48, 48), is_2d=False
+    )
+    test_in = pad_to_effective_minimum(torch.rand(1, 1, 80, 150, 150), geometry)
+    np.save(model_dir / "inputs.npy", test_in.numpy())
+    np.save(model_dir / "outputs.npy", test_in.numpy())
+
+    desc = make_description(model_dir, geometry=geometry)
+
+    assert tuple(test_in.shape) == (1, 1, 104, 152, 152)
+    minima = {a.id: a.size.min for a in desc.inputs[0].axes if a.id in ("z", "y", "x")}
+    steps = {a.id: a.size.step for a in desc.inputs[0].axes if a.id in ("z", "y", "x")}
+    assert minima == {"z": 104, "y": 104, "x": 104}
+    assert steps == {"z": 8, "y": 8, "x": 8}
+    assert np.load(model_dir / "inputs.npy").shape == tuple(test_in.shape)
 
 
 def test_output_sizes_match_input_sizes(model_dir):
