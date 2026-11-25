@@ -1,0 +1,4 @@
+flag_management:
+  default_rules:
+    # Pull requests upload only the linux flag; windows and macos come from main.
+    carryforward: true
