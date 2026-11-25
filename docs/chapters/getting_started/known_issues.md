@@ -3,9 +3,8 @@
 ## Updates
 
 The build-in updater can not handle all cases.
-If you encounter issues during or after an update, please remove the 
+If you encounter issues during or after an update, please remove the
 installation directory, and reinstall using the new installer.
-
 
 ## Boundary prediction not starting
 
@@ -38,3 +37,12 @@ executable **in you PanSeg installation**(3).
 Scroll to `CUDA - Sysmem Fallback Policy` and change that to `Prefer No Sysmem Fallback`(4).
 
 ![NVIDIA control panel](https://github.com/kreshuklab/panseg/raw/assets/images/nvidia_control_annotated.png)
+
+## Unavailable Domain
+
+!!! tip "Relevant for:"
+    - PanSeg < 2.2.1
+
+Versions before 2.2.1 of PanSeg did reference some resources at a now unavailable
+domain. If you encounter problems starting PanSeg or using BioimageIO models,
+make sure you are running the latest PanSeg version.

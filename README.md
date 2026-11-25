@@ -33,6 +33,11 @@ Checkout the [**documentation** 📖](https://kreshuklab.github.io/panseg/latest
 
 ## Installation
 
+> [!WARNING]
+> Versions < 2.2.1 of PanSeg did reference some resources at a now unavailable
+> domain. If you encounter problems starting PanSeg or using BioimageIO models,
+> make sure you are running the latest PanSeg version.
+
 The easiest way to get PanSeg is using the installer. [**Download it here**](https://heibox.uni-heidelberg.de/d/72b4bd3ba5f14409bfee/)
 
 The installer comes with python and conda.
