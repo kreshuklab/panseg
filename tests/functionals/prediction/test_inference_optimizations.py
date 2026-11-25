@@ -140,7 +140,7 @@ def test_memory_probes_use_the_prediction_memory_format(monkeypatch, single_batc
 
     Sizing in plain contiguous layout while the loop ran in channels_last_3d
     under-estimated the largest single allocation and prediction OOMed at
-    batch size 1 (patch 168 + halo 44 = 256^3).
+    batch size 1 (patch 168 + 2 * halo 48 = 264^3).
     """
     monkeypatch.setattr(size_finder, "MAX_PROBE_BATCH_SIZE", 4)
     model = tiny_3d_model(in_channels=2)
