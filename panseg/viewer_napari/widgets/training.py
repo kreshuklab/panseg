@@ -316,8 +316,8 @@ class Training_Tab:
             "widget_type": "ListEdit",
             "value": [16],
             "tooltip": "Number of feature maps at each level of the encoder.\n"
-            "If it's one number, the number of feature maps is given by\n"
-            "the geometric progression: f_maps ^ k, k=1,2,3,4\n"
+            "If it's one number, the number of feature maps is doubled each\n"
+            "level: f_maps *2^k, k=0,1,2,3\n"
             "Can't be modified for pretrained models.",
         },
         patch_size={

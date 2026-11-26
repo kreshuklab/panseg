@@ -48,12 +48,7 @@ jobs:
 
       - name: Run checks
         run: |
-          pytest --cov --cov-report=xml --durations=10
-
-      - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v7.0.0
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          pytest --durations=10
 
   build_conda:
     needs: test-matrix

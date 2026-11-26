@@ -474,7 +474,7 @@ class AbstractUNet(nn.Module):
             use the proper loss criterion during training (i.e. CrossEntropyLoss (multi-class)
             or BCEWithLogitsLoss (two-class) respectively)
         f_maps (int, tuple): number of feature maps at each level of the encoder; if it's an integer the number
-            of feature maps is given by the geometric progression: f_maps ^ k, k=1,2,3,4
+            of feature maps is doubled each level: f_maps * 2^k, k=0,..,num_levels
         final_sigmoid (bool): if True `predict`/`activate` apply element-wise nn.Sigmoid to the
             forward logits, otherwise nn.Softmax. `forward` itself always returns logits
         layer_order (string): determines the order of layers in `SingleConv` module.

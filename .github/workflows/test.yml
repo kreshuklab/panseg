@@ -72,5 +72,57 @@ jobs:
       # Upload Codecov report
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v7.0.0
+        with:
+          flags: linux
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # Pull requests only run test-linux; commits on main are also tested here,
+  # so coverage on main includes the platform-specific code paths.
+  test-windows-macos:
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            flag: windows
+          - os: macos-latest
+            flag: macos
+    runs-on: ${{ matrix.os }}
+
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    # No model cache, unlike test-linux: downloading the models on every run
+    # keeps the download code covered on main.
+    steps:
+      - name: Setup Qt headless display
+        uses: pyvista/setup-headless-display-action@v4.3
+        with:
+          qt: true
+
+      - name: Checkout Repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set Up Miniforge
+        uses: conda-incubator/setup-miniconda@v4.0.0
+        with:
+          python-version: 3.12
+          miniforge-version: latest
+          mamba-version: "*"
+          channels: local,conda-forge
+          environment-file: "environment-dev.yaml"
+          activate-environment: "panseg-dev"
+          conda-remove-defaults: true
+
+      - name: Run Tests with Pytest
+        run: pytest --cov --cov-report=xml --durations=10
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v7.0.0
+        with:
+          flags: ${{ matrix.flag }}
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

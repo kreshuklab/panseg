@@ -1,0 +1,11 @@
+coverage:
+  status:
+    project:
+      default:
+        # A few unrelated lines can flip between covered and not from run to run.
+        threshold: 0.1%
+
+flag_management:
+  default_rules:
+    # Pull requests upload only the linux flag; windows and macos come from main.
+    carryforward: true
