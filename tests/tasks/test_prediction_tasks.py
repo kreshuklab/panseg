@@ -10,26 +10,38 @@ from panseg.core.image import (
 from panseg.io.h5 import load_h5, read_h5_voxel_size
 from panseg.io.voxelsize import VoxelSize
 from panseg.tasks.prediction_tasks import biio_prediction_task, unet_prediction_task
+from tests.conftest import wall_contrast
+
+# Half the smallest contrast measured with these models on their data
+MIN_WALL_CONTRAST = 0.15
+MIN_NUCLEI_LOGIT_CONTRAST = 3.0
+
+
+def _raw_image(data: np.ndarray, layout, voxel_size) -> PanSegImage:
+    size = VoxelSize(voxels_size=voxel_size, unit="um")
+    return PanSegImage(
+        data=data,
+        properties=ImageProperties(
+            name="test",
+            voxel_size=size,
+            semantic_type=SemanticType.RAW,
+            image_layout=layout,
+            original_voxel_size=size,
+        ),
+    )
 
 
 @pytest.mark.parametrize(
-    "shape, layout, model_name",
+    "model_name, layout, crop",
     [
-        ((8, 64, 64), ImageLayout.ZYX, "generic_confocal_3D_unet"),
-        ((64, 64), ImageLayout.YX, "confocal_2D_unet_ovules_ds2x"),
+        ("generic_confocal_3D_unet", ImageLayout.ZYX, np.s_[8:24]),
+        ("confocal_2D_unet_ovules_ds2x", ImageLayout.YX, np.s_[16]),
     ],
 )
-def test_unet_prediction_task(shape, layout, model_name):
-    mock_data = np.random.rand(*shape).astype("float32")
-
-    property = ImageProperties(
-        name="test",
-        voxel_size=VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um"),
-        semantic_type=SemanticType.RAW,
-        image_layout=layout,
-        original_voxel_size=VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um"),
-    )
-    image = PanSegImage(data=mock_data, properties=property)
+def test_unet_prediction_task(model_name, layout, crop, ovule_cells):
+    """PanSeg's confocal ovule models find the cell walls of an ovule image."""
+    raw = ovule_cells.raw[crop].astype("float32")
+    image = _raw_image(raw, layout, ovule_cells.voxel_size)
 
     result = unet_prediction_task(
         image=image,
@@ -42,9 +54,18 @@ def test_unet_prediction_task(shape, layout, model_name):
     result = result[0]
 
     assert result.semantic_type == SemanticType.PREDICTION
-    assert result.image_layout == property.image_layout
-    assert result.voxel_size == property.voxel_size
-    assert result.shape == mock_data.shape
+    assert result.image_layout == image.image_layout
+    assert result.voxel_size == image.voxel_size
+    assert result.shape == raw.shape
+    assert wall_contrast(result.get_data(), ovule_cells.label[crop]) > MIN_WALL_CONTRAST
+
+
+def _cellpose_input(nuclei: np.ndarray) -> np.ndarray:
+    """Cellpose takes nuclei scaled to their 1st-99th percentile in the first
+    channel and nothing in the second; ZCYX."""
+    low, high = np.percentile(nuclei, (1, 99))
+    nuclei = ((nuclei - low) / (high - low)).astype("float32")
+    return np.stack([nuclei, np.zeros_like(nuclei)], axis=1)
 
 
 # Tolerance on the per-voxel difference between predicted z slices of a raw
@@ -105,30 +126,44 @@ def test_unet_prediction_task_z_slice_invariance(h5_file):
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "raw_fixture_name, input_layout, model_id",
-    (
-        ("raw_zcyx_96x2x96x96", "ZCYX", "philosophical-panda"),
-        ("raw_cell_3d_100x128x128", "ZYX", "emotional-cricket"),
-        ("raw_cell_2d_96x96", "YX", "pioneering-rhino"),
-    ),
+    "model_id, data_name, layout, crop",
+    [
+        ("pioneering-rhino", "ovule_cells", "YX", np.s_[16]),
+        # the model's fixed input size
+        ("emotional-cricket", "shoot_meristem_cells", "ZYX", np.s_[:]),
+        ("philosophical-panda", "ovule_nuclei", "ZCYX", np.s_[34:66, 2:98, 2:98]),
+    ],
 )
-def test_biio_prediction_task(raw_fixture_name, input_layout, model_id, request):
-    image = PanSegImage(
-        data=request.getfixturevalue(raw_fixture_name),
-        properties=ImageProperties(
-            name="test",
-            voxel_size=VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um"),
-            semantic_type=SemanticType.RAW,
-            image_layout=input_layout,
-            original_voxel_size=VoxelSize(voxels_size=(1.0, 1.0, 1.0), unit="um"),
-        ),
-    )
+def test_biio_prediction_task(model_id, data_name, layout, crop, request):
+    """Real BioImage.IO models, run through PanSeg on the data they were made
+    for, find what they were trained to find."""
+    data = request.getfixturevalue(data_name)
+    raw, label = data.raw[crop].astype("float32"), data.label[crop]
+    if model_id == "philosophical-panda":
+        raw = _cellpose_input(raw)
+
     result = biio_prediction_task(
-        image=image, model_id=model_id, suffix="_biio_prediction", device="cpu"
+        image=_raw_image(raw, layout, data.voxel_size),
+        model_id=model_id,
+        suffix="_biio_prediction",
+        device="cpu",
     )
+
+    assert result
     for new_image in result:
         assert new_image.semantic_type == SemanticType.PREDICTION
         assert "_biio_prediction" in new_image.name
+        assert np.isfinite(new_image.get_data()).all()
+    if model_id == "philosophical-panda":
+        # Cellpose's flows are dY, dX and the cell probability, as logits
+        flow = next(i for i in result if i.name.endswith("_flow")).get_data()
+        nuclei, background = flow[2][label > 0], flow[2][label == 0]
+        assert nuclei.mean() - background.mean() > MIN_NUCLEI_LOGIT_CONTRAST
+    else:
+        (prediction,) = result
+        prediction = np.squeeze(prediction.get_data())
+        assert prediction.shape == label.shape
+        assert wall_contrast(prediction, label) > MIN_WALL_CONTRAST
 
 
 def _mock_raw_image(data: np.ndarray) -> PanSegImage:

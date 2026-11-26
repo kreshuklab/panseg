@@ -3,6 +3,7 @@ import os
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 import requests
 import torch
@@ -12,17 +13,22 @@ from panseg import FILE_BEST_MODEL_PYTORCH, FILE_CONFIG_TRAIN_YAML
 from panseg.core.zoo import Author, model_zoo, resolve_bioimageio_source
 from panseg.functionals.model_geometry import model_geometry
 from panseg.functionals.training.model import UNet2D, UNet3D
-from tests.conftest import HYPHA_MODEL_LIST, IS_CUDA_AVAILABLE, MOCK_UNET_KWARGS
+from tests.conftest import (
+    HYPHA_MODEL_LIST,
+    IS_CUDA_AVAILABLE,
+    MOCK_UNET_KWARGS,
+    wall_contrast,
+)
 
 IN_GITHUB_ACTIONS = os.getenv("GITHUB_ACTIONS") == "true"
 
-# test some modes (3D and 2D)
-MODEL_NAMES = [
-    "confocal_2D_unet_ovules_ds2x",
-    "generic_confocal_3D_unet",
-    "lightsheet_2D_unet_root_ds1x",
-    "generic_light_sheet_3D_unet",
-]
+# test some modes (3D and 2D), each on the data it was trained for
+MODEL_DATA = {
+    "confocal_2D_unet_ovules_ds2x": "ovule_cells",
+    "generic_confocal_3D_unet": "ovule_cells",
+    "lightsheet_2D_unet_root_ds1x": "lateral_root_cells",
+    "generic_light_sheet_3D_unet": "lateral_root_cells",
+}
 
 
 class TestPanSegModelZoo:
@@ -33,8 +39,8 @@ class TestPanSegModelZoo:
         IN_GITHUB_ACTIONS,
         reason="Github workflows do not allow model download for security reason",
     )
-    @pytest.mark.parametrize("model_name", MODEL_NAMES)
-    def test_model_output_normalisation(self, model_name):
+    @pytest.mark.parametrize("model_name", MODEL_DATA)
+    def test_model_output_normalisation(self, model_name, request):
         model, _, model_path = model_zoo.get_model_by_name(
             model_name, model_update=True
         )
@@ -42,14 +48,17 @@ class TestPanSegModelZoo:
         state = torch.load(model_path, map_location="cpu", weights_only=True)
         model.load_state_dict(state)
         model.eval()
-        if isinstance(model, UNet2D):
-            x = torch.randn(4, 1, 260, 260)
-        else:
-            x = torch.randn(4, 1, 80, 160, 160)
+        data = request.getfixturevalue(MODEL_DATA[model_name])
+        crop = np.s_[data.raw.shape[0] // 2] if isinstance(model, UNet2D) else np.s_[:]
+        raw = data.raw[crop].astype(np.float32)
+        x = torch.from_numpy((raw - raw.mean()) / raw.std())[None, None]
         # forward() returns logits; the normalized output comes from predict()
-        y = model.predict(x)
+        with torch.no_grad():
+            y = model.predict(x)
         # assert output normalized
         assert torch.all(0 <= y) and torch.all(y <= 1)
+        # measured 0.29-0.73 for these models on their data
+        assert wall_contrast(y[0, 0].numpy(), data.label[crop]) > 0.15
 
 
 MODEL_IDS = [  # These two models has halo 44 on each side
