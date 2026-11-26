@@ -184,8 +184,8 @@ def unet_training(
             number of predicted output channels, i.e. the number of
             semantic classes the model learns to predict.
         feature_maps: model capacity: number of feature maps in the first
-            encoder level; deeper levels follow the geometric progression
-            ``f^k`` with k=1..4. A sequence defines each encoder level size explicitly.
+            encoder level; deeper levels double in size
+            ``f*2^k`` with k=0..3. A sequence defines each encoder level size explicitly.
         patch_size: training patch shape ``(z, y, x)``. Training patches are
             extracted with half the patch shape as stride (overlapping),
             validation patches on a non-overlapping grid (see
