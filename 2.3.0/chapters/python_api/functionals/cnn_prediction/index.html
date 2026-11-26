@@ -895,6 +895,10 @@
           
         
       
+        
+      
+        
+      
     
     
     
@@ -909,79 +913,6 @@
         
         
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
-        
-          
-          <div class="md-nav__link md-nav__container">
-            <a href="../../../timeseries/" class="md-nav__link ">
-              
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Time Series
-  
-
-    
-  </span>
-  
-  
-
-            </a>
-            
-          </div>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    Time Series
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-            
-          </ul>
-        </nav>
-      
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    
-    
-      
-        
-          
-        
-      
-        
-      
-        
-      
-    
-    
-    
-      
-        
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -1003,14 +934,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="">
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_6">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1065,6 +996,127 @@
     
   
     Advanced Training
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Advanced
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Advanced
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../advanced/halo/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Receptive field and halo
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../advanced/timeseries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Time Series
   
 
     
@@ -1705,7 +1757,9 @@
 
         <p>Generate prediction from raw data using a specified 3D U-Net model.</p>
 <p>This function handles both single and multi-channel outputs from the model,
-returning appropriately shaped arrays based on the output channel configuration.</p>
+returning appropriately shaped arrays based on the output channel configuration.
+The raw volume is reflect-padded up to the aligned domain and the prediction
+is cropped back, so the returned shape always equals the input shape.</p>
 <p>For Bioimage.IO Model Zoo models, weights are downloaded and loaded into <code>UNet3D</code> or <code>UNet2D</code>
 in <code>panseg.functionals.training.model</code>, i.e. <code>bioimageio.core</code> is not used. <code>biio_prediction()</code> uses
 <code>bioimageio.core</code> for loading and running models.</p>
@@ -1747,12 +1801,14 @@ in <code>panseg.functionals.training.model</code>, i.e. <code>bioimageio.core</c
         </li>
         <li class="doc-section-item field-body">
             <b><code>patch</code></b>
-              (<code><span title="tuple">tuple</span>[<span title="int">int</span>, <span title="int">int</span>, <span title="int">int</span>]</code>, default:
+              (<code><span title="tuple">tuple</span>[<span title="int">int</span>, <span title="int">int</span>, <span title="int">int</span>] | None</code>, default:
                   <code>None</code>
 )
           –
           <div class="doc-md-description">
-            <p>Patch size for prediction. Defaults to (80, 160, 160).</p>
+            <p>Patch size for prediction.
+<code>None</code> derives a patch aligned to <code>geometry.increment</code> and sized so
+<code>patch + 2 * halo</code> fits the probed model-input budget. Defaults to None.</p>
           </div>
         </li>
         <li class="doc-section-item field-body">
@@ -1762,7 +1818,10 @@ in <code>panseg.functionals.training.model</code>, i.e. <code>bioimageio.core</c
 )
           –
           <div class="doc-md-description">
-            <p>Halo size around patches. Defaults to None.</p>
+            <p>Halo size around patches.
+<code>None</code> uses <code>geometry.halo</code>, the minimal halo that makes an aligned patch
+exact; a manual halo is used verbatim (no rounding, no alignment check).
+Defaults to None.</p>
           </div>
         </li>
         <li class="doc-section-item field-body">
@@ -1888,32 +1947,7 @@ Outputs are unaffected. Defaults to False.</p>
 
             <details class="mkdocstrings-source">
               <summary>Source code in <code>panseg/functionals/prediction/prediction.py</code></summary>
-              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">243</span>
-<span class="normal">244</span>
-<span class="normal">245</span>
-<span class="normal">246</span>
-<span class="normal">247</span>
-<span class="normal">248</span>
-<span class="normal">249</span>
-<span class="normal">250</span>
-<span class="normal">251</span>
-<span class="normal">252</span>
-<span class="normal">253</span>
-<span class="normal">254</span>
-<span class="normal">255</span>
-<span class="normal">256</span>
-<span class="normal">257</span>
-<span class="normal">258</span>
-<span class="normal">259</span>
-<span class="normal">260</span>
-<span class="normal">261</span>
-<span class="normal">262</span>
-<span class="normal">263</span>
-<span class="normal">264</span>
-<span class="normal">265</span>
-<span class="normal">266</span>
-<span class="normal">267</span>
-<span class="normal">268</span>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">268</span>
 <span class="normal">269</span>
 <span class="normal">270</span>
 <span class="normal">271</span>
@@ -2061,7 +2095,57 @@ Outputs are unaffected. Defaults to False.</p>
 <span class="normal">413</span>
 <span class="normal">414</span>
 <span class="normal">415</span>
-<span class="normal">416</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">unet_prediction</span><span class="p">(</span>
+<span class="normal">416</span>
+<span class="normal">417</span>
+<span class="normal">418</span>
+<span class="normal">419</span>
+<span class="normal">420</span>
+<span class="normal">421</span>
+<span class="normal">422</span>
+<span class="normal">423</span>
+<span class="normal">424</span>
+<span class="normal">425</span>
+<span class="normal">426</span>
+<span class="normal">427</span>
+<span class="normal">428</span>
+<span class="normal">429</span>
+<span class="normal">430</span>
+<span class="normal">431</span>
+<span class="normal">432</span>
+<span class="normal">433</span>
+<span class="normal">434</span>
+<span class="normal">435</span>
+<span class="normal">436</span>
+<span class="normal">437</span>
+<span class="normal">438</span>
+<span class="normal">439</span>
+<span class="normal">440</span>
+<span class="normal">441</span>
+<span class="normal">442</span>
+<span class="normal">443</span>
+<span class="normal">444</span>
+<span class="normal">445</span>
+<span class="normal">446</span>
+<span class="normal">447</span>
+<span class="normal">448</span>
+<span class="normal">449</span>
+<span class="normal">450</span>
+<span class="normal">451</span>
+<span class="normal">452</span>
+<span class="normal">453</span>
+<span class="normal">454</span>
+<span class="normal">455</span>
+<span class="normal">456</span>
+<span class="normal">457</span>
+<span class="normal">458</span>
+<span class="normal">459</span>
+<span class="normal">460</span>
+<span class="normal">461</span>
+<span class="normal">462</span>
+<span class="normal">463</span>
+<span class="normal">464</span>
+<span class="normal">465</span>
+<span class="normal">466</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">unet_prediction</span><span class="p">(</span>
     <span class="n">raw</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
     <span class="n">input_layout</span><span class="p">:</span> <span class="n">ImageLayout</span><span class="p">,</span>
     <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
@@ -2082,6 +2166,8 @@ Outputs are unaffected. Defaults to False.</p>
 
 <span class="sd">    This function handles both single and multi-channel outputs from the model,</span>
 <span class="sd">    returning appropriately shaped arrays based on the output channel configuration.</span>
+<span class="sd">    The raw volume is reflect-padded up to the aligned domain and the prediction</span>
+<span class="sd">    is cropped back, so the returned shape always equals the input shape.</span>
 
 <span class="sd">    For Bioimage.IO Model Zoo models, weights are downloaded and loaded into `UNet3D` or `UNet2D`</span>
 <span class="sd">    in `panseg.functionals.training.model`, i.e. `bioimageio.core` is not used. `biio_prediction()` uses</span>
@@ -2092,8 +2178,13 @@ Outputs are unaffected. Defaults to False.</p>
 <span class="sd">        Input_layout (ImageLayout): The layout of the input data.</span>
 <span class="sd">        model_name (str | None): The name of the model to use.</span>
 <span class="sd">        model_id (str | None): The ID of the model from the BioImage.IO model zoo.</span>
-<span class="sd">        patch (tuple[int, int, int], optional): Patch size for prediction. Defaults to (80, 160, 160).</span>
-<span class="sd">        patch_halo (tuple[int, int, int] | None, optional): Halo size around patches. Defaults to None.</span>
+<span class="sd">        patch (tuple[int, int, int] | None, optional): Patch size for prediction.</span>
+<span class="sd">            `None` derives a patch aligned to `geometry.increment` and sized so</span>
+<span class="sd">            `patch + 2 * halo` fits the probed model-input budget. Defaults to None.</span>
+<span class="sd">        patch_halo (tuple[int, int, int] | None, optional): Halo size around patches.</span>
+<span class="sd">            `None` uses `geometry.halo`, the minimal halo that makes an aligned patch</span>
+<span class="sd">            exact; a manual halo is used verbatim (no rounding, no alignment check).</span>
+<span class="sd">            Defaults to None.</span>
 <span class="sd">        single_batch_mode (bool, optional): Whether to use a single batch for prediction. Defaults to True.</span>
 <span class="sd">        device (str, optional): The computation device ('cpu', 'cuda', etc.). Defaults to 'cuda'.</span>
 <span class="sd">        model_update (bool, optional): Whether to update the model to the latest version. Defaults to False.</span>
@@ -2144,6 +2235,7 @@ Outputs are unaffected. Defaults to False.</p>
     <span class="c1"># One architecture traversal per prediction: the default halo, the</span>
     <span class="c1"># pre-probe checks and the final validation all share this geometry.</span>
     <span class="n">geometry</span> <span class="o">=</span> <span class="n">model_geometry</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+    <span class="n">user_halo</span> <span class="o">=</span> <span class="n">patch_halo</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
     <span class="k">if</span> <span class="n">patch_halo</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">patch_halo</span> <span class="o">=</span> <span class="n">geometry</span><span class="o">.</span><span class="n">halo</span>
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Computed theoretical minimum halo from model: </span><span class="si">{</span><span class="n">patch_halo</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
@@ -2158,17 +2250,29 @@ Outputs are unaffected. Defaults to False.</p>
         <span class="n">raw_shape</span> <span class="o">=</span> <span class="n">raw</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">:]</span>
 
     <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">raw_shape</span><span class="p">)</span> <span class="o">==</span> <span class="mi">3</span>
-    <span class="n">_check_patch_axes</span><span class="p">(</span><span class="n">geometry</span><span class="p">,</span> <span class="n">raw_shape</span><span class="p">,</span> <span class="n">patch</span><span class="p">,</span> <span class="n">patch_halo</span><span class="p">)</span>
+    <span class="c1"># A manual patch is used verbatim, even on a small image; only the derived</span>
+    <span class="c1"># patch (from an auto-sized domain) must fit the architectural minimum.</span>
+    <span class="k">if</span> <span class="n">patch</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">geometry</span><span class="o">.</span><span class="n">check_input</span><span class="p">(</span><span class="n">raw_shape</span><span class="p">)</span>
 
+    <span class="c1"># Predict on an aligned domain: SliceBuilder flushes the last patch start</span>
+    <span class="c1"># to `i - k`, which stays on the phase grid only when the domain is a</span>
+    <span class="c1"># multiple of the increment. Reflect-pad the domain up to it; the result is</span>
+    <span class="c1"># cropped back to `raw_shape` below.</span>
+    <span class="n">domain_shape</span> <span class="o">=</span> <span class="n">geometry</span><span class="o">.</span><span class="n">aligned_shape</span><span class="p">(</span><span class="n">raw_shape</span><span class="p">)</span>
     <span class="n">auto_patch</span> <span class="o">=</span> <span class="n">patch</span> <span class="ow">is</span> <span class="kc">None</span>
     <span class="k">if</span> <span class="n">auto_patch</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">user_halo</span><span class="p">:</span>
+            <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"Using the manually specified halo </span><span class="si">{</span><span class="n">patch_halo</span><span class="si">}</span><span class="s2"> while deriving a "</span>
+                <span class="s2">"phase-aligned patch."</span>
+            <span class="p">)</span>
         <span class="n">patch</span><span class="p">,</span> <span class="n">patch_halo</span> <span class="o">=</span> <span class="n">find_feasible_patch_and_halo_shapes</span><span class="p">(</span>
             <span class="n">model</span><span class="p">,</span>
             <span class="n">model_config</span><span class="p">[</span><span class="s2">"in_channels"</span><span class="p">],</span>
-            <span class="n">raw_shape</span><span class="p">,</span>
+            <span class="n">domain_shape</span><span class="p">,</span>
             <span class="n">patch_halo</span><span class="p">,</span>
             <span class="n">device</span><span class="p">,</span>
-            <span class="n">both_sides</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
             <span class="n">amp</span><span class="o">=</span><span class="n">amp</span><span class="p">,</span>
             <span class="n">channels_last_3d</span><span class="o">=</span><span class="n">channels_last_3d</span><span class="p">,</span>
             <span class="n">geometry</span><span class="o">=</span><span class="n">geometry</span><span class="p">,</span>
@@ -2179,14 +2283,14 @@ Outputs are unaffected. Defaults to False.</p>
         <span class="n">_warn_inefficient_auto_patch</span><span class="p">(</span><span class="n">geometry</span><span class="p">,</span> <span class="n">patch</span><span class="p">,</span> <span class="n">patch_halo</span><span class="p">)</span>
 
     <span class="n">oversized_dims</span> <span class="o">=</span> <span class="p">[</span>
-        <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">dim</span><span class="si">}</span><span class="s2">: patch </span><span class="si">{</span><span class="n">p</span><span class="si">}</span><span class="s2"> &gt; sample </span><span class="si">{</span><span class="n">s</span><span class="si">}</span><span class="s2">"</span>
-        <span class="k">for</span> <span class="n">dim</span><span class="p">,</span> <span class="n">p</span><span class="p">,</span> <span class="n">s</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">((</span><span class="s2">"Z"</span><span class="p">,</span> <span class="s2">"Y"</span><span class="p">,</span> <span class="s2">"X"</span><span class="p">),</span> <span class="n">patch</span><span class="p">,</span> <span class="n">raw_shape</span><span class="p">)</span>
+        <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">dim</span><span class="si">}</span><span class="s2">: patch </span><span class="si">{</span><span class="n">p</span><span class="si">}</span><span class="s2"> &gt; domain </span><span class="si">{</span><span class="n">s</span><span class="si">}</span><span class="s2">"</span>
+        <span class="k">for</span> <span class="n">dim</span><span class="p">,</span> <span class="n">p</span><span class="p">,</span> <span class="n">s</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">((</span><span class="s2">"Z"</span><span class="p">,</span> <span class="s2">"Y"</span><span class="p">,</span> <span class="s2">"X"</span><span class="p">),</span> <span class="n">patch</span><span class="p">,</span> <span class="n">domain_shape</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">p</span> <span class="o">&gt;</span> <span class="n">s</span>
     <span class="p">]</span>
     <span class="k">if</span> <span class="n">oversized_dims</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">"Patch shape </span><span class="si">{</span><span class="nb">tuple</span><span class="p">(</span><span class="n">patch</span><span class="p">)</span><span class="si">}</span><span class="s2"> is bigger than the sample shape "</span>
-            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">tuple</span><span class="p">(</span><span class="n">raw_shape</span><span class="p">)</span><span class="si">}</span><span class="s2"> in: </span><span class="si">{</span><span class="s1">', '</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">oversized_dims</span><span class="p">)</span><span class="si">}</span><span class="s2">. "</span>
+            <span class="sa">f</span><span class="s2">"Patch shape </span><span class="si">{</span><span class="nb">tuple</span><span class="p">(</span><span class="n">patch</span><span class="p">)</span><span class="si">}</span><span class="s2"> is bigger than the aligned domain shape "</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">tuple</span><span class="p">(</span><span class="n">domain_shape</span><span class="p">)</span><span class="si">}</span><span class="s2"> in: </span><span class="si">{</span><span class="s1">', '</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">oversized_dims</span><span class="p">)</span><span class="si">}</span><span class="s2">. "</span>
             <span class="s2">"Reduce the patch size, or leave it unset to derive a feasible one."</span>
         <span class="p">)</span>
 
@@ -2219,8 +2323,9 @@ Outputs are unaffected. Defaults to False.</p>
     <span class="n">raw</span> <span class="o">=</span> <span class="n">raw</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">"float32"</span><span class="p">)</span>
     <span class="n">augs</span> <span class="o">=</span> <span class="n">get_test_augmentations</span><span class="p">(</span>
         <span class="n">raw</span>
-    <span class="p">)</span>  <span class="c1"># using full raw to compute global normalization mean and std</span>
-    <span class="n">stride</span> <span class="o">=</span> <span class="n">get_stride_shape</span><span class="p">(</span><span class="n">patch</span><span class="p">)</span>
+    <span class="p">)</span>  <span class="c1"># normalization stats of the original raw, before the domain pad</span>
+    <span class="n">raw</span> <span class="o">=</span> <span class="n">pad_to_shape</span><span class="p">(</span><span class="n">raw</span><span class="p">,</span> <span class="n">domain_shape</span><span class="p">)</span>
+    <span class="n">stride</span> <span class="o">=</span> <span class="n">geometry</span><span class="o">.</span><span class="n">stride_shape</span><span class="p">(</span><span class="n">patch</span><span class="p">)</span>
     <span class="n">slice_builder</span> <span class="o">=</span> <span class="n">SliceBuilder</span><span class="p">(</span>
         <span class="n">raw</span><span class="p">,</span> <span class="n">label_dataset</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">patch_shape</span><span class="o">=</span><span class="n">patch</span><span class="p">,</span> <span class="n">stride_shape</span><span class="o">=</span><span class="n">stride</span>
     <span class="p">)</span>
@@ -2233,8 +2338,12 @@ Outputs are unaffected. Defaults to False.</p>
         <span class="n">verbose_logging</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
     <span class="p">)</span>
 
-    <span class="n">pmaps</span> <span class="o">=</span> <span class="n">predictor</span><span class="p">(</span><span class="n">test_dataset</span><span class="p">)</span>  <span class="c1"># pmaps either (C, Z, Y, X) or (C, Y, X)</span>
-    <span class="k">return</span> <span class="n">pmaps</span>
+    <span class="n">prediction</span> <span class="o">=</span> <span class="n">predictor</span><span class="p">(</span><span class="n">test_dataset</span><span class="p">)</span>
+    <span class="c1"># `raw` was reflect-padded up to the phase-aligned domain, so the map covers</span>
+    <span class="c1"># the padded extent; the public API returns the raw extent. The last three</span>
+    <span class="c1"># axes are spatial even for 2D models (singleton z), so C stays untouched.</span>
+    <span class="n">z</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">x</span> <span class="o">=</span> <span class="n">raw_shape</span>
+    <span class="k">return</span> <span class="n">prediction</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="p">:</span><span class="n">z</span><span class="p">,</span> <span class="p">:</span><span class="n">y</span><span class="p">,</span> <span class="p">:</span><span class="n">x</span><span class="p">]</span>
 </code></pre></div></td></tr></table></div>
             </details>
     </div>

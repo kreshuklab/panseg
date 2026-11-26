@@ -1,0 +1,2538 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Cell instance aware segmentation in densely packed 3D volumetric images">
+      
+      
+      
+        <link rel="canonical" href="https://kreshuklab.github.io/panseg/2.3.0/chapters/advanced/halo/">
+      
+      
+        <link rel="prev" href="../../panseg_models/training/">
+      
+      
+        <link rel="next" href="../timeseries/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../images/favicon.ico">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Receptive field and halo - PanSeg</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/_markdown_exec_pyodide.css">
+    
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="green" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#the-receptive-field-and-the-prediction-halo" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="PanSeg" class="md-header__button md-logo" aria-label="PanSeg" data-md-component="logo">
+      
+  <img src="../../../logos/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            PanSeg
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Receptive field and halo
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="green" data-md-color-accent="light-green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/kreshuklab/panseg" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    kreshuklab/panseg
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="PanSeg" class="md-nav__button md-logo" aria-label="PanSeg" data-md-component="logo">
+      
+  <img src="../../../logos/logo.png" alt="logo">
+
+    </a>
+    PanSeg
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/kreshuklab/panseg" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    kreshuklab/panseg
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_1" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../.." class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Overview
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../getting_started/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_2" id="__nav_2_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting_started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting_started/contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting_started/known_issues/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Know Issues
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../panseg_interactive_napari/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Napari GUI
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Napari GUI
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../panseg_interactive_napari/import/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Import
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../panseg_interactive_napari/preprocessing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Preprocessing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../panseg_interactive_napari/segmentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Segmentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../panseg_interactive_napari/postprocessing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Postprocessing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../panseg_interactive_napari/proofreading/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Proofreading
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../panseg_interactive_napari/output/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Output
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../panseg_interactive_napari/batch/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Batch processing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../panseg_interactive_napari/unet_training/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Training
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../workflow_gui/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Batch Workflow
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Batch Workflow
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../panseg_models/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Dataset and Training
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Dataset and Training
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../panseg_models/custom_datasets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Custom Datasets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../panseg_models/training/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Advanced Training
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Advanced
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Advanced
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Receptive field and halo
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Receptive field and halo
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#notation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-classic-halo-bound" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The classic halo bound
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#computing-the-exact-reach" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Computing the exact reach
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The result
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-model-input-size-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The model input size matters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-big-must-the-halo-be" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How big must the halo be
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#practical-rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Practical rule
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The contract
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#receptive-field-measurements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Receptive field measurements
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../timeseries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Time Series
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../python_api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_2" id="__nav_7_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    tasks
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    tasks
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../python_api/tasks/io_tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    panseg.tasks.io_tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../python_api/tasks/dataprocessing_tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    panseg.tasks.dataprocessing_tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../python_api/tasks/segmentation_tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    panseg.tasks.segmentation_tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../python_api/tasks/prediction_tasks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    panseg.tasks.prediction_tasks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_3" id="__nav_7_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    functionals
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    functionals
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../python_api/functionals/io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    panseg.io
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../python_api/functionals/data_processing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    panseg.functionals.dataprocessing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../python_api/functionals/cnn_prediction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    panseg.functionals.prediction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../python_api/functionals/segmentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    panseg.functionals.segmentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#notation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-classic-halo-bound" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The classic halo bound
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#computing-the-exact-reach" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Computing the exact reach
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The result
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-model-input-size-matters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The model input size matters
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-big-must-the-halo-be" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How big must the halo be
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#practical-rule" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Practical rule
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The contract
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#receptive-field-measurements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Receptive field measurements
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="the-receptive-field-and-the-prediction-halo">The receptive field and the prediction halo<a class="headerlink" href="#the-receptive-field-and-the-prediction-halo" title="Permanent link">&para;</a></h1>
+<p>PanSeg predicts large volumes patch by patch. Each patch is cut with extra
+context on every side — the <em>halo</em> — because a convolutional network can only
+produce a correct value for a voxel if it sees every input voxel that voxel
+depends on. Too small a halo leaves visible artefacts at patch borders.</p>
+<p>This page derives from the architecture alone how much context a patch needs.
+For the 4-level 3D U-Net of the PanSeg models the classic symmetric radius 44 is
+a lower bound, not the receptive field: the reach is 44–51 voxels per side
+depending on the position's phase, the smallest halo that is exact for aligned
+patches is 48, and the smallest input with an artefact-free interior is 104.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Everything follows from the layer types and their hyperparameters, not from
+the weights or the data. The input <em>size</em> matters only through its remainder
+modulo the phase period <code>P</code>.</p>
+</div>
+<h2 id="notation">Notation<a class="headerlink" href="#notation" title="Permanent link">&para;</a></h2>
+<p>Every quantity is defined along one spatial axis (z, y or x). The <em>value</em>
+column gives the number for the PanSeg 3D U-Net: 4 levels, 3×3 convolutions,
+two convolutions per level.</p>
+<table>
+<thead>
+<tr>
+<th>Symbol</th>
+<th>Meaning</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>n_lev</code></td>
+<td>Number of U-Net levels.</td>
+<td>4</td>
+</tr>
+<tr>
+<td><code>ℓ</code></td>
+<td>Level index, from <code>0</code> (full resolution) to <code>n_lev - 1</code> (deepest).</td>
+<td>0 … 3</td>
+</tr>
+<tr>
+<td><code>c</code>, <code>k</code>, <code>r</code></td>
+<td>Convolutions per level (a <code>DoubleConv</code>); kernel size; radius <code>k // 2</code>.</td>
+<td>2; 3; 1</td>
+</tr>
+<tr>
+<td><code>s_ℓ</code></td>
+<td>Stride of level <code>ℓ</code>, measured in input voxels: <code>2^ℓ</code>.</td>
+<td>1, 2, 4, 8</td>
+</tr>
+<tr>
+<td><code>k_pool</code>, <code>s_pool</code></td>
+<td>Encoder pooling kernel; its stride, which equals <code>k_pool</code> because <code>MaxPool</code> is created without an explicit stride. A pooling cell reads the <code>k_pool</code> input cells below it, beginning at its own index times <code>s_pool</code>.</td>
+<td>2; 2</td>
+</tr>
+<tr>
+<td><code>P</code></td>
+<td>Phase period along an axis: the total downsampling, <code>2^(n_lev - 1)</code>. For this architecture it is also the axis entry of <code>min_input</code>, because every pooling layer halves. It is the number of output positions after which the network's behaviour repeats.</td>
+<td>8</td>
+</tr>
+<tr>
+<td><code>S</code></td>
+<td>Conv radius sum: every convolution's radius scaled by its level stride, <code>Σ r · s_ℓ</code> over all layers. The classic lower bound on each side's reach.</td>
+<td>44</td>
+</tr>
+<tr>
+<td><code>Q</code>, <code>h</code>, <code>M</code></td>
+<td>Patch size; halo per side (<code>patch_halo</code>); model input <code>M = Q + 2h</code>, the length of the tensor fed to the network. Only <code>Q</code> is kept in the prediction.</td>
+<td>problem-specific; <code>Q + 2h</code></td>
+</tr>
+<tr>
+<td><code>p</code>, <code>φ</code></td>
+<td>Index of an output voxel inside the model input, <code>0 ≤ p &lt; M</code>; its phase <code>φ = p mod P</code>, which records whether the voxel sits on an even or an odd cell at each level.</td>
+<td>—; 0 … 7</td>
+</tr>
+<tr>
+<td><code>L(p)</code>, <code>R(p)</code></td>
+<td>Left and right reach of output voxel <code>p</code>, in input voxels: the output depends on input positions <code>p - L(p) … p</code> and <code>p … p + R(p)</code>.</td>
+<td>44 … 51</td>
+</tr>
+<tr>
+<td>clean</td>
+<td>An output is <em>clean</em> when its support — the set of input positions that influence it — lies strictly inside the model input, i.e. it contains neither the first nor the last input voxel. Only a clean output is free of the patch's artificial boundary.</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h2 id="the-architecture">The architecture<a class="headerlink" href="#the-architecture" title="Permanent link">&para;</a></h2>
+<p>Level 0 applies <code>c</code> size-preserving convolutions of kernel <code>k</code> and padding <code>r</code>.
+Every deeper encoder level first max-pools with <code>k_pool = 2</code> and <code>s_pool = 2</code>,
+then applies the same two convolutions. The decoder walks back from level
+<code>n_lev - 2</code>: it nearest-neighbour-upsamples the previous decoder output by two
+to the matching encoder size, concatenates that encoder feature map, and applies
+<code>c</code> convolutions. A final 1×1 convolution changes channels, not layout.</p>
+<h2 id="the-classic-halo-bound">The classic halo bound<a class="headerlink" href="#the-classic-halo-bound" title="Permanent link">&para;</a></h2>
+<p>The naive bound scales every convolution's radius by its level stride and sums,
+<code>S = Σ r · s_ℓ</code>:</p>
+<div class="highlight"><pre><span></span><code>encoder:  2 · (1 + 2 + 4 + 8) = 30
+decoder:  2 · (4 + 2 + 1)     = 14
+                                  = 44
+</code></pre></div>
+<p>That is correct for a stack of stride-1 convolutions and is the <em>smallest</em> reach
+this network ever has, but it is not the receptive field: 44 is never enough
+for a 4-level deep Panseg model.
+Previously, the automatic halo was calculated in this way.</p>
+<h2 id="computing-the-exact-reach">Computing the exact reach<a class="headerlink" href="#computing-the-exact-reach" title="Permanent link">&para;</a></h2>
+<p>The real reach follows from five propagation rules, applied in the order the
+architecture applies them. Let <code>q</code> be an output position at the level being
+processed, not necessarily full resolution. Each rule maps <code>q</code> to the level-0
+input positions it depends on; its support is the union over everything feeding
+it.</p>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Support of output position <code>q</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>convolution, kernel <code>k</code>, padding <code>r</code></td>
+<td>union of the supports of positions <code>q - r … q + r</code></td>
+</tr>
+<tr>
+<td>max/avg pool, kernel <code>k_pool</code>, stride <code>s_pool</code></td>
+<td>union of the supports of positions <code>s_pool · q … s_pool · q + k_pool - 1</code></td>
+</tr>
+<tr>
+<td>nearest upsampling from size <code>s_in</code> to size <code>s_out</code></td>
+<td>the support of source position <code>floor(q · s_in / s_out)</code></td>
+</tr>
+<tr>
+<td>concatenation with an encoder skip</td>
+<td>union with the support of the encoder feature at the same position</td>
+</tr>
+<tr>
+<td>1×1 convolution</td>
+<td>unchanged</td>
+</tr>
+</tbody>
+</table>
+<p>The rules are exact: they do not assume shift invariance, so they capture
+pooling and nearest-neighbour upsampling. They cover size-preserving
+convolutions only (odd kernel <code>k</code>, <code>padding = k // 2</code>, stride and dilation 1,
+zero padding), plus pooling without padding, with unit dilation and in floor
+mode. Convolutions and pooling outside these rules raise <code>NotImplementedError</code>
+instead of being approximated; so does an unrecognised module that exposes a
+kernel, stride, padding, output size, scale or resize factor, or an unrecognised
+container — fail closed rather than under-approximate the reach.
+<code>panseg.functionals.model_geometry.layers</code> maps model modules to this vocabulary
+(<code>Encoder</code>, <code>Decoder</code>, <code>InterpolateUpsampling</code>, convolutions, pooling,
+containers) and <code>.replay</code> applies the rules per axis and per phase; that replay
+is the authoritative source, not a re-derivation for one specific depth.</p>
+<h2 id="the-result">The result<a class="headerlink" href="#the-result" title="Permanent link">&para;</a></h2>
+<p>In the interior of a 4-level model input whose size is a multiple of <code>P</code>:</p>
+<div class="highlight"><pre><span></span><code>L(φ) = S + ((φ + 2) mod P)
+R(φ) = S + ((1 - φ) mod P)
+</code></pre></div>
+<p>With <code>S = 44</code> and <code>P = 8</code>:</p>
+<table>
+<thead>
+<tr>
+<th><code>φ = p mod 8</code></th>
+<th>0</th>
+<th>1</th>
+<th>2</th>
+<th>3</th>
+<th>4</th>
+<th>5</th>
+<th>6</th>
+<th>7</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>L(p)</code></td>
+<td>46</td>
+<td>47</td>
+<td>48</td>
+<td>49</td>
+<td>50</td>
+<td>51</td>
+<td>44</td>
+<td>45</td>
+</tr>
+<tr>
+<td><code>R(p)</code></td>
+<td>45</td>
+<td>44</td>
+<td>51</td>
+<td>50</td>
+<td>49</td>
+<td>48</td>
+<td>47</td>
+<td>46</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>the <strong>minimum</strong> is <code>S = 44</code>, the classic symmetric radius;</li>
+<li>the <strong>maximum</strong> is <code>S + P - 1 = 51</code> per side;</li>
+<li>the total width <code>L(p) + R(p)</code> is 91 or 99 voxels, never <code>2 · S = 88</code>.</li>
+</ul>
+<p>Pooling reaches one cell further right per level, <code>P - 1 = 7</code> voxels in total
+(the encoder ends at <code>L = 30</code>, <code>R = 37</code>). Nearest-neighbour upsampling shifts
+the support the other way for odd positions, and because adjacent outputs share a
+source the reach is not a radius-times-stride sum; the shift's direction depends
+on the binary digits of <code>p</code>, and the encoder skips stop the shifts from
+cancelling, so the aligned reach is <code>S + P - 1</code>.</p>
+<h2 id="the-model-input-size-matters">The model input size matters<a class="headerlink" href="#the-model-input-size-matters" title="Permanent link">&para;</a></h2>
+<p>The reach above assumes every pooling layer halves exactly, i.e. <code>M</code> is a
+multiple of <code>P</code>. Otherwise encoder sizes are rounded down and the decoder's
+<code>floor(q · s_in / s_out)</code> is no longer 1/2, so the upsampling is not uniform and
+the reach grows:</p>
+<table>
+<thead>
+<tr>
+<th><code>M mod P</code></th>
+<th>0</th>
+<th>1</th>
+<th>2</th>
+<th>3</th>
+<th>4</th>
+<th>5</th>
+<th>6</th>
+<th>7</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>worst reach per side</td>
+<td><strong>51</strong></td>
+<td>52</td>
+<td>53</td>
+<td>54</td>
+<td>55</td>
+<td>56</td>
+<td>57</td>
+<td>58</td>
+</tr>
+</tbody>
+</table>
+<p>Only <code>M mod P = 0</code> attains the minimum; the absolute size cannot reduce the
+receptive field, only the residue class prevents it from growing.</p>
+<h2 id="how-big-must-the-halo-be">How big must the halo be<a class="headerlink" href="#how-big-must-the-halo-be" title="Permanent link">&para;</a></h2>
+<p>The prediction is exact when every kept output voxel is clean. For every <code>p</code> in
+the crop <code>[h, h + Q - 1]</code> that means</p>
+<div class="highlight"><pre><span></span><code>p - L(p) &gt; 0        and        p + R(p) &lt; M - 1
+</code></pre></div>
+<p>The inequalities are strict, because the conv at the first or last input voxel
+already reads zero padding. This is a per-position condition, not
+<code>h ≥ max reach</code>: a position with reach 51 is harmless as long as it is 51
+voxels from the tensor edge.</p>
+<p>For <code>M ≡ 0 (mod P)</code> and <code>Q ≥ P</code>, substituting the reach into the two crop ends
+gives</p>
+<div class="highlight"><pre><span></span><code>h &gt; S + ((h + 2) mod P)                       crop start,  p = h
+h &gt; S + ((1 - ((h + Q - 1) mod P)) mod P)     crop end,    p = h + Q - 1
+</code></pre></div>
+<p>The end sits at phase <code>φ = (h + Q - 1) mod P</code>, so its bound also depends on the
+residue of <code>Q</code>, and neither bound is monotone in <code>h</code>. For <code>h</code> a multiple of <code>P</code>
+both agree and read <code>h &gt; S + 2</code>, so the smallest such halo is 48 (with
+<code>M ≡ 0 (mod P)</code> this also requires <code>Q ≡ 0 (mod P)</code>). Other residues differ and
+must be solved together with the constraint on <code>M</code>; the exact propagation gives:</p>
+<table>
+<thead>
+<tr>
+<th><code>Q mod 8</code></th>
+<th>0</th>
+<th>1</th>
+<th>2</th>
+<th>3</th>
+<th>4</th>
+<th>5</th>
+<th>6</th>
+<th>7</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>smallest valid <code>h</code></td>
+<td><strong>48</strong></td>
+<td><strong>48</strong></td>
+<td><strong>47</strong></td>
+<td><strong>47</strong></td>
+<td><strong>46</strong></td>
+<td>50</td>
+<td>49</td>
+<td>49</td>
+</tr>
+<tr>
+<td><code>M mod 8</code> at that <code>h</code></td>
+<td>0</td>
+<td>1</td>
+<td>0</td>
+<td>1</td>
+<td>0</td>
+<td>1</td>
+<td>0</td>
+<td>1</td>
+</tr>
+<tr>
+<td>margin (left, right)</td>
+<td>2, 2</td>
+<td>2, 3</td>
+<td>2, 2</td>
+<td>2, 3</td>
+<td>2, 2</td>
+<td>2, 3</td>
+<td>2, 2</td>
+<td>2, 3</td>
+</tr>
+</tbody>
+</table>
+<p>Rows with <code>M ≡ 0 (mod P)</code> are the ones the bounds predict; odd patch sizes have
+an odd <code>M</code>, a slightly inflated reach and one extra voxel of margin on the right.
+The global minimum is <code>S + 2 = 46</code>, at <code>Q ≡ 4 (mod 8)</code>. Patches shorter than <code>P</code>
+are not covered: with so few phases the crop need not contain all of them, so it
+can be aligned to the cheap ones (e.g. <code>Q = 4</code>, <code>h = 46</code>).</p>
+<ul>
+<li><strong>48 is the minimum for <code>Q ≡ 0 (mod 8)</code></strong>, which covers every patch whose
+  dimensions are multiples of 8. The other residues reach their minima only with
+  halos that are not multiples of <code>P</code>; for <code>Q ≡ 4 (mod 8)</code> no multiple of <code>P</code>
+  works, because <code>M = Q + 2h</code> keeps the residue 4. The zoo's <code>[40, 220, 220]</code>
+  recommendation is such a case (220 ≡ 4 (mod 8)) and needs either the
+  per-residue halo 46 or a patch rounded to 216 or 224.</li>
+<li><strong>44 is never enough.</strong> For <code>Q = 64</code> the two outermost crop voxels on each
+  side depend on input 6 voxels outside the model input: the support would have
+  to extend past the border, not merely touch it.</li>
+<li><strong>46 is not automatically enough either.</strong> With <code>Q = 64</code> it gives <code>M = 156</code>,
+  not a multiple of <code>P</code>, so the reach grows and the crop is still not clean; with
+  <code>Q = 60</code> the same <code>h = 46</code> gives <code>M = 152</code> and is exact.</li>
+</ul>
+<p>For a guarantee independent of alignment the bounds above do not apply: the
+reach itself grows (to 58 per side) and the halo must be re-derived. Applying
+the exact propagation to a fixed halo across every patch size gives <strong>53</strong> as
+the smallest alignment-free halo (52 still fails for <code>Q ≡ 7 (mod 8)</code>), <strong>56</strong>
+rounded up to a multiple of <code>P</code>. PanSeg does not use it: it aligns the domain, so
+the declared BioImage.IO step is the contract.</p>
+<h2 id="practical-rule">Practical rule<a class="headerlink" href="#practical-rule" title="Permanent link">&para;</a></h2>
+<p>For a model whose per-axis phase period is <code>P</code> — the product of the pooling
+strides, which the package calls <code>increment</code> — and whose conv radius sum is <code>S</code>,
+compute the reach table per phase from the architecture, as above, or use the
+closed form when it applies. Then:</p>
+<ol>
+<li>pad the raw volume up to a multiple of <code>P</code> on every spatial axis, so the
+   patch, the stride and <code>patch + 2 · halo</code> are all multiples of <code>P</code>. Otherwise
+   the reach grows (<code>M mod P != 0</code> above) and overlapping patches compute the
+   same voxel at different phases;</li>
+<li>apply the halo on <strong>every</strong> spatial axis, including axes that fit in a single
+   patch — the halo surrounds the model input, not just the tiled patch — and
+   use the smallest multiple of <code>P</code> whose aligned crop is clean.
+   Together with 1 this forces <code>patch % P == 0</code>, and for the standard net the
+   smallest such halo is 48. If the exact minimum matters and the phase may vary
+   between patches, use the per-residue table instead — it allows 46 or 47 for
+   some patch sizes, at the cost of that phase consistency;</li>
+<li>manual patch/halo overrides are used verbatim: no rounding, no alignment
+   check, no clamping. Artefacts and inefficiency then are the caller's choice.</li>
+</ol>
+<p>A 2D U-Net does not pool along z, so the z entry of <code>P</code> is 1, the z reach has a
+single phase, and the z halo is 0. The y and x axes behave exactly like the z
+axis of the 3D model: 44 as the classic radius, 48 when the patch dimension is a
+multiple of 8.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><code>GroupNorm</code> couples all spatial positions of a feature map, so for models
+with <code>gcr</code> layers "exact" means free of <em>convolution-border</em> artefacts: the
+support argument bounds what a convolution can see, not the normalization
+statistics. The z-slice test below is unaffected because its data is
+constant along z.</p>
+</div>
+<h2 id="verification">Verification<a class="headerlink" href="#verification" title="Permanent link">&para;</a></h2>
+<p>The z-slice invariance test builds a volume from one z slice repeated 64 times,
+so every predicted z slice must be identical too; a slice can only differ by
+seeing a patch's artificial border. With a patch depth and halo satisfying the
+rules above the measured maximum deviation is at most <code>6e-8</code> (float32 noise) and
+the test, which asserts equality within <code>1e-7</code>, passes; a model input that is
+not a multiple of <code>P</code> leaves deviations up to <code>2 · 10^-4</code>:</p>
+<table>
+<thead>
+<tr>
+<th>patch <code>Q</code></th>
+<th>halo <code>h</code></th>
+<th>model input <code>M</code></th>
+<th>identical slices (within <code>1e-4</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>64</td>
+<td>44</td>
+<td>152</td>
+<td>60–63 / 64</td>
+</tr>
+<tr>
+<td>64</td>
+<td>46</td>
+<td>156</td>
+<td>60–62 / 64</td>
+</tr>
+<tr>
+<td>60</td>
+<td>46</td>
+<td>152</td>
+<td><strong>64 / 64</strong></td>
+</tr>
+<tr>
+<td>62</td>
+<td>49</td>
+<td>160</td>
+<td><strong>64 / 64</strong></td>
+</tr>
+<tr>
+<td>64</td>
+<td>48</td>
+<td>160</td>
+<td><strong>64 / 64</strong></td>
+</tr>
+</tbody>
+</table>
+<h2 id="the-contract">The contract<a class="headerlink" href="#the-contract" title="Permanent link">&para;</a></h2>
+<p>Architecture-derived geometry is resolved in exactly one place,
+<code>panseg.functionals.model_geometry</code>; its facade docstring defines the four
+quantities this page explains:</p>
+<ul>
+<li><code>min_input</code> — the smallest shape each axis accepts, the product of the pooling
+  kernels that downsample it;</li>
+<li><code>increment</code> — the phase period <code>P</code>, the product of the pooling strides; derived
+  patches, strides and the minimal halo are multiples of it;</li>
+<li><code>halo</code> — the smallest multiple of <code>increment</code> whose aligned crop is clean (48
+  for the standard 3D net; 0 on an axis the model does not downsample);</li>
+<li><code>effective_min_input</code> — <code>max(min_input, 2 · halo + 1)</code> rounded up to
+  <code>increment</code>, the smallest tile that runs and still leaves a clean interior
+  (104 for the standard 3D net).</li>
+</ul>
+<p>Prediction reflect-pads the raw volume up to a multiple of <code>increment</code> on every
+spatial axis, then by default tiles it with an aligned patch and stride, and
+crops the result back to the raw shape. Defaults come from the package; manual
+patch and halo overrides are used verbatim. The regression test for this
+contract is
+<code>tests/tasks/test_prediction_tasks.py::test_unet_prediction_task_z_slice_invariance</code>.
+For the classic receptive-field argument behind <code>S</code>, see
+<a href="https://doi.org/10.6028/jres.126.009">https://doi.org/10.6028/jres.126.009</a>.</p>
+<h2 id="receptive-field-measurements">Receptive field measurements<a class="headerlink" href="#receptive-field-measurements" title="Permanent link">&para;</a></h2>
+<p>The following describes a series of experiments to measure which exact pixels influence each other.
+For this, 2D Unets are randomly initialized and fed with a 64x64 black image.
+Iteratively, each pixel is switched to white and the output is recorded.
+Three architectures are measured:  </p>
+<ul>
+<li>The standard 4-level deep Panseg model with f_maps (8, 64, 512, 4096)</li>
+<li>3-level with f_maps (8,8,8)</li>
+<li>2-level with f_maps (8,8)</li>
+</ul>
+<p><img alt="rf_centre_influence.png" src="https://github.com/kreshuklab/panseg/raw/assets/images/receptive_field_measurements/rf_centre_influence.png" /></p>
+<p>This first plot shows which input pixels influence the central output pixel.
+In red the calculated RF is shown. White within the RF is caused by the
+randomly initialized activation function dropping some inputs.
+These areas could influence the center in a trained network.</p>
+<p><img alt="rf_combined.png" src="https://github.com/kreshuklab/panseg/raw/assets/images/receptive_field_measurements/rf_combined.png" /></p>
+<p>Here the empirical RF of each <em>input</em> pixel is shown.</p>
+<p><img alt="rf_receptive_field_left.png" src="https://github.com/kreshuklab/panseg/raw/assets/images/receptive_field_measurements/rf_receptive_field_left.png" /></p>
+<p>The periodicity of the RF is here good visible: only the number of influencing
+pixels to the left of each output pixel is plotted.
+The noise across the y axis for the 4-level network is caused by the randomly
+initialized activation function.</p>
+<p><img alt="rf_centre_influence_mean_10seeds_log.png" src="https://github.com/kreshuklab/panseg/raw/assets/images/receptive_field_measurements/rf_centre_influence_mean_10seeds_log.png" /></p>
+<p>Looking at the absolute contribution amount of input pixels to the output pixel
+is not very telling as the networks are randomly initialized, leading to a
+clear focus on the respective output position.
+Trained networks could pay attention anywhere inside the RF.
+The steps in the mean influence correspond to the convolution levels in
+the model.</p>
+
+
+
+
+
+
+
+  
+    
+  
+  
+    
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Last update">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date">November 25, 2026</span>
+  </span>
+
+    
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Created">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date">November 25, 2026</span>
+  </span>
+
+    
+    
+    
+  </aside>
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../../panseg_models/training/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Advanced Training">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Advanced Training
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../timeseries/" class="md-footer__link md-footer__link--next" aria-label="Next: Time Series">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Time Series
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2019 - 2026 Lorenzo Cerrone, Adrian Wolny, Qin Yu, Kai Riedmiller
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+    <a href="https://github.com/kreshuklab/panseg" target="_blank" rel="noopener" title="PanSeg on GitHub" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-progress" data-md-component="progress" role="progressbar"></div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["content.tooltips", "content.code.annotate", "navigation.instant", "navigation.instant.progress", "navigation.sections", "navigation.path", "navigation.indexes", "navigation.footer", "toc.follow", "search.suggest", "search.share"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"alias": true, "provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="../../../assets/_markdown_exec_pyodide.js"></script>
+      
+    
+  </body>
+</html>
