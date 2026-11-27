@@ -50,7 +50,7 @@ def get_quantile_mask(
     return np.logical_and(lower_mask, upper_mask)
 
 
-@numba.njit(parallel=True, cache=True)
+@numba.njit(cache=True)
 def numba_find_overlaps(
     cell_seg: np.ndarray, nuc_seg: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -66,11 +66,12 @@ def numba_find_overlaps(
     """
     shape_x, shape_y, shape_z = cell_seg.shape
 
-    cell_counts = np.zeros(cell_seg.max() + 1, dtype=np.uint16)
-    n_counts = np.zeros(nuc_seg.max() + 1, dtype=np.uint16)
-    overlap_counts = np.zeros((cell_seg.max() + 1, nuc_seg.max() + 1), dtype=np.uint16)
+    cell_counts = np.zeros(cell_seg.max() + 1, dtype=np.int64)
+    n_counts = np.zeros(nuc_seg.max() + 1, dtype=np.int64)
+    # uint32 halves this dense matrix; no single overlap nears 2**32 voxels.
+    overlap_counts = np.zeros((cell_seg.max() + 1, nuc_seg.max() + 1), dtype=np.uint32)
 
-    for x in numba.prange(shape_x):
+    for x in range(shape_x):
         for y in range(shape_y):
             for z in range(shape_z):
                 seg_id = cell_seg[x, y, z]

@@ -1,10 +1,19 @@
 import numpy as np
+import pytest
 
 from panseg.functionals.dataprocessing.advanced_dataprocessing import (
     fix_over_under_segmentation_from_nuclei,
     get_bbox,
+    numba_find_overlaps,
     remove_false_positives_by_foreground_probability,
 )
+
+
+@pytest.fixture(autouse=True)
+def _numba_jit_coverage(monkeypatch):
+    # Let coverage record lines inside numba_find_overlaps. Scoped to this
+    # module so it doesn't leak into every numba compilation in the session.
+    monkeypatch.setenv("NUMBA_JIT_COVERAGE", "1")
 
 
 def test_get_bbox_mask_slices():
@@ -87,3 +96,15 @@ def test_fix_over_under_segmentation_from_nuclei(complex_test_data):
     assert len(np.unique(corrected_seg[6:10, 6:10, 6:10])) == 1, (
         "Oversegmentation not merged as expected."
     )
+
+
+def test_numba_find_overlaps_exact_and_large_counts():
+    # 67,240 voxels: a parallel race loses counts, and uint16 wraps past 65,535.
+    cell_seg = np.ones((40, 41, 41), dtype=np.int32)
+    nuc_seg = np.zeros_like(cell_seg)
+    nuc_seg[:, :, :20] = 1
+    nuc_seg[:, :, 20:] = 2
+    cell_counts, nuc_counts, overlap_counts = numba_find_overlaps(cell_seg, nuc_seg)
+    np.testing.assert_array_equal(cell_counts, [0, 67_240])
+    np.testing.assert_array_equal(nuc_counts, [0, 32_800, 34_440])
+    np.testing.assert_array_equal(overlap_counts, [[0, 0, 0], [0, 32_800, 34_440]])
