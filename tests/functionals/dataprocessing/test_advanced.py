@@ -3,6 +3,7 @@ import numpy as np
 from panseg.functionals.dataprocessing.advanced_dataprocessing import (
     fix_over_under_segmentation_from_nuclei,
     get_bbox,
+    numba_find_overlaps,
     remove_false_positives_by_foreground_probability,
 )
 
@@ -87,3 +88,25 @@ def test_fix_over_under_segmentation_from_nuclei(complex_test_data):
     assert len(np.unique(corrected_seg[6:10, 6:10, 6:10])) == 1, (
         "Oversegmentation not merged as expected."
     )
+
+
+def test_numba_find_overlaps_exact_and_large_counts():
+    # 50,000 voxels (< uint16 max) catches unsynchronized parallel increments.
+    cell_seg = np.ones((50, 40, 25), dtype=np.int32)
+    nuc_seg = np.ones((50, 40, 25), dtype=np.int32)
+    cell_counts, nuc_counts, overlap_counts = numba_find_overlaps(cell_seg, nuc_seg)
+    assert int(cell_counts[1]) == 50_000
+    assert int(nuc_counts[1]) == 50_000
+    assert int(overlap_counts[1, 1]) == 50_000
+
+    # 67,240 voxels (> uint16 max of 65,535) catches uint16 wraparound.
+    large_cell = np.ones((40, 41, 41), dtype=np.int32)
+    large_nuc = np.zeros_like(large_cell)
+    large_nuc[:, :, :20] = 1
+    large_nuc[:, :, 20:] = 2
+    cell_counts, nuc_counts, overlap_counts = numba_find_overlaps(large_cell, large_nuc)
+    assert int(cell_counts[1]) == 67_240
+    assert int(nuc_counts[1]) == 32_800
+    assert int(nuc_counts[2]) == 34_440
+    assert int(overlap_counts[1, 1]) == 32_800
+    assert int(overlap_counts[1, 2]) == 34_440
