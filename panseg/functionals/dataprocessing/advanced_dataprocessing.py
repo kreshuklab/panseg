@@ -68,7 +68,8 @@ def numba_find_overlaps(
 
     cell_counts = np.zeros(cell_seg.max() + 1, dtype=np.int64)
     n_counts = np.zeros(nuc_seg.max() + 1, dtype=np.int64)
-    overlap_counts = np.zeros((cell_seg.max() + 1, nuc_seg.max() + 1), dtype=np.int64)
+    # uint32 halves this dense matrix; no single overlap nears 2**32 voxels.
+    overlap_counts = np.zeros((cell_seg.max() + 1, nuc_seg.max() + 1), dtype=np.uint32)
 
     for x in range(shape_x):
         for y in range(shape_y):
