@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from panseg.functionals.dataprocessing.advanced_dataprocessing import (
     fix_over_under_segmentation_from_nuclei,
@@ -6,6 +7,13 @@ from panseg.functionals.dataprocessing.advanced_dataprocessing import (
     numba_find_overlaps,
     remove_false_positives_by_foreground_probability,
 )
+
+
+@pytest.fixture(autouse=True)
+def _numba_jit_coverage(monkeypatch):
+    # Let coverage record lines inside numba_find_overlaps. Scoped to this
+    # module so it doesn't leak into every numba compilation in the session.
+    monkeypatch.setenv("NUMBA_JIT_COVERAGE", "1")
 
 
 def test_get_bbox_mask_slices():
